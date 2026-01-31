@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notifRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#000000"
+    android:padding="12dp">
+
+<TextView
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:text="Notifications"
+    android:textColor="#FFFFFF"
+    android:textSize="18sp"
+    android:paddingBottom="8dp"
+    android:fontFamily="@font/syne_mono" />
+
+<TextView
+    android:id="@+id/clearAllButton"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="Clear all"
+    android:textColor="#FFD400"
+    android:textSize="16sp"
+    android:paddingBottom="10dp"
+    android:fontFamily="@font/syne_mono"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:clickable="true" />
+
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/notificationsList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>

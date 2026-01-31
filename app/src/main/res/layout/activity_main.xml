@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#000000">
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp" />
+
+<TextView
+    android:id="@+id/footerBrand"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:text="dumb.co"
+    android:textColor="#FFD400"
+    android:textSize="14sp"
+    android:textStyle="bold"
+    android:letterSpacing="0.08"
+    android:gravity="center"
+    android:paddingBottom="8dp"
+    android:paddingTop="4dp"
+    android:fontFamily="@font/syne_mono" />
+
+
+
+</LinearLayout>
