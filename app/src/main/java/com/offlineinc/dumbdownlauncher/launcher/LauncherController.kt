@@ -24,12 +24,11 @@ class LauncherController(
         val item = items[getSelectedIndex().coerceIn(0, items.lastIndex)]
 
         if (item.packageName == ALL_APPS) {
-            val launchIntent = context.packageManager.getLaunchIntentForPackage("com.amagital.launcher.list")
-            if (launchIntent != null) {
-                safeStart(launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null)
-            } else {
-                Toast.makeText(context, "ListLauncher not installed.", Toast.LENGTH_SHORT).show()
-            }
+            safeStart(
+                Intent(context, com.offlineinc.dumbdownlauncher.AllAppsActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                "Couldn't open All Apps"
+            )
             return
         }
 

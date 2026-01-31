@@ -1,9 +1,8 @@
-// MainActivity.kt
+// AllAppsActivity.kt
 package com.offlineinc.dumbdownlauncher
 
 import android.os.Bundle
 import android.view.KeyEvent
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -13,23 +12,9 @@ import com.offlineinc.dumbdownlauncher.launcher.LaunchResolver
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.AppAdapter
+import android.content.Intent
 
-const val ALL_APPS = "__ALL_APPS__"
-
-const val NOTIFICATIONS = "__NOTIFICATIONS__"
-
-class MainActivity : AppCompatActivity() {
-
-    private val allowedPackages = listOf(
-        "com.android.mms",
-        "com.android.contacts",
-        "com.android.dialer",
-        "com.android.settings",
-        "com.tcl.camera",
-        "com.android.gallery3d",
-        "com.android.browser",
-        "com.whatsapp",
-    )
+class AllAppsActivity : AppCompatActivity() {
 
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: AppAdapter
@@ -42,14 +27,14 @@ class MainActivity : AppCompatActivity() {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
 
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        setContentView(R.layout.activity_main) // reuse same layout with @id/list
 
         window.statusBarColor = 0xFF000000.toInt()
 
         recyclerView = findViewById(R.id.list)
         recyclerView.layoutManager = LinearLayoutManager(this)
 
-        loadApps()
+        loadAllApps()
 
         controller = LauncherController(
             context = this,
@@ -66,11 +51,11 @@ class MainActivity : AppCompatActivity() {
             setSelectedIndex = { selectedIndex = it },
             onActivate = { controller.launchSelected() }
         )
-        recyclerView.adapter = adapter
 
+        recyclerView.adapter = adapter
         recyclerView.itemAnimator = null
         recyclerView.setHasFixedSize(true)
-        recyclerView.setItemViewCacheSize(items.size)
+        recyclerView.setItemViewCacheSize(60)
 
         recyclerView.post {
             if (items.isNotEmpty()) {
@@ -89,64 +74,40 @@ class MainActivity : AppCompatActivity() {
         overridePendingTransition(0, 0)
     }
 
-    private fun loadApps() {
+    private fun loadAllApps() {
         items.clear()
 
-        for (pkg in allowedPackages) {
+        val pm = packageManager
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+
+        val resolved = pm.queryIntentActivities(intent, 0)
+
+        val appItems = resolved.mapNotNull { ri ->
+            val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
             try {
-                val appInfo = packageManager.getApplicationInfo(pkg, 0)
-                val defaultLabel = packageManager.getApplicationLabel(appInfo).toString()
+                val appInfo = pm.getApplicationInfo(pkg, 0)
+                val defaultLabel = pm.getApplicationLabel(appInfo).toString()
                 val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
                     .getLabel(pkg, defaultLabel)
-                val defaultIcon = packageManager.getApplicationIcon(appInfo)
+                val defaultIcon = pm.getApplicationIcon(appInfo)
                 val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
                     .getIcon(this, pkg, defaultIcon)
-                val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, pkg)
-                items.add(AppItem(pkg, label, icon, launchComponent))
+
+                val component = LaunchResolver.resolveLaunchComponent(pm, pkg)
+                AppItem(pkg, label, icon, component)
             } catch (_: Exception) {
-                // ignore
+                null
             }
         }
+            // Remove duplicates by packageName (some OEMs return multiple entries)
+            .distinctBy { it.packageName }
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
 
-        val uberPkg = resolveInstalledPackage("com.ubercab", "com.offline.uberlauncher")
-        if (uberPkg != null) {
-            try {
-                val appInfo = packageManager.getApplicationInfo(uberPkg, 0)
-                val label = "Uber"
+        items.addAll(appItems)
 
-                val defaultIcon = packageManager.getApplicationIcon(appInfo)
-                val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
-                    .getIcon(this, uberPkg, defaultIcon)
-
-                val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, uberPkg)
-                items.add(AppItem(uberPkg, label, icon, launchComponent))
-            } catch (_: Exception) { }
-        }
-
-        items.add(
-            AppItem(
-                packageName = ALL_APPS,
-                label = "All Apps",
-                icon = getDrawable(R.drawable.ic_all_apps)!!,
-                launchComponent = null
-            )
-        )
-
-        items.add(
-            AppItem(
-                packageName = NOTIFICATIONS,
-                label = "Notifications",
-                icon = getDrawable(R.drawable.ic_notifications)!!,
-                launchComponent = null
-            )
-        )
-
-
-        if (items.isEmpty()) {
-            Toast.makeText(this, "No allowed apps found/installed.", Toast.LENGTH_LONG).show()
-        }
-
-        selectedIndex = 0.coerceAtMost(items.lastIndex)
+        selectedIndex = 0
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -159,19 +120,5 @@ class MainActivity : AppCompatActivity() {
             result.dialDigits != null -> controller.openDialerWithDigits(result.dialDigits)
         }
         return true
-    }
-
-    private fun resolveInstalledPackage(primary: String, fallback: String): String? {
-        return try {
-            packageManager.getApplicationInfo(primary, 0)
-            primary
-        } catch (_: Exception) {
-            try {
-                packageManager.getApplicationInfo(fallback, 0)
-                fallback
-            } catch (_: Exception) {
-                null
-            }
-        }
     }
 }

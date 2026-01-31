@@ -1,7 +1,5 @@
 package com.offlineinc.dumbdownlauncher.notifications.ui
 
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -18,41 +16,65 @@ class NotificationsAdapter(
 
     private val items = mutableListOf<NotificationItem>()
     private var selectedIndex = 0
-
     private var hasActiveSelection = true
 
     fun clearSelectionHighlight() {
-        val old = selectedIndex
-        hasActiveSelection = false
-        notifyItemChanged(old)
+        setSelectionActive(false)
     }
 
     fun restoreSelectionHighlight() {
-        hasActiveSelection = true
-        notifyItemChanged(selectedIndex)
+        setSelectionActive(true)
     }
 
     fun submit(newItems: List<NotificationItem>) {
         items.clear()
         items.addAll(newItems)
-        selectedIndex = 0.coerceAtMost(items.lastIndex)
+
+        if (items.isEmpty()) {
+            // ✅ never allow -1
+            selectedIndex = 0
+            hasActiveSelection = false
+        } else {
+            selectedIndex = selectedIndex.coerceIn(0, items.lastIndex)
+            hasActiveSelection = true
+        }
+
         notifyDataSetChanged()
     }
 
-    fun moveSelection(delta: Int) {
-        if (items.isEmpty()) return
-        val old = selectedIndex
-        selectedIndex = (selectedIndex + delta).coerceIn(0, items.lastIndex)
+    /**
+     * @return true if selection actually moved
+     */
+    fun moveSelection(delta: Int): Boolean {
+        if (items.isEmpty()) return false
+
+        val old = selectedIndex.coerceIn(0, items.lastIndex)
+        val newIndex = (old + delta).coerceIn(0, items.lastIndex)
+
+        if (newIndex == old) return false
+
+        selectedIndex = newIndex
         notifyItemChanged(old)
         notifyItemChanged(selectedIndex)
+        return true
     }
 
     fun activateSelected() {
-        if (items.isNotEmpty()) onClick(items[selectedIndex])
+        if (items.isEmpty()) return
+        val idx = selectedIndex.coerceIn(0, items.lastIndex)
+        onClick(items[idx])
     }
 
     fun longPressSelected() {
-        if (items.isNotEmpty()) onLongPress(items[selectedIndex])
+        if (items.isEmpty()) return
+        val idx = selectedIndex.coerceIn(0, items.lastIndex)
+        onLongPress(items[idx])
+    }
+
+    fun getSelectedIndex(): Int {
+        // ✅ never return -1
+        if (items.isEmpty()) return 0
+        return selectedIndex.coerceIn(0, items.lastIndex)
     }
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {
@@ -72,19 +94,16 @@ class NotificationsAdapter(
         holder.title.text = item.title
         holder.text.text = item.text
 
-        // Apply launcher font
         val font = ResourcesCompat.getFont(holder.title.context, R.font.syne_mono)
         holder.title.typeface = font
         holder.text.typeface = font
 
-        val selected = hasActiveSelection && position == selectedIndex
+        val selected = hasActiveSelection && position == getSelectedIndex()
 
-        // Background highlight
         holder.root.setBackgroundColor(
             if (selected) 0xFFFFD400.toInt() else 0x00000000
         )
 
-        // Text color inversion
         holder.title.setTextColor(
             if (selected) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
         )
@@ -101,5 +120,21 @@ class NotificationsAdapter(
 
     override fun getItemCount(): Int = items.size
 
-    fun getSelectedIndex(): Int = selectedIndex
+    fun setSelection(index: Int) {
+        if (items.isEmpty()) return
+        val old = selectedIndex.coerceIn(0, items.lastIndex)
+        selectedIndex = index.coerceIn(0, items.lastIndex)
+        notifyItemChanged(old)
+        notifyItemChanged(selectedIndex)
+    }
+
+    fun setSelectionActive(active: Boolean) {
+        if (items.isEmpty()) {
+            hasActiveSelection = false
+            return
+        }
+        val old = selectedIndex.coerceIn(0, items.lastIndex)
+        hasActiveSelection = active
+        notifyItemChanged(old)
+    }
 }
