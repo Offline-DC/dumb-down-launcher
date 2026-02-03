@@ -9,11 +9,23 @@ object KeyDispatcher {
         val consumed: Boolean,
         val dialDigits: String? = null,
         val activateSelected: Boolean = false,
-        val openDialerBlank: Boolean = false
+        val openDialerBlank: Boolean = false,
+        val resetDialSession: Boolean = false,
+        val openNotifications: Boolean = false,
+        val openAllApps: Boolean = false,
     )
 
     fun handle(event: KeyEvent): Result {
         if (event.action != KeyEvent.ACTION_DOWN) return Result(consumed = false)
+
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_SOFT_LEFT -> return Result(consumed = true, openNotifications = true)
+            KeyEvent.KEYCODE_SOFT_RIGHT -> return Result(consumed = true, openAllApps = true)
+        }
+
+        if (event.keyCode == KeyEvent.KEYCODE_ENDCALL) {
+            return Result(consumed = true, resetDialSession = true)
+        }
 
         // Prefer unicodeChar so it works across weird keycodes
         val ch = event.unicodeChar

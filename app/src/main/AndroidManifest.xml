@@ -2,6 +2,7 @@
     package="com.offlineinc.dumbdownlauncher">
 
     <application
+        android:name=".DumbDownApp"
         android:allowBackup="true"
         android:label="Mini List Launcher"
         android:icon="@mipmap/ic_launcher"

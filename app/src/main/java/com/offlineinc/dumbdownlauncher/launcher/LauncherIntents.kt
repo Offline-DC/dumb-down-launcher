@@ -25,8 +25,16 @@ object LauncherIntents {
     fun dialIntent(digits: String): Intent {
         val encoded = Uri.encode(digits) // important for * and #
         val uri = Uri.parse("tel:$encoded")
-        return Intent(Intent.ACTION_DIAL, uri).apply {
+
+        return Intent(Intent.ACTION_DIAL).apply {
+            data = uri
+
+            putExtra(Intent.EXTRA_PHONE_NUMBER, digits)
+
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
     }
 

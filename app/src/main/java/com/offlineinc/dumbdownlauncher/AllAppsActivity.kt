@@ -1,76 +1,55 @@
-// AllAppsActivity.kt
 package com.offlineinc.dumbdownlauncher
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.KeyEvent
+import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.launcher.LaunchResolver
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.model.AppItem
-import com.offlineinc.dumbdownlauncher.ui.AppAdapter
-import android.content.Intent
+import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
+import com.offlineinc.dumbdownlauncher.ui.AppListScreen
 
 class AllAppsActivity : AppCompatActivity() {
 
-    private lateinit var recyclerView: RecyclerView
-    private lateinit var adapter: AppAdapter
-    private lateinit var controller: LauncherController
-
-    private var selectedIndex = 0
     private val items = mutableListOf<AppItem>()
+    private lateinit var controller: LauncherController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
-
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main) // reuse same layout with @id/list
 
         window.statusBarColor = 0xFF000000.toInt()
 
-        recyclerView = findViewById(R.id.list)
-        recyclerView.layoutManager = LinearLayoutManager(this)
-
         loadAllApps()
 
+        // Controller is still useful for dialer shortcuts + notification/access logic etc.
         controller = LauncherController(
             context = this,
-            getSelectedIndex = { selectedIndex },
+            getSelectedIndex = { 0 }, // not used for launching anymore
             getItems = { items },
             onStartActivity = { startActivity(it) },
             onNoAnim = { overridePendingTransition(0, 0) }
         )
 
-        adapter = AppAdapter(
-            recyclerView = recyclerView,
-            items = items,
-            getSelectedIndex = { selectedIndex },
-            setSelectedIndex = { selectedIndex = it },
-            onActivate = { controller.launchSelected() }
-        )
-
-        recyclerView.adapter = adapter
-        recyclerView.itemAnimator = null
-        recyclerView.setHasFixedSize(true)
-        recyclerView.setItemViewCacheSize(60)
-
-        recyclerView.post {
-            if (items.isNotEmpty()) {
-                selectedIndex = 0
-                recyclerView.scrollToPosition(0)
-                recyclerView.requestFocus()
-                recyclerView.post {
-                    recyclerView.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus()
-                }
-            }
+        setContent {
+            AppListScreen(
+                title = "All Apps",
+                items = items,
+                onActivate = { item -> /* unchanged */ },
+                onBack = { finish() },
+                showSoftKeys = false
+            )
         }
     }
 
     override fun onResume() {
         super.onResume()
+        // If you implemented dial-session reset in controller, keep this:
+        // controller.resetDialSession()
         overridePendingTransition(0, 0)
     }
 
@@ -101,24 +80,34 @@ class AllAppsActivity : AppCompatActivity() {
                 null
             }
         }
-            // Remove duplicates by packageName (some OEMs return multiple entries)
             .distinctBy { it.packageName }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
 
         items.addAll(appItems)
-
-        selectedIndex = 0
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val result = KeyDispatcher.handle(event)
         if (!result.consumed) return super.dispatchKeyEvent(event)
 
-        when {
-            result.activateSelected -> controller.launchSelected()
-            result.openDialerBlank -> controller.openDialerBlank()
-            result.dialDigits != null -> controller.openDialerWithDigits(result.dialDigits)
+
+        // ✅ Only intercept dial shortcuts here.
+        // Let Compose handle Enter/DPAD.
+        return when {
+            result.resetDialSession -> {        // if you added this to KeyDispatcher
+                // controller.resetDialSession()
+                true
+            }
+            result.openDialerBlank -> {
+                controller.openDialerBlank()
+                true
+            }
+            result.dialDigits != null -> {
+                // If you added openDialerWithDigit use that; otherwise this works:
+                controller.openDialerWithDigits(result.dialDigits)
+                true
+            }
+            else -> super.dispatchKeyEvent(event)
         }
-        return true
     }
 }
