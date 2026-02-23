@@ -75,8 +75,8 @@ class MainActivity : AppCompatActivity() {
                 },
 
                 showSoftKeys = true,
-                softKeyLeftLabel = "Notifications",
-                softKeyRightLabel = "All Apps",
+                softKeyLeftLabel = "notifications",
+                softKeyRightLabel = "all apps",
                 onSoftKeyLeft = {
                     startActivity(Intent(this, NotificationsActivity::class.java))
                     overridePendingTransition(0, 0)
@@ -109,6 +109,7 @@ class MainActivity : AppCompatActivity() {
                 val defaultLabel = packageManager.getApplicationLabel(appInfo).toString()
                 val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
                     .getLabel(pkg, defaultLabel)
+                    .lowercase()
                 val defaultIcon = packageManager.getApplicationIcon(appInfo)
                 val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
                     .getIcon(this, pkg, defaultIcon)
@@ -123,7 +124,7 @@ class MainActivity : AppCompatActivity() {
         if (uberPkg != null) {
             try {
                 val appInfo = packageManager.getApplicationInfo(uberPkg, 0)
-                val label = "Uber"
+                val label = "uber"
                 val defaultIcon = packageManager.getApplicationIcon(appInfo)
                 val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
                     .getIcon(this, uberPkg, defaultIcon)

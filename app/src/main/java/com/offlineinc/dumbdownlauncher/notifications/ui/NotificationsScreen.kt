@@ -153,7 +153,7 @@ fun NotificationsScreen(
             }
     ) {
         BasicText(
-            text = "Notifications",
+            text = "notifications",
             style = TextStyle(
                 color = White,
                 fontSize = 18.sp,
@@ -242,7 +242,7 @@ private fun ClearAllButton(
             ) { onClick() }
     ) {
         BasicText(
-            text = "Clear all",
+            text = "clear all",
             style = TextStyle(
                 color = if (focused) Black else Yellow,
                 fontSize = 16.sp,

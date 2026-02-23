@@ -38,7 +38,7 @@ fun ClearAllButton(
             ) { onClick() }
     ) {
         BasicText(
-            text = "Clear all",
+            text = "clear all",
             style = TextStyle(
                 color = if (focused) DumbTheme.Colors.Black else DumbTheme.Colors.Yellow,
                 fontSize = 16.sp,

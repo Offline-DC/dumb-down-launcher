@@ -37,7 +37,7 @@ class AllAppsActivity : AppCompatActivity() {
 
         setContent {
             AppListScreen(
-                title = "All Apps",
+                title = "all apps",
                 items = items,
                 onActivate = { item ->
                     launchApp(item)
@@ -102,6 +102,7 @@ class AllAppsActivity : AppCompatActivity() {
                 val defaultLabel = pm.getApplicationLabel(appInfo).toString()
                 val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
                     .getLabel(pkg, defaultLabel)
+                    .lowercase()
                 val defaultIcon = pm.getApplicationIcon(appInfo)
                 val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
                     .getIcon(this, pkg, defaultIcon)
