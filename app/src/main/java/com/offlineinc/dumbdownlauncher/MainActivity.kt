@@ -19,14 +19,13 @@ const val ALL_APPS = "__ALL_APPS__"
 const val NOTIFICATIONS = "__NOTIFICATIONS__"
 
 class MainActivity : AppCompatActivity() {
-
     private val allowedPackages = listOf(
         "com.openbubbles.messaging",
         "com.android.mms",
         "com.android.contacts",
         "com.android.dialer",
         "com.android.settings",
-        "app.organicmaps",
+        "com.google.android.apps.mapslite",
         "com.tcl.camera",
         "com.whatsapp",
         "com.apple.android.music"
@@ -59,6 +58,12 @@ class MainActivity : AppCompatActivity() {
                 onActivate = { item ->
                     val component = item.launchComponent
                     if (component != null) {
+
+                        Log.d(
+                            "DUMB_KEYS",
+                            "component: ${component.packageName}"
+                        )
+
                         val intent = Intent(Intent.ACTION_MAIN).apply {
                             addCategory(Intent.CATEGORY_LAUNCHER)
                             setComponent(component)
@@ -91,6 +96,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        MouseAccessibilityService.forceDisable(this)
         overridePendingTransition(0, 0)
     }
 

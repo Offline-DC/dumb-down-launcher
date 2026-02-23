@@ -17,7 +17,6 @@ class LauncherController(
     private val onStartActivity: (Intent) -> Unit,
     private val onNoAnim: () -> Unit
 ) {
-
     fun launchSelected() {
         val items = getItems()
         if (items.isEmpty()) return
