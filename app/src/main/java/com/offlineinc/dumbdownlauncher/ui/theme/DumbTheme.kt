@@ -25,12 +25,8 @@ object DumbTheme {
         val Gray  = Color(0xFFAAAAAA)    // Secondary text
     }
 
-    /**
-     * TYPOGRAPHY
-     * Uses your existing res/font/syne_mono.xml
-     */
-    val SyneMono = FontFamily(
-        Font(R.font.syne_mono) // This references your XML font-family file
+    val BioRhyme = FontFamily(
+        Font(R.font.bio_rhyme) // This references your XML font-family file
     )
 
     /**
@@ -39,23 +35,23 @@ object DumbTheme {
     @Immutable
     object Text {
         val Title = TextStyle(
-            fontFamily = SyneMono,
+            fontFamily = BioRhyme,
             fontSize = 18.sp,
             color = Colors.White
         )
 
         val AppLabel = TextStyle(
-            fontFamily = SyneMono,
+            fontFamily = BioRhyme,
             fontSize = 24.sp
         )
 
         val Body = TextStyle(
-            fontFamily = SyneMono,
+            fontFamily = BioRhyme,
             fontSize = 16.sp
         )
 
         val Small = TextStyle(
-            fontFamily = SyneMono,
+            fontFamily = BioRhyme,
             fontSize = 14.sp
         )
     }

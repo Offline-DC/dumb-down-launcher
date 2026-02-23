@@ -26,7 +26,7 @@ fun NotificationsScreen(
     onDismiss: (NotificationItem) -> Unit,
     onClearAll: () -> Unit
 ) {
-    val fontFamily = DumbTheme.SyneMono
+    val fontFamily = DumbTheme.BioRhyme
     val hasNotifications = items.isNotEmpty()
 
     var selectedIndex by remember { mutableIntStateOf(0) }

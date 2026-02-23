@@ -30,7 +30,7 @@ fun AppListScreen(
     onSoftKeyLeft: (() -> Unit)? = null,
     onSoftKeyRight: (() -> Unit)? = null,
 ) {
-    val fontFamily = DumbTheme.SyneMono
+    val fontFamily = DumbTheme.BioRhyme
     val listState = rememberLazyListState()
 
     var selectedIndex by remember { mutableIntStateOf(0) }
