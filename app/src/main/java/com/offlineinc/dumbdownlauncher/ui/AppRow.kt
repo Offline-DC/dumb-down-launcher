@@ -9,7 +9,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -22,7 +25,7 @@ fun AppRow(
     item: AppItem,
     selected: Boolean,
     fontFamily: FontFamily,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier
@@ -31,19 +34,35 @@ fun AppRow(
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val iconBitmap = remember(item.icon) { item.icon.toBitmapSafely(96, 96) }
+
+        // ---- App Icon ----
+        val iconBitmap = remember(item.icon) {
+            item.icon.toBitmapSafely(96, 96)
+        }
+
+        val grayscaleFilter = remember {
+            ColorFilter.colorMatrix(
+                ColorMatrix().apply { setToSaturation(0f) }
+            )
+        }
 
         if (iconBitmap != null) {
             Image(
                 bitmap = iconBitmap.asImageBitmap(),
                 contentDescription = item.label,
-                modifier = Modifier.size(38.dp)
+                modifier = Modifier.size(38.dp),
+                colorFilter = if (item.isMuted) grayscaleFilter else null
             )
         } else {
             Box(
                 modifier = Modifier
                     .size(34.dp)
-                    .background(if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.Gray)
+                    .background(
+                        if (selected)
+                            DumbTheme.Colors.Black
+                        else
+                            DumbTheme.Colors.Gray
+                    )
             )
         }
 
@@ -54,10 +73,25 @@ fun AppRow(
             style = TextStyle(
                 fontFamily = fontFamily,
                 fontSize = 32.sp,
-                color = if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.White
+                color = if (selected)
+                    DumbTheme.Colors.Black
+                else
+                    DumbTheme.Colors.White
             ),
             maxLines = 1,
             modifier = Modifier.weight(1f)
         )
+
+        if (item.isMuted) {
+            Spacer(Modifier.width(10.dp))
+
+            Image(
+                painter = painterResource(
+                    android.R.drawable.ic_lock_silent_mode
+                ),
+                contentDescription = "Muted",
+                modifier = Modifier.size(32.dp)
+            )
+        }
     }
 }

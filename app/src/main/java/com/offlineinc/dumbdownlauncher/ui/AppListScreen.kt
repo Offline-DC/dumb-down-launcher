@@ -1,5 +1,6 @@
 package com.offlineinc.dumbdownlauncher.ui
 
+import android.content.Context.MODE_PRIVATE
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -8,6 +9,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -29,6 +31,8 @@ fun AppListScreen(
     softKeyRightLabel: String = "All Apps",
     onSoftKeyLeft: (() -> Unit)? = null,
     onSoftKeyRight: (() -> Unit)? = null,
+    messagesMuted: Boolean = false,
+    onToggleMessagesMuted: ((Boolean) -> Unit)? = null,
 ) {
     val fontFamily = DumbTheme.BioRhyme
     val listState = rememberLazyListState()
@@ -69,15 +73,22 @@ fun AppListScreen(
                         true
                     }
                     Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                        if (items.isNotEmpty()) onActivate(items[selectedIndex])
-                        true
+                        if (items.isNotEmpty()) {
+                            val item = items[selectedIndex]
+                            if (item.packageName == DND_TOGGLE) {
+                                onToggleMessagesMuted?.invoke(!messagesMuted)
+                                true
+                            } else {
+                                onActivate(item)
+                                true
+                            }
+                        } else true
                     }
                     Key.Back -> {
                         onBack?.invoke()
                         onBack != null
                     }
 
-                    // ✅ Only handle MENU/B if softkeys are enabled AND callbacks are provided
                     Key.Menu -> {
                         if (showSoftKeys && onSoftKeyLeft != null) {
                             onSoftKeyLeft.invoke()
@@ -117,11 +128,20 @@ fun AppListScreen(
                     items = items,
                     key = { _, item -> item.packageName }
                 ) { index, item ->
-                    AppRow(
-                        item = item,
-                        selected = (index == selectedIndex),
-                        fontFamily = fontFamily
-                    )
+                    if (item.packageName == DND_TOGGLE) {
+                        DndToggleRow(
+                            item = item,
+                            selected = (index == selectedIndex),
+                            enabled = messagesMuted,
+                            fontFamily = fontFamily
+                        )
+                    } else {
+                        AppRow(
+                            item = item,
+                            selected = (index == selectedIndex),
+                            fontFamily = fontFamily,
+                        )
+                    }
                 }
             }
         }

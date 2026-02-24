@@ -1,3 +1,4 @@
+// launcher/AppIconOverrides.kt
 package com.offlineinc.dumbdownlauncher.launcher
 
 import android.content.Context
@@ -6,7 +7,11 @@ import androidx.core.content.ContextCompat
 import com.offlineinc.dumbdownlauncher.R
 
 object AppIconOverrides {
-    fun getIcon(context: Context, packageName: String, defaultIcon: Drawable): Drawable {
+    fun getIcon(
+        context: Context,
+        packageName: String,
+        defaultIcon: Drawable
+    ): Drawable {
         val overrideRes = when (packageName) {
             "com.android.settings" -> R.drawable.mo_gear
 
@@ -19,4 +24,3 @@ object AppIconOverrides {
         return overrideRes?.let { ContextCompat.getDrawable(context, it) } ?: defaultIcon
     }
 }
-

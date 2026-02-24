@@ -7,5 +7,6 @@ data class AppItem(
     val packageName: String,
     val label: String,
     val icon: Drawable,
-    val launchComponent: ComponentName?
+    val launchComponent: ComponentName?,
+    val isMuted: Boolean = false
 )
