@@ -1,30 +1,43 @@
 package com.offlineinc.dumbdownlauncher
 
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.runtime.mutableStateListOf
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
-import com.offlineinc.dumbdownlauncher.launcher.LaunchResolver
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.AppListScreen
 
 class AllAppsActivity : AppCompatActivity() {
 
-    private val items = mutableListOf<AppItem>()
+    companion object {
+        @Volatile private var cachedApps: List<AppItem>? = null
+        fun invalidateCache() { cachedApps = null }
+    }
+
+    private val items = mutableStateListOf<AppItem>()
     private lateinit var controller: LauncherController
+
+    private val packageChangeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            invalidateCache()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = 0xFF000000.toInt()
-
-        loadAllApps()
 
         // Controller still useful for dial shortcuts, etc.
         controller = LauncherController(
@@ -34,6 +47,11 @@ class AllAppsActivity : AppCompatActivity() {
             onStartActivity = { startActivity(it) },
             onNoAnim = { overridePendingTransition(0, 0) }
         )
+
+        val cached = cachedApps
+        if (cached != null) {
+            items.addAll(cached)
+        }
 
         setContent {
             AppListScreen(
@@ -47,9 +65,35 @@ class AllAppsActivity : AppCompatActivity() {
             )
         }
 
-        if (items.isEmpty()) {
-            Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
+        if (cached == null) {
+            Thread {
+                val loaded = buildAppList()
+                cachedApps = loaded
+                runOnUiThread {
+                    if (isDestroyed) return@runOnUiThread
+                    items.clear()
+                    items.addAll(loaded)
+                    if (items.isEmpty()) {
+                        Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        registerReceiver(packageChangeReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addDataScheme("package")
+        })
+    }
+
+    override fun onStop() {
+        super.onStop()
+        unregisterReceiver(packageChangeReceiver)
     }
 
     override fun onResume() {
@@ -85,9 +129,7 @@ class AllAppsActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadAllApps() {
-        items.clear()
-
+    private fun buildAppList(): List<AppItem> {
         val pm = packageManager
         val intent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -95,10 +137,11 @@ class AllAppsActivity : AppCompatActivity() {
 
         val resolved = pm.queryIntentActivities(intent, 0)
 
-        val appItems = resolved.mapNotNull { ri ->
-            val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
+        return resolved.mapNotNull { ri ->
+            val activityInfo = ri.activityInfo ?: return@mapNotNull null
+            val pkg = activityInfo.packageName
+            val appInfo = activityInfo.applicationInfo
             try {
-                val appInfo = pm.getApplicationInfo(pkg, 0)
                 val defaultLabel = pm.getApplicationLabel(appInfo).toString()
                 val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
                     .getLabel(pkg, defaultLabel)
@@ -106,8 +149,7 @@ class AllAppsActivity : AppCompatActivity() {
                 val defaultIcon = pm.getApplicationIcon(appInfo)
                 val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
                     .getIcon(this, pkg, defaultIcon)
-
-                val component = LaunchResolver.resolveLaunchComponent(pm, pkg)
+                val component = ComponentName(activityInfo.packageName, activityInfo.name)
                 AppItem(pkg, label, icon, component)
             } catch (_: Exception) {
                 null
@@ -115,8 +157,6 @@ class AllAppsActivity : AppCompatActivity() {
         }
             .distinctBy { it.packageName }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
-
-        items.addAll(appItems)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

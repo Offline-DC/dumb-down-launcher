@@ -1,6 +1,9 @@
 package com.offlineinc.dumbdownlauncher.ui
 
 import android.content.Context.MODE_PRIVATE
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -118,32 +121,37 @@ fun AppListScreen(
             )
         }
 
-        Box(modifier = Modifier.weight(1f)) {
+        val listAlpha by animateFloatAsState(
+            targetValue = if (items.isNotEmpty()) 1f else 0f,
+            animationSpec = tween(300),
+            label = "listAlpha"
+        )
+        Box(modifier = Modifier.weight(1f).alpha(listAlpha)) {
             LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 8.dp)
-            ) {
-                itemsIndexed(
-                    items = items,
-                    key = { _, item -> item.packageName }
-                ) { index, item ->
-                    if (item.packageName == DND_TOGGLE) {
-                        DndToggleRow(
-                            item = item,
-                            selected = (index == selectedIndex),
-                            enabled = messagesMuted,
-                            fontFamily = fontFamily
-                        )
-                    } else {
-                        AppRow(
-                            item = item,
-                            selected = (index == selectedIndex),
-                            fontFamily = fontFamily,
-                        )
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    itemsIndexed(
+                        items = items,
+                        key = { _, item -> item.packageName }
+                    ) { index, item ->
+                        if (item.packageName == DND_TOGGLE) {
+                            DndToggleRow(
+                                item = item,
+                                selected = (index == selectedIndex),
+                                enabled = messagesMuted,
+                                fontFamily = fontFamily
+                            )
+                        } else {
+                            AppRow(
+                                item = item,
+                                selected = (index == selectedIndex),
+                                fontFamily = fontFamily,
+                            )
+                        }
                     }
                 }
-            }
         }
 
         // ✅ Only show footer when enabled

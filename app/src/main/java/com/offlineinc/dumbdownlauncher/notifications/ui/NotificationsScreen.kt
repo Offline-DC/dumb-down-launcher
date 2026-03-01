@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.notifications.model.NotificationItem
+import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 private val Yellow = Color(0xFFFFD400)
 private val Black = Color(0xFF000000)
@@ -34,7 +35,7 @@ fun NotificationsScreen(
     onDismiss: (NotificationItem) -> Unit,
     onClearAll: () -> Unit
 ) {
-    val fontFamily = FontFamily.Monospace // swap to your custom Syne Mono below if desired
+    val fontFamily = DumbTheme.BioRhyme
 
     val hasNotifications = items.isNotEmpty()
 

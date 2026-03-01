@@ -67,8 +67,6 @@ class MainActivity : AppCompatActivity() {
         )
         dndMuteManager.refreshFromSystem()
 
-        loadApps()
-
         controller = LauncherController(
             context = this,
             getSelectedIndex = { selectedIndex },
@@ -122,9 +120,17 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        if (items.isEmpty()) {
-            Toast.makeText(this, "No allowed apps found/installed.", Toast.LENGTH_LONG).show()
-        }
+        Thread {
+            val loaded = buildMainAppList()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                items.addAll(loaded)
+                applyMutedToItems(dndMuteManager.muted.value)
+                if (items.isEmpty()) {
+                    Toast.makeText(this, "No allowed apps found/installed.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
     }
 
     override fun onResume() {
@@ -133,13 +139,13 @@ class MainActivity : AppCompatActivity() {
         overridePendingTransition(0, 0)
     }
 
-    private fun loadApps() {
-        items.clear()
+    private fun buildMainAppList(): List<AppItem> {
+        val result = mutableListOf<AppItem>()
 
         for (pkg in allowedPackages) {
             if (pkg == DND_TOGGLE) {
                 val icon = packageManager.defaultActivityIcon
-                items.add(
+                result.add(
                     AppItem(
                         packageName = DND_TOGGLE,
                         label = "mute all texts",
@@ -158,7 +164,7 @@ class MainActivity : AppCompatActivity() {
                 val defaultIcon = packageManager.getApplicationIcon(appInfo)
                 val icon = AppIconOverrides.getIcon(this, pkg, defaultIcon)
                 val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, pkg)
-                items.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
+                result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
             } catch (_: Exception) { }
         }
 
@@ -169,12 +175,11 @@ class MainActivity : AppCompatActivity() {
                 val defaultIcon = packageManager.getApplicationIcon(appInfo)
                 val icon = AppIconOverrides.getIcon(this, uberPkg, defaultIcon)
                 val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, uberPkg)
-                items.add(AppItem(uberPkg, "uber", icon, launchComponent, isMuted = false))
+                result.add(AppItem(uberPkg, "uber", icon, launchComponent, isMuted = false))
             } catch (_: Exception) { }
         }
 
-        applyMutedToItems(dndMuteManager.muted.value)
-        selectedIndex = 0.coerceAtMost(items.lastIndex)
+        return result
     }
 
     private fun applyMutedToItems(muted: Boolean) {
