@@ -8,9 +8,11 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout launcher repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -23,8 +25,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Decode keystore
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore.jks
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore.jks
 
       - name: Build release APK
         env:
@@ -34,52 +35,22 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease
 
-      - name: Locate APK
+      - name: Locate and rename APK
         id: apk
         run: |
-          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
-          echo "sha256=$(sha256sum "$APK" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          cp "$SRC" dumb-down-launcher.apk
+          echo "sha256=$(sha256sum dumb-down-launcher.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Parse version from tag
+      - name: Parse version code
         id: version
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION_NAME="${TAG#v}"
-          VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | grep -oP '\d+' | head -1)
-          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
-          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "code=$(grep 'versionCode' app/build.gradle.kts | grep -oP '\d+' | head -1)" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout dumb.co repo
-        uses: actions/checkout@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          repository: Offline-DC/dumb.co
-          token: ${{ secrets.DUMB_CO_PAT }}
-          path: dumb-co
-
-      - name: Copy APK to dumb.co
-        run: cp "${{ steps.apk.outputs.path }}" dumb-co/public/downloads/dumb-down-launcher.apk
-
-      - name: Update apps.json
-        run: |
-          cd dumb-co
-          jq \
-            --arg version "${{ steps.version.outputs.name }}" \
-            --argjson code ${{ steps.version.outputs.code }} \
-            --arg sha256 "${{ steps.apk.outputs.sha256 }}" \
-            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '.apps["dumb-down-launcher"].latest_version = $version |
-             .apps["dumb-down-launcher"].version_code = $code |
-             .apps["dumb-down-launcher"].sha256 = $sha256 |
-             .apps["dumb-down-launcher"].published_at = $published_at' \
-            public/downloads/apps.json > /tmp/apps.json
-          mv /tmp/apps.json public/downloads/apps.json
-
-      - name: Commit and push to dumb.co
-        run: |
-          cd dumb-co
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/downloads/dumb-down-launcher.apk public/downloads/apps.json
-          git commit -m "chore: dumb-down-launcher v${{ steps.version.outputs.name }}"
-          git push
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: "version_code=${{ steps.version.outputs.code }}\nsha256=${{ steps.apk.outputs.sha256 }}"
+          files: dumb-down-launcher.apk
