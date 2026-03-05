@@ -7,7 +7,9 @@ object AppLabelOverrides {
         "com.android.contacts" to "contacts",
         "com.android.settings" to "settings",
         "com.android.mms" to "dumb txt",
-        "com.openbubbles.messaging" to "smart txt"
+        "com.openbubbles.messaging" to "smart txt",
+        "com.offline.googlemessageslauncher" to "smart txt",
+        "com.offlineinc.dumbcontactsync" to "contact sync"
     )
 
     fun getLabel(packageName: String, defaultLabel: String): String {

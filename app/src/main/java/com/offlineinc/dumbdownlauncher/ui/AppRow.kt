@@ -4,6 +4,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -12,13 +16,25 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.offlineinc.dumbdownlauncher.CHANGE_PLATFORM
+import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
+import com.offlineinc.dumbdownlauncher.UBER
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
+
+private val vectorIcons: Map<String, ImageVector> = mapOf(
+    "com.openbubbles.messaging" to Icons.Filled.Chat,
+    GOOGLE_MESSAGES to Icons.Filled.Chat,
+    UBER to Icons.Filled.DirectionsCar,
+    CHANGE_PLATFORM to Icons.Filled.Psychology,
+)
 
 @Composable
 fun AppRow(
@@ -36,34 +52,47 @@ fun AppRow(
     ) {
 
         // ---- App Icon ----
-        val iconBitmap = remember(item.icon) {
-            item.icon.toBitmapSafely(96, 96)
-        }
+        val vectorIcon = vectorIcons[item.packageName]
 
-        val grayscaleFilter = remember {
-            ColorFilter.colorMatrix(
-                ColorMatrix().apply { setToSaturation(0f) }
-            )
-        }
-
-        if (iconBitmap != null) {
+        if (vectorIcon != null) {
             Image(
-                bitmap = iconBitmap.asImageBitmap(),
+                painter = rememberVectorPainter(vectorIcon),
                 contentDescription = item.label,
                 modifier = Modifier.size(38.dp),
-                colorFilter = if (item.isMuted) grayscaleFilter else null
+                colorFilter = ColorFilter.tint(
+                    if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.White
+                )
             )
         } else {
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .background(
-                        if (selected)
-                            DumbTheme.Colors.Black
-                        else
-                            DumbTheme.Colors.Gray
-                    )
-            )
+            val iconBitmap = remember(item.icon) {
+                item.icon.toBitmapSafely(96, 96)
+            }
+
+            val grayscaleFilter = remember {
+                ColorFilter.colorMatrix(
+                    ColorMatrix().apply { setToSaturation(0f) }
+                )
+            }
+
+            if (iconBitmap != null) {
+                Image(
+                    bitmap = iconBitmap.asImageBitmap(),
+                    contentDescription = item.label,
+                    modifier = Modifier.size(38.dp),
+                    colorFilter = if (item.isMuted) grayscaleFilter else null
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(
+                            if (selected)
+                                DumbTheme.Colors.Black
+                            else
+                                DumbTheme.Colors.Gray
+                        )
+                )
+            }
         }
 
         Spacer(Modifier.width(14.dp))

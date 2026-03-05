@@ -2,6 +2,9 @@
     package="com.offlineinc.dumbdownlauncher">
 
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
     <application
         android:name=".DumbDownApp"
@@ -15,6 +18,11 @@
         <activity
             android:name=".AllAppsActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".WebViewActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 
         <activity
             android:name=".MainActivity"
@@ -63,11 +71,32 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".update.DownloadAndInstallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK" />
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
+
     </application>
 
     <queries>
         <package android:name="com.whatsapp" />
         <package android:name="com.ubercab" />
+        <package android:name="com.offlineinc.dumbcontactsync" />
+        <package android:name="com.android.chrome" />
 
         <intent>
             <action android:name="android.intent.action.MAIN" />

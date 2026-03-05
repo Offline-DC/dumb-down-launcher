@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.mutableStateListOf
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
+import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.AppListScreen
 
@@ -23,6 +24,24 @@ class AllAppsActivity : AppCompatActivity() {
         @Volatile private var cachedApps: List<AppItem>? = null
         fun invalidateCache() { cachedApps = null }
     }
+
+    private val hiddenPackages = setOf(
+        // smart txt (shown on main screen instead)
+        "com.openbubbles.messaging",
+        "com.offline.googlemessageslauncher",
+        // uber (handled by launcher WebViewActivity)
+        "com.offline.uberlauncher",
+        // launchers
+        "com.offlineinc.dumbdownlauncher",
+        "com.android.launcher3",
+        // apps to hide
+        "com.topjohnwu.magisk",           // Magisk
+        "com.android.chrome",             // Chrome
+        "com.android.quicksearchbox",     // Search
+        "com.iqqijni.dvt912key",          // 12-key keyboard
+        "com.polariswireless.zclient",    // ZClient
+        "com.mediatek.engineermode",      // MTK engineer mode
+    )
 
     private val items = mutableStateListOf<AppItem>()
     private lateinit var controller: LauncherController
@@ -39,10 +58,9 @@ class AllAppsActivity : AppCompatActivity() {
 
         window.statusBarColor = 0xFF000000.toInt()
 
-        // Controller still useful for dial shortcuts, etc.
         controller = LauncherController(
             context = this,
-            getSelectedIndex = { 0 }, // not used for launching anymore
+            getSelectedIndex = { 0 },
             getItems = { items },
             onStartActivity = { startActivity(it) },
             onNoAnim = { overridePendingTransition(0, 0) }
@@ -58,7 +76,12 @@ class AllAppsActivity : AppCompatActivity() {
                 title = "all apps",
                 items = items,
                 onActivate = { item ->
-                    launchApp(item)
+                    if (item.packageName == CHANGE_PLATFORM) {
+                        PlatformPreferences.requestShowDialog(this)
+                        finish()
+                    } else {
+                        launchApp(item)
+                    }
                 },
                 onBack = { finish() },
                 showSoftKeys = false
@@ -109,9 +132,14 @@ class AllAppsActivity : AppCompatActivity() {
                     addCategory(Intent.CATEGORY_LAUNCHER)
                     setComponent(component)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    if (item.packageName == "com.offlineinc.dumbcontactsync") {
+                        val platform = PlatformPreferences.getChoice(this@AllAppsActivity)
+                        if (platform != null && platform != "skipped") {
+                            putExtra("platform", platform)
+                        }
+                    }
                 }
             } else {
-                // Fallback (some packages may not resolve via your LaunchResolver)
                 packageManager.getLaunchIntentForPackage(item.packageName)?.apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
@@ -137,9 +165,10 @@ class AllAppsActivity : AppCompatActivity() {
 
         val resolved = pm.queryIntentActivities(intent, 0)
 
-        return resolved.mapNotNull { ri ->
+        val appItems = resolved.mapNotNull { ri ->
             val activityInfo = ri.activityInfo ?: return@mapNotNull null
             val pkg = activityInfo.packageName
+            if (pkg in hiddenPackages) return@mapNotNull null
             val appInfo = activityInfo.applicationInfo
             try {
                 val defaultLabel = pm.getApplicationLabel(appInfo).toString()
@@ -157,6 +186,18 @@ class AllAppsActivity : AppCompatActivity() {
         }
             .distinctBy { it.packageName }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+            .toMutableList()
+
+        appItems.add(
+            AppItem(
+                packageName = CHANGE_PLATFORM,
+                label = "smart os",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null
+            )
+        )
+
+        return appItems
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -164,10 +205,7 @@ class AllAppsActivity : AppCompatActivity() {
         if (!result.consumed) return super.dispatchKeyEvent(event)
 
         return when {
-            result.resetDialSession -> {
-                // controller.resetDialSession()
-                true
-            }
+            result.resetDialSession -> true
             result.openDialerBlank -> {
                 controller.openDialerBlank()
                 true

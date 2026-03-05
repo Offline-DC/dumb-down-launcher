@@ -66,7 +66,7 @@ class MouseAccessibilityService : AccessibilityService() {
 
         if (className == "com.android.mms.ui.ConversationList" || className == "com.android.dialer") {
             Log.d("MouseService", "MMS ConversationList opened, disabling mouse")
-            handlePackage(pkg)
+            handlePackage(pkg, className)
             return
         }
 
@@ -76,11 +76,12 @@ class MouseAccessibilityService : AccessibilityService() {
         }
 
         Log.d("MouseService", "Activity event from $pkg mouseEnabled=$mouseEnabled")
-        handlePackage(pkg)
+        handlePackage(pkg, className)
     }
 
-    private fun handlePackage(pkg: String) {
+    private fun handlePackage(pkg: String, className: String = "") {
         val openBubblesActive = pkg == "com.openbubbles.messaging"
+            || (pkg == "com.offlineinc.dumbdownlauncher" && className == "com.offlineinc.dumbdownlauncher.WebViewActivity")
         if (openBubblesActive && !mouseEnabled) {
             Log.i("MouseService", "Enabling mouse")
             mouseEnabled = true
