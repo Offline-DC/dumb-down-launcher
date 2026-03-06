@@ -330,10 +330,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openInChrome(url: String) {
-        Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-            setPackage("com.android.chrome")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        }.let { startActivity(it) }
+        androidx.browser.customtabs.CustomTabsIntent.Builder(customTabsSession)
+            .setUrlBarHidingEnabled(true)
+            .build()
+            .apply { intent.setPackage("com.android.chrome") }
+            .launchUrl(this, Uri.parse(url))
         overridePendingTransition(0, 0)
     }
 
