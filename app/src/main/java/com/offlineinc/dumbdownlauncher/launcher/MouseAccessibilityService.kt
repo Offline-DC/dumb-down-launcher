@@ -22,6 +22,20 @@ class MouseAccessibilityService : AccessibilityService() {
         }
 
         private var instance: MouseAccessibilityService? = null
+        private var webViewActivityActive = false
+
+        fun notifyWebViewActive(active: Boolean) {
+            webViewActivityActive = active
+            instance?.let {
+                if (active && !it.mouseEnabled) {
+                    it.mouseEnabled = true
+                    it.runMouseCmd("enable")
+                } else if (!active && it.mouseEnabled) {
+                    it.mouseEnabled = false
+                    it.runMouseCmd("disable")
+                }
+            } ?: runMouseCmdStatic(if (active) "enable" else "disable")
+        }
 
         fun setMouseEnabled(context: Context, enabled: Boolean) {
             instance?.let {
@@ -80,6 +94,8 @@ class MouseAccessibilityService : AccessibilityService() {
     }
 
     private fun handlePackage(pkg: String, className: String = "") {
+        if (webViewActivityActive) return
+
         val openBubblesActive = pkg == "com.openbubbles.messaging"
             || (pkg == "com.offlineinc.dumbdownlauncher" && className == "com.offlineinc.dumbdownlauncher.WebViewActivity")
         if (openBubblesActive && !mouseEnabled) {

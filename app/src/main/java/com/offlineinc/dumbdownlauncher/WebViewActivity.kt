@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.offlineinc.dumbdownlauncher.MouseAccessibilityService
 
 class WebViewActivity : Activity() {
     private lateinit var webView: WebView
@@ -24,6 +25,16 @@ class WebViewActivity : Activity() {
 
         webView.webViewClient = WebViewClient()
         webView.loadUrl(url)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        MouseAccessibilityService.notifyWebViewActive(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        MouseAccessibilityService.notifyWebViewActive(false)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
