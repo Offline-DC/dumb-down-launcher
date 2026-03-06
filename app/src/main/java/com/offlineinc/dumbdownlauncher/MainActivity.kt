@@ -180,12 +180,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 )
 
-                Log.d("PLATFORM", "Compose recompose: showDialog=$showDialog")
                 if (showDialog) {
                     PlatformChoiceDialog(
                         onChoose = { choice ->
                             val previousChoice = PlatformPreferences.getChoice(this@MainActivity)
-                            Log.d("PLATFORM", "onChoose: choice=$choice previousChoice=$previousChoice")
                             if (choice != "skipped" && choice != "skip") {
                                 PlatformPreferences.saveChoice(this@MainActivity, choice)
                                 Log.d("PLATFORM", "onChoose: saved choice=$choice")
