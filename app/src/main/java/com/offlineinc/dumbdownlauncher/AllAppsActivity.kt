@@ -12,11 +12,15 @@ import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.mutableStateListOf
+import com.offlineinc.dumbdownlauncher.BuildConfig
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
+import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.AppListScreen
+
+private const val CHECK_UPDATES = "__CHECK_UPDATES__"
 
 class AllAppsActivity : AppCompatActivity() {
 
@@ -74,14 +78,22 @@ class AllAppsActivity : AppCompatActivity() {
         setContent {
             AppListScreen(
                 title = "all apps",
+                titleEndLabel = "v${BuildConfig.VERSION_NAME}",
                 items = items,
                 onActivate = { item ->
-                    if (item.packageName == CHANGE_PLATFORM) {
+                    when (item.packageName) {
+                    CHANGE_PLATFORM -> {
                         PlatformPreferences.requestShowDialog(this)
                         finish()
-                    } else {
-                        launchApp(item)
                     }
+                    CHECK_UPDATES -> {
+                        Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
+                        Thread {
+                            UpdateCheckWorker.runNow(applicationContext)
+                        }.start()
+                    }
+                    else -> launchApp(item)
+                }
                 },
                 onBack = { finish() },
                 showSoftKeys = false
@@ -196,6 +208,17 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null
             )
         )
+
+        if (BuildConfig.DEBUG) {
+            appItems.add(
+                AppItem(
+                    packageName = CHECK_UPDATES,
+                    label = "[debug] check for updates",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null
+                )
+            )
+        }
 
         return appItems
     }

@@ -23,10 +23,14 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             DownloadManager.ACTION_DOWNLOAD_COMPLETE -> {
                 val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val savedId = prefs.getLong(KEY_DOWNLOAD_ID, -1L)
-                if (downloadId == savedId) {
-                    prefs.edit().remove(KEY_DOWNLOAD_ID).apply()
-                    triggerInstall(context, downloadId)
+                for (appKey in APP_KEYS) {
+                    val key = downloadIdKey(appKey)
+                    val savedId = prefs.getLong(key, -1L)
+                    if (downloadId == savedId) {
+                        prefs.edit().remove(key).apply()
+                        triggerInstall(context, downloadId)
+                        break
+                    }
                 }
             }
         }
@@ -43,8 +47,9 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
         val downloadId = dm.enqueue(request)
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putLong(KEY_DOWNLOAD_ID, downloadId)
+            .putLong(downloadIdKey(appKey), downloadId)
             .apply()
+        UpdateNotificationManager.notifyDownloading(context, appKey)
     }
 
     private fun triggerInstall(context: Context, downloadId: Long) {
@@ -79,6 +84,7 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
 
     companion object {
         private const val PREFS_NAME = "update_prefs"
-        private const val KEY_DOWNLOAD_ID = "pending_download_id"
+        private val APP_KEYS = listOf("dumb-down-launcher", "dumb-contacts-sync")
+        private fun downloadIdKey(appKey: String) = "pending_download_id_$appKey"
     }
 }

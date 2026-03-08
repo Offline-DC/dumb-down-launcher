@@ -2,6 +2,7 @@ package com.offlineinc.dumbdownlauncher.update
 
 import android.content.Context
 import android.content.pm.PackageManager
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.Worker
@@ -56,8 +57,8 @@ class UpdateCheckWorker(
 
     private fun getInstalledVersionCode(packageName: String): Int? {
         return try {
-            @Suppress("DEPRECATION")
-            context.packageManager.getPackageInfo(packageName, 0).versionCode
+            val info = context.packageManager.getPackageInfo(packageName, 0)
+            PackageInfoCompat.getLongVersionCode(info).toInt()
         } catch (_: PackageManager.NameNotFoundException) {
             null
         }
@@ -74,6 +75,43 @@ class UpdateCheckWorker(
                 ExistingPeriodicWorkPolicy.KEEP,
                 request,
             )
+        }
+
+        /** Run the update check immediately on the calling thread (must be off main thread). */
+        fun runNow(context: Context) {
+            try {
+                val latest = UpdateChecker.fetchLatest()
+
+                val launcherInfo = latest["dumb-down-launcher"]
+                if (launcherInfo != null && launcherInfo.versionCode > BuildConfig.VERSION_CODE) {
+                    UpdateNotificationManager.notify(
+                        context = context,
+                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER,
+                        appKey = "dumb-down-launcher",
+                        appDisplayName = "Dumb Down Launcher",
+                        versionName = launcherInfo.versionName,
+                        downloadUrl = launcherInfo.downloadUrl,
+                    )
+                }
+
+                val contactsInfo = latest["dumb-contacts-sync"]
+                if (contactsInfo != null) {
+                    val installedCode = try {
+                        val info = context.packageManager.getPackageInfo("com.offlineinc.dumbcontactsync", 0)
+                        PackageInfoCompat.getLongVersionCode(info).toInt()
+                    } catch (_: Exception) { null }
+                    if (installedCode != null && contactsInfo.versionCode > installedCode) {
+                        UpdateNotificationManager.notify(
+                            context = context,
+                            notificationId = UpdateNotificationManager.NOTIFICATION_ID_CONTACTS,
+                            appKey = "dumb-contacts-sync",
+                            appDisplayName = "Dumb Contacts Sync",
+                            versionName = contactsInfo.versionName,
+                            downloadUrl = contactsInfo.downloadUrl,
+                        )
+                    }
+                }
+            } catch (_: Exception) { }
         }
     }
 }

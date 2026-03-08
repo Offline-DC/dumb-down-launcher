@@ -46,7 +46,9 @@ class NotificationsActivity : ComponentActivity() {
                         if (pi != null) {
                             pi.send()
                             overridePendingTransition(0, 0)
-                            finish()
+                            if (item.packageName != packageName) {
+                                finish()
+                            }
                         }
                     } catch (_: Exception) {
                         // no toast here to keep minimal; add if you want

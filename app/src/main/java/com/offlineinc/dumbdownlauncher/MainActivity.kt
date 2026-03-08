@@ -147,6 +147,9 @@ class MainActivity : AppCompatActivity() {
                             }
                             else -> {
                                 val component = item.launchComponent ?: return@AppListScreen
+                                if (item.packageName == "com.openbubbles.messaging") {
+                                    MouseAccessibilityService.setMouseEnabled(this@MainActivity, true)
+                                }
                                 val intent = Intent(Intent.ACTION_MAIN).apply {
                                     addCategory(Intent.CATEGORY_LAUNCHER)
                                     setComponent(component)

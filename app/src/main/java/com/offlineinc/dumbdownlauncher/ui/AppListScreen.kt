@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -26,6 +27,7 @@ import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 @Composable
 fun AppListScreen(
     title: String? = null,
+    titleEndLabel: String? = null,
     items: List<AppItem>,
     onActivate: (AppItem) -> Unit,
     onBack: (() -> Unit)? = null,
@@ -110,15 +112,30 @@ fun AppListScreen(
             }
     ) {
         if (!title.isNullOrBlank()) {
-            BasicText(
-                text = title,
-                style = TextStyle(
-                    color = DumbTheme.Colors.White,
-                    fontSize = 18.sp,
-                    fontFamily = fontFamily
-                ),
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BasicText(
+                    text = title,
+                    style = TextStyle(
+                        color = DumbTheme.Colors.White,
+                        fontSize = 18.sp,
+                        fontFamily = fontFamily
+                    )
+                )
+                if (!titleEndLabel.isNullOrBlank()) {
+                    BasicText(
+                        text = titleEndLabel,
+                        style = TextStyle(
+                            color = DumbTheme.Colors.White.copy(alpha = 0.4f),
+                            fontSize = 11.sp,
+                            fontFamily = fontFamily
+                        )
+                    )
+                }
+            }
         }
 
         val listAlpha by animateFloatAsState(

@@ -97,6 +97,8 @@ class MouseAccessibilityService : AccessibilityService() {
         if (webViewActivityActive) return
 
         val openBubblesActive = pkg == "com.openbubbles.messaging"
+            || pkg == "com.android.chrome"
+            || pkg == "org.chromium.chrome"
             || (pkg == "com.offlineinc.dumbdownlauncher" && className == "com.offlineinc.dumbdownlauncher.WebViewActivity")
         if (openBubblesActive && !mouseEnabled) {
             Log.i("MouseService", "Enabling mouse")
