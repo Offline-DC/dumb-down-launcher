@@ -12,15 +12,13 @@ import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.mutableStateListOf
-import com.offlineinc.dumbdownlauncher.BuildConfig
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
+import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.AppListScreen
-
-private const val CHECK_UPDATES = "__CHECK_UPDATES__"
 
 class AllAppsActivity : AppCompatActivity() {
 
@@ -89,7 +87,19 @@ class AllAppsActivity : AppCompatActivity() {
                     CHECK_UPDATES -> {
                         Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
                         Thread {
-                            UpdateCheckWorker.runNow(applicationContext)
+                            val found = UpdateCheckWorker.runNow(applicationContext)
+                            runOnUiThread {
+                                if (found) {
+                                    startActivity(
+                                        Intent(this, NotificationsActivity::class.java).apply {
+                                            putExtra(NotificationsActivity.EXTRA_SCROLL_TO_UPDATE, true)
+                                        }
+                                    )
+                                    overridePendingTransition(0, 0)
+                                } else {
+                                    Toast.makeText(this, "Already up to date", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         }.start()
                     }
                     else -> launchApp(item)
@@ -209,16 +219,14 @@ class AllAppsActivity : AppCompatActivity() {
             )
         )
 
-        if (BuildConfig.DEBUG) {
-            appItems.add(
-                AppItem(
-                    packageName = CHECK_UPDATES,
-                    label = "[debug] check for updates",
-                    icon = pm.defaultActivityIcon,
-                    launchComponent = null
-                )
+        appItems.add(
+            AppItem(
+                packageName = CHECK_UPDATES,
+                label = "updates",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null
             )
-        }
+        )
 
         return appItems
     }

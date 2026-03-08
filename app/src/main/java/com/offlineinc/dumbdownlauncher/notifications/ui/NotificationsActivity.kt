@@ -37,9 +37,24 @@ class NotificationsActivity : ComponentActivity() {
 
         setContent {
             val items by NotificationStore.items().observeAsState(initial = emptyList())
+            var scrollToKey by remember { mutableStateOf<String?>(null) }
+            val scrollToUpdate = intent.getBooleanExtra(EXTRA_SCROLL_TO_UPDATE, false)
+            var scrollToUpdateConsumed by remember { mutableStateOf(false) }
+
+            LaunchedEffect(items) {
+                if (scrollToUpdate && !scrollToUpdateConsumed && items.isNotEmpty()) {
+                    val ownItem = items.firstOrNull { it.packageName == packageName }
+                    if (ownItem != null) {
+                        scrollToKey = ownItem.key
+                        scrollToUpdateConsumed = true
+                    }
+                }
+            }
 
             NotificationsScreen(
                 items = items,
+                scrollToKey = scrollToKey,
+                onScrollConsumed = { scrollToKey = null },
                 onOpen = { item ->
                     try {
                         val pi = item.contentIntent
@@ -48,6 +63,8 @@ class NotificationsActivity : ComponentActivity() {
                             overridePendingTransition(0, 0)
                             if (item.packageName != packageName) {
                                 finish()
+                            } else {
+                                scrollToKey = item.key
                             }
                         }
                     } catch (_: Exception) {
@@ -72,5 +89,9 @@ class NotificationsActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         overridePendingTransition(0, 0)
+    }
+
+    companion object {
+        const val EXTRA_SCROLL_TO_UPDATE = "scroll_to_update"
     }
 }

@@ -82,6 +82,22 @@ object UpdateNotificationManager {
         nm.notify(notificationId, notification)
     }
 
+    fun notifyFailed(context: Context, appKey: String) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationId = if (appKey == "dumb-down-launcher") NOTIFICATION_ID_LAUNCHER else NOTIFICATION_ID_CONTACTS
+        val appDisplayName = if (appKey == "dumb-down-launcher") "Dumb Launcher" else "Dumb Contacts Sync"
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle("Update failed")
+            .setContentText("$appDisplayName could not be installed")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(notificationId, notification)
+    }
+
     fun cancel(context: Context, notificationId: Int) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(notificationId)

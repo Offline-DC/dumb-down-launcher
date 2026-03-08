@@ -28,7 +28,7 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
                     val savedId = prefs.getLong(key, -1L)
                     if (downloadId == savedId) {
                         prefs.edit().remove(key).apply()
-                        triggerInstall(context, downloadId)
+                        triggerInstall(context, downloadId, appKey)
                         break
                     }
                 }
@@ -52,39 +52,55 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
         UpdateNotificationManager.notifyDownloading(context, appKey)
     }
 
-    private fun triggerInstall(context: Context, downloadId: Long) {
+    private fun triggerInstall(context: Context, downloadId: Long, appKey: String) {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val query = DownloadManager.Query().setFilterById(downloadId)
         val cursor = dm.query(query)
         if (!cursor.moveToFirst()) {
             cursor.close()
+            UpdateNotificationManager.notifyFailed(context, appKey)
             return
         }
-        val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-        val localUriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-        val status = cursor.getInt(statusIndex)
-        val localUri = cursor.getString(localUriIndex)
+        val status = cursor.getInt(cursor.getColumnIndex(DownloadManager.COLUMN_STATUS))
+        val localUri = cursor.getString(cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI))
         cursor.close()
 
-        if (status != DownloadManager.STATUS_SUCCESSFUL || localUri == null) return
+        if (status != DownloadManager.STATUS_SUCCESSFUL || localUri == null) {
+            UpdateNotificationManager.notifyFailed(context, appKey)
+            return
+        }
 
-        val apkFile = File(Uri.parse(localUri).path ?: return)
-        val contentUri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            apkFile,
-        )
+        val apkFile = File(Uri.parse(localUri).path ?: run {
+            UpdateNotificationManager.notifyFailed(context, appKey)
+            return
+        })
+        val contentUri = try {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
+        } catch (_: Exception) {
+            UpdateNotificationManager.notifyFailed(context, appKey)
+            return
+        }
+
         val installIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(contentUri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(installIntent)
+        try {
+            context.startActivity(installIntent)
+            UpdateNotificationManager.cancel(context, notificationIdForKey(appKey))
+        } catch (_: Exception) {
+            UpdateNotificationManager.notifyFailed(context, appKey)
+        }
     }
 
     companion object {
         private const val PREFS_NAME = "update_prefs"
         private val APP_KEYS = listOf("dumb-down-launcher", "dumb-contacts-sync")
         private fun downloadIdKey(appKey: String) = "pending_download_id_$appKey"
+
+        fun notificationIdForKey(appKey: String) =
+            if (appKey == "dumb-down-launcher") UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER
+            else UpdateNotificationManager.NOTIFICATION_ID_CONTACTS
     }
 }

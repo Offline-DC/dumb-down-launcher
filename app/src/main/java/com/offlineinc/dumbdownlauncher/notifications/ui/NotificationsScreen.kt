@@ -33,7 +33,9 @@ fun NotificationsScreen(
     items: List<NotificationItem>,
     onOpen: (NotificationItem) -> Unit,
     onDismiss: (NotificationItem) -> Unit,
-    onClearAll: () -> Unit
+    onClearAll: () -> Unit,
+    scrollToKey: String? = null,
+    onScrollConsumed: () -> Unit = {},
 ) {
     val fontFamily = DumbTheme.BioRhyme
 
@@ -60,6 +62,20 @@ fun NotificationsScreen(
             selectionActive = false
         } else {
             selectedIndex = selectedIndex.coerceIn(0, items.lastIndex)
+        }
+    }
+
+    // Scroll to a specific notification key (e.g. after download starts)
+    LaunchedEffect(scrollToKey, items) {
+        if (scrollToKey != null) {
+            val idx = items.indexOfFirst { it.key == scrollToKey }
+            if (idx >= 0) {
+                selectedIndex = idx
+                selectionActive = true
+                listFR.requestFocus()
+                listState.animateScrollToItem(idx)
+                onScrollConsumed()
+            }
         }
     }
 

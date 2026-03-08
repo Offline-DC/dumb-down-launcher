@@ -77,8 +77,12 @@ class UpdateCheckWorker(
             )
         }
 
-        /** Run the update check immediately on the calling thread (must be off main thread). */
-        fun runNow(context: Context) {
+        /**
+         * Run the update check immediately on the calling thread (must be off main thread).
+         * Returns true if at least one update notification was posted.
+         */
+        fun runNow(context: Context): Boolean {
+            var found = false
             try {
                 val latest = UpdateChecker.fetchLatest()
 
@@ -88,10 +92,11 @@ class UpdateCheckWorker(
                         context = context,
                         notificationId = UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER,
                         appKey = "dumb-down-launcher",
-                        appDisplayName = "Dumb Down Launcher",
+                        appDisplayName = "Dumb Launcher",
                         versionName = launcherInfo.versionName,
                         downloadUrl = launcherInfo.downloadUrl,
                     )
+                    found = true
                 }
 
                 val contactsInfo = latest["dumb-contacts-sync"]
@@ -109,9 +114,11 @@ class UpdateCheckWorker(
                             versionName = contactsInfo.versionName,
                             downloadUrl = contactsInfo.downloadUrl,
                         )
+                        found = true
                     }
                 }
             } catch (_: Exception) { }
+            return found
         }
     }
 }
