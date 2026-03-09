@@ -67,13 +67,13 @@ fun AppListScreen(
                 when (event.key) {
                     Key.DirectionDown -> {
                         if (items.isNotEmpty()) {
-                            selectedIndex = (selectedIndex + 1).coerceAtMost(items.lastIndex)
+                            selectedIndex = (selectedIndex + 1) % items.size
                         }
                         true
                     }
                     Key.DirectionUp -> {
                         if (items.isNotEmpty()) {
-                            selectedIndex = (selectedIndex - 1).coerceAtLeast(0)
+                            selectedIndex = (selectedIndex - 1 + items.size) % items.size
                         }
                         true
                     }
