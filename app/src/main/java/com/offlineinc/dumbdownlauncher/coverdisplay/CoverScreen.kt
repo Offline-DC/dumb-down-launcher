@@ -107,7 +107,11 @@ fun CoverScreen() {
     }
     var lastShownMsgTime by remember { mutableStateOf(0L) }
     LaunchedEffect(latestMsg?.postTime) {
-        val msg = latestMsg ?: return@LaunchedEffect
+        val msg = latestMsg
+        if (msg == null) {
+            if (overlay?.kind == OverlayKind.MESSAGE) overlay = null
+            return@LaunchedEffect
+        }
         if (msg.postTime <= lastShownMsgTime) return@LaunchedEffect
         lastShownMsgTime = msg.postTime
         if (overlay?.kind != OverlayKind.CALL) {
