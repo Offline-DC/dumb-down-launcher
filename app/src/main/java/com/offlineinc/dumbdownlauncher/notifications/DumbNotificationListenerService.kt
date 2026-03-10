@@ -59,7 +59,8 @@ class DumbNotificationListenerService : NotificationListenerService() {
             title = if (title.isBlank()) packageName else title,
             text = text,
             postTime = postTime,
-            contentIntent = n.contentIntent
+            contentIntent = n.contentIntent,
+            category = n.category,
         )
     }
 

@@ -8,5 +8,6 @@ data class NotificationItem(
     val title: String,
     val text: String,
     val postTime: Long,
-    val contentIntent: PendingIntent?
+    val contentIntent: PendingIntent?,
+    val category: String? = null,
 )
