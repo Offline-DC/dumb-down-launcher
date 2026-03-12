@@ -161,7 +161,7 @@ class AllAppsActivity : AppCompatActivity() {
                                 // triggered this toggle has already been consumed
                                 // before the modal appears and steals focus.
                                 coroutineScope.launch {
-                                    delay(300L)
+                                    delay(200L)
                                     showTypeSyncModal = true
                                 }
                             }
