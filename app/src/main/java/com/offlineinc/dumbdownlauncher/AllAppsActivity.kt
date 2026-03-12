@@ -18,15 +18,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
@@ -96,6 +95,7 @@ class AllAppsActivity : AppCompatActivity() {
             // activity is recreated while the service is already running.
             var typeSyncEnabled by remember { mutableStateOf(WebKeyboardService.isRunning) }
             var showTypeSyncModal by remember { mutableStateOf(false) }
+            val coroutineScope = rememberCoroutineScope()
 
             // Flip toggle off when the 10-min timer fires from the service
             DisposableEffect(Unit) {
@@ -157,7 +157,13 @@ class AllAppsActivity : AppCompatActivity() {
                                         putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, phone)
                                     }
                                 )
-                                showTypeSyncModal = true
+                                // Delay slightly so the center-key UP event that
+                                // triggered this toggle has already been consumed
+                                // before the modal appears and steals focus.
+                                coroutineScope.launch {
+                                    delay(300L)
+                                    showTypeSyncModal = true
+                                }
                             }
                         } else {
                             typeSyncEnabled = false
@@ -177,17 +183,12 @@ class AllAppsActivity : AppCompatActivity() {
             )
 
             if (showTypeSyncModal) {
-                val focusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) { focusRequester.requestFocus() }
                 AlertDialog(
                     onDismissRequest = { showTypeSyncModal = false },
                     title = { Text("type sync is on") },
                     text = { Text("go to text fields and use ur smartphone to type.\nturns off after 10 min.") },
                     confirmButton = {
-                        TextButton(
-                            onClick = { showTypeSyncModal = false },
-                            modifier = Modifier.focusRequester(focusRequester)
-                        ) {
+                        TextButton(onClick = { showTypeSyncModal = false }) {
                             Text("got it")
                         }
                     }
