@@ -24,6 +24,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.delay
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
@@ -180,9 +183,11 @@ class AllAppsActivity : AppCompatActivity() {
             // dismiss it before the user has a chance to read it.
             if (showTypeSyncModal) {
                 var gotItEnabled by remember { mutableStateOf(false) }
+                val focusRequester = remember { FocusRequester() }
                 LaunchedEffect(Unit) {
                     delay(500)
                     gotItEnabled = true
+                    focusRequester.requestFocus()
                 }
                 AlertDialog(
                     onDismissRequest = { showTypeSyncModal = false },
@@ -191,7 +196,8 @@ class AllAppsActivity : AppCompatActivity() {
                     confirmButton = {
                         TextButton(
                             onClick = { showTypeSyncModal = false },
-                            enabled = gotItEnabled
+                            enabled = gotItEnabled,
+                            modifier = Modifier.focusRequester(focusRequester)
                         ) {
                             Text("got it")
                         }
