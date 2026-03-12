@@ -27,7 +27,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import kotlinx.coroutines.delay
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
@@ -177,18 +176,9 @@ class AllAppsActivity : AppCompatActivity() {
                 showSoftKeys = false
             )
 
-            // Modal shown when Type Sync is turned on.
-            // The "Got it" button is disabled for 500 ms after the dialog opens so
-            // the centre-key UP event that selected Type Sync can't immediately
-            // dismiss it before the user has a chance to read it.
             if (showTypeSyncModal) {
-                var gotItEnabled by remember { mutableStateOf(false) }
                 val focusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) {
-                    delay(500)
-                    gotItEnabled = true
-                    focusRequester.requestFocus()
-                }
+                LaunchedEffect(Unit) { focusRequester.requestFocus() }
                 AlertDialog(
                     onDismissRequest = { showTypeSyncModal = false },
                     title = { Text("type sync is on") },
@@ -196,7 +186,6 @@ class AllAppsActivity : AppCompatActivity() {
                     confirmButton = {
                         TextButton(
                             onClick = { showTypeSyncModal = false },
-                            enabled = gotItEnabled,
                             modifier = Modifier.focusRequester(focusRequester)
                         ) {
                             Text("got it")
