@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.runtime.Composable
@@ -28,6 +29,7 @@ import com.offlineinc.dumbdownlauncher.CHANGE_PLATFORM
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
 import com.offlineinc.dumbdownlauncher.UBER
+import com.offlineinc.dumbdownlauncher.WEB_KEYBOARD
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
@@ -37,6 +39,7 @@ private val vectorIcons: Map<String, ImageVector> = mapOf(
     UBER to Icons.Filled.DirectionsCar,
     CHANGE_PLATFORM to Icons.Filled.Psychology,
     CHECK_UPDATES to Icons.Filled.SystemUpdate,
+    WEB_KEYBOARD to Icons.Filled.Keyboard,
 )
 
 @Composable
@@ -104,7 +107,8 @@ fun AppRow(
             text = item.label,
             style = TextStyle(
                 fontFamily = fontFamily,
-                fontSize = 32.sp,
+                // Slightly smaller when an ON/OFF badge is present so the label fits
+                fontSize = if (item.isToggleOn != null) 26.sp else 32.sp,
                 color = if (selected)
                     DumbTheme.Colors.Black
                 else
@@ -113,6 +117,38 @@ fun AppRow(
             maxLines = 1,
             modifier = Modifier.weight(1f)
         )
+
+        // Toggle indicator for items that act as toggles (e.g. Type Sync)
+        if (item.isToggleOn != null) {
+            Spacer(Modifier.width(10.dp))
+            val toggleOn = item.isToggleOn
+            Box(
+                modifier = Modifier
+                    .width(52.dp)
+                    .height(28.dp)
+                    .background(
+                        color = if (toggleOn)
+                            if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.Yellow
+                        else
+                            if (selected) DumbTheme.Colors.Black.copy(alpha = 0.3f)
+                            else DumbTheme.Colors.Gray,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                BasicText(
+                    text = if (toggleOn) "ON" else "OFF",
+                    style = TextStyle(
+                        fontFamily = fontFamily,
+                        fontSize = 13.sp,
+                        color = if (toggleOn)
+                            if (selected) DumbTheme.Colors.Yellow else DumbTheme.Colors.Black
+                        else
+                            DumbTheme.Colors.White.copy(alpha = 0.5f)
+                    )
+                )
+            }
+        }
 
         if (item.isMuted) {
             Spacer(Modifier.width(10.dp))

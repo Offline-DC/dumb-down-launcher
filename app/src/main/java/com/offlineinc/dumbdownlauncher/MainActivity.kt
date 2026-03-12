@@ -47,6 +47,7 @@ const val CHANGE_PLATFORM = "__CHANGE_PLATFORM__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val UBER = "__UBER__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
+const val WEB_KEYBOARD = "__WEB_KEYBOARD__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
