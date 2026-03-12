@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private val showRestartDialog = mutableStateOf(false)
 
     private var customTabsSession: CustomTabsSession? = null
+    private var customTabsBound = false
     private val customTabsConnection = object : CustomTabsServiceConnection() {
         override fun onCustomTabsServiceConnected(name: ComponentName, client: CustomTabsClient) {
             client.warmup(0)
@@ -83,7 +84,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         override fun onServiceDisconnected(name: ComponentName) {
+            // Chrome died — clear session and allow rebind on next onResume
             customTabsSession = null
+            customTabsBound = false
         }
     }
 
@@ -130,7 +133,7 @@ class MainActivity : AppCompatActivity() {
                     onActivate = { item ->
                         when (item.packageName) {
                             DND_TOGGLE -> return@AppListScreen
-                            GOOGLE_MESSAGES -> openInChrome(WEB_APP_URLS.getValue(GOOGLE_MESSAGES))
+                            GOOGLE_MESSAGES -> openMessagesInChrome()
                             UBER -> openCustomTab(WEB_APP_URLS.getValue(UBER), "org.chromium.chrome")
                             "com.offlineinc.dumbcontactsync" -> {
                                 val component = item.launchComponent ?: return@AppListScreen
@@ -230,9 +233,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (PlatformPreferences.getChoice(this) == "android") {
-            CustomTabsClient.bindCustomTabsService(this, "com.android.chrome", customTabsConnection)
-        }
+        bindChromeWarmup()
 
         Thread {
             val loaded = buildMainAppList()
@@ -249,8 +250,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (PlatformPreferences.getChoice(this) == "android") {
+        if (customTabsBound) {
             unbindService(customTabsConnection)
+            customTabsBound = false
         }
     }
 
@@ -261,6 +263,8 @@ class MainActivity : AppCompatActivity() {
         if (PlatformPreferences.consumeShowDialog(this)) {
             showPlatformDialog.value = true
         }
+        // Re-bind warmup if Chrome died and disconnected while we were away
+        bindChromeWarmup()
     }
 
     private fun reloadApps() {
@@ -329,6 +333,50 @@ class MainActivity : AppCompatActivity() {
         result.add(AppItem(UBER, "uber", uberIcon, null, false))
 
         return result
+    }
+
+    private fun hasLaunchedMessagesOnce(): Boolean =
+        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+            .getBoolean("chrome_messages_launched", false)
+
+    private fun markMessagesLaunched() =
+        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+            .edit { putBoolean("chrome_messages_launched", true) }
+
+    /**
+     * Smart Messages launch:
+     * - First ever tap (flag unset) → Custom Tabs with URL + set flag
+     *   (ensures Chrome opens to Messages on a fresh install)
+     * - Every tap after (flag set)  → ACTION_MAIN, no URL
+     *   - Chrome alive → instant foreground, page preserved, no reload
+     *   - Chrome dead  → session restore brings Messages tab back, reloads once
+     *
+     * Note: getRunningAppProcesses() is restricted to own-app processes on
+     * Android 10+, so process detection is unreliable. The flag approach
+     * sidesteps that entirely.
+     */
+    private fun openMessagesInChrome() {
+        MouseAccessibilityService.setMouseEnabled(this, true)
+        if (!hasLaunchedMessagesOnce()) {
+            Log.d("MESSAGES", "First launch — opening with URL via Custom Tabs")
+            openCustomTab(WEB_APP_URLS.getValue(GOOGLE_MESSAGES))
+            markMessagesLaunched()
+        } else {
+            Log.d("MESSAGES", "Subsequent launch — ACTION_MAIN, no reload")
+            Intent(Intent.ACTION_MAIN).apply {
+                setPackage("com.android.chrome")
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }.let { startActivity(it) }
+        }
+        overridePendingTransition(0, 0)
+    }
+
+    private fun bindChromeWarmup() {
+        if (customTabsBound) return
+        if (PlatformPreferences.getChoice(this) != "android") return
+        val bound = CustomTabsClient.bindCustomTabsService(this, "com.android.chrome", customTabsConnection)
+        if (bound) customTabsBound = true
     }
 
     private fun openInChrome(url: String) {
