@@ -217,13 +217,6 @@ class AllAppsActivity : AppCompatActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        // Keep the ON/OFF badge in sync whenever the user navigates back to this
-        // screen — the service state is the source of truth.
-        setTypeSyncToggle(WebKeyboardService.isRunning)
-    }
-
     override fun onStart() {
         super.onStart()
         registerReceiver(packageChangeReceiver, IntentFilter().apply {
@@ -242,6 +235,9 @@ class AllAppsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         overridePendingTransition(0, 0)
+        // Keep the ON/OFF badge in sync whenever the user navigates back to this
+        // screen — the service state is the source of truth.
+        setTypeSyncToggle(WebKeyboardService.isRunning)
     }
 
     private fun launchApp(item: AppItem) {
