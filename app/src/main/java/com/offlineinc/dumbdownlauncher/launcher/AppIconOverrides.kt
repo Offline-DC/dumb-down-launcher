@@ -16,6 +16,7 @@ object AppIconOverrides {
             "com.android.settings" -> R.drawable.mo_gear
 
             "com.ubercab",
+            "com.ubercab.uberlite",
             "com.offline.uberlauncher" -> R.drawable.ic_uber_car
 
             else -> null

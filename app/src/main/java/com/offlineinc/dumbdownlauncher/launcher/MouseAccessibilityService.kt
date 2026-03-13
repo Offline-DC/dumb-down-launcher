@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
 import android.content.Context
+import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -93,18 +94,6 @@ class MouseAccessibilityService : AccessibilityService() {
             || pkg == "com.android.chrome"
             || pkg == "org.chromium.chrome"
 
-    // Returns true if an editable text field currently has input focus.
-    private fun isTextInputFocused(): Boolean {
-        return try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            val editable = focused?.isEditable == true
-            focused?.recycle()
-            editable
-        } catch (t: Throwable) {
-            false
-        }
-    }
-
     // Returns true if a target-app window is currently on screen.
     // Used to sync mouseEnabled on service (re)connect.
     private fun isCurrentlyInTargetApp(): Boolean {
@@ -125,13 +114,15 @@ class MouseAccessibilityService : AccessibilityService() {
 
         when (event.keyCode) {
             KeyEvent.KEYCODE_STAR -> {
+                val isTarget = isTargetApp(currentPackage)
+                Log.d("MOUSE_SVC", "STAR pressed: currentPackage=$currentPackage isTarget=$isTarget pickerOpen=$specialCharPickerOpen")
                 if (!specialCharPickerOpen
-                    && currentPackage == "com.openbubbles.messaging"
-                    && isTextInputFocused()
+                    && isTarget
                 ) {
                     specialCharPickerOpen = true
                     mouseEnabled = false
                     runMouseCmd("disable")
+                    Log.d("MOUSE_SVC", "STAR: disabling mouse, picker opened")
                 }
             }
             KeyEvent.KEYCODE_DPAD_UP,
@@ -166,27 +157,37 @@ class MouseAccessibilityService : AccessibilityService() {
         val className = event.className?.toString() ?: ""
 
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: pkg=$pkg className=$className")
             if (className == "com.android.mms.ui.ConversationList" || className == "com.android.dialer") {
                 handlePackage(pkg, className)
                 return
             }
-            if (!className.contains("Activity")) return
+            if (!className.contains("Activity")) {
+                Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: skipped (no 'Activity' in className)")
+                return
+            }
             handlePackage(pkg, className)
         }
     }
 
     private fun handlePackage(pkg: String, className: String = "") {
-        if (webViewActivityActive) return
+        if (webViewActivityActive) {
+            Log.d("MOUSE_SVC", "handlePackage: skipped (webViewActivityActive)")
+            return
+        }
 
         val openBubblesActive = isTargetApp(pkg)
             || (pkg == "com.offlineinc.dumbdownlauncher" && className == "com.offlineinc.dumbdownlauncher.WebViewActivity")
         currentPackage = if (openBubblesActive) pkg else ""
+        Log.d("MOUSE_SVC", "handlePackage: pkg=$pkg openBubblesActive=$openBubblesActive currentPackage=$currentPackage mouseEnabled=$mouseEnabled")
         if (openBubblesActive && !mouseEnabled) {
             mouseEnabled = true
             runMouseCmd("enable")
+            Log.d("MOUSE_SVC", "handlePackage: enabled mouse")
         } else if (!openBubblesActive && mouseEnabled) {
             mouseEnabled = false
             runMouseCmd("disable")
+            Log.d("MOUSE_SVC", "handlePackage: disabled mouse")
         }
     }
 

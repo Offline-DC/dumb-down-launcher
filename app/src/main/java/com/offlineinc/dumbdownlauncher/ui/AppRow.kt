@@ -27,14 +27,13 @@ import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.CHANGE_PLATFORM
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
-import com.offlineinc.dumbdownlauncher.UBER
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 private val vectorIcons: Map<String, ImageVector> = mapOf(
     "com.openbubbles.messaging" to Icons.Filled.Chat,
     GOOGLE_MESSAGES to Icons.Filled.Chat,
-    UBER to Icons.Filled.DirectionsCar,
+    "com.ubercab.uberlite" to Icons.Filled.DirectionsCar,
     CHANGE_PLATFORM to Icons.Filled.Psychology,
     CHECK_UPDATES to Icons.Filled.SystemUpdate,
 )

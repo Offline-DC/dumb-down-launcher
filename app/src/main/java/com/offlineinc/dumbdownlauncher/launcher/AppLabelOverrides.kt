@@ -8,6 +8,7 @@ object AppLabelOverrides {
         "com.android.settings" to "settings",
         "com.android.mms" to "dumb txt",
         "com.openbubbles.messaging" to "smart txt",
+        "com.ubercab.uberlite" to "uber",
         "com.offline.googlemessageslauncher" to "smart txt",
         "com.offlineinc.dumbcontactsync" to "contact sync"
     )

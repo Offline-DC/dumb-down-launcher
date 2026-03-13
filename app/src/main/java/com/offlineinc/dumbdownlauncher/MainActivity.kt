@@ -45,12 +45,10 @@ const val ALL_APPS = "__ALL_APPS__"
 const val NOTIFICATIONS = "__NOTIFICATIONS__"
 const val CHANGE_PLATFORM = "__CHANGE_PLATFORM__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
-const val UBER = "__UBER__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
-    UBER to "https://m.uber.com",
 )
 
 class MainActivity : AppCompatActivity() {
@@ -134,7 +132,6 @@ class MainActivity : AppCompatActivity() {
                         when (item.packageName) {
                             DND_TOGGLE -> return@AppListScreen
                             GOOGLE_MESSAGES -> openMessagesInChrome()
-                            UBER -> openCustomTab(WEB_APP_URLS.getValue(UBER), "org.chromium.chrome")
                             "com.offlineinc.dumbcontactsync" -> {
                                 val component = item.launchComponent ?: return@AppListScreen
                                 val platform = PlatformPreferences.getChoice(this@MainActivity)
@@ -151,7 +148,8 @@ class MainActivity : AppCompatActivity() {
                             }
                             else -> {
                                 val component = item.launchComponent ?: return@AppListScreen
-                                if (item.packageName == "com.openbubbles.messaging") {
+                                if (item.packageName == "com.openbubbles.messaging" ||
+                                    item.packageName == "com.ubercab.uberlite") {
                                     MouseAccessibilityService.setMouseEnabled(this@MainActivity, true)
                                 }
                                 val intent = Intent(Intent.ACTION_MAIN).apply {
@@ -300,7 +298,8 @@ class MainActivity : AppCompatActivity() {
             "com.android.settings",
             "com.google.android.apps.mapslite",
             "com.tcl.camera",
-            "com.apple.android.music"
+            "com.apple.android.music",
+            "com.ubercab.uberlite"
         )
 
         for (pkg in allowedPackages) {
@@ -325,12 +324,6 @@ class MainActivity : AppCompatActivity() {
                 result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
             } catch (_: Exception) { }
         }
-
-        // Uber — use icon from real app if installed, otherwise default
-        val uberIcon = try {
-            packageManager.getApplicationIcon(packageManager.getApplicationInfo("com.ubercab", 0))
-        } catch (_: Exception) { packageManager.defaultActivityIcon }
-        result.add(AppItem(UBER, "uber", uberIcon, null, false))
 
         return result
     }
@@ -377,15 +370,6 @@ class MainActivity : AppCompatActivity() {
         if (PlatformPreferences.getChoice(this) != "android") return
         val bound = CustomTabsClient.bindCustomTabsService(this, "com.android.chrome", customTabsConnection)
         if (bound) customTabsBound = true
-    }
-
-    private fun openInChrome(url: String) {
-        MouseAccessibilityService.setMouseEnabled(this, true)
-        Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-            setPackage("com.android.chrome")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        }.let { startActivity(it) }
-        overridePendingTransition(0, 0)
     }
 
     private fun openCustomTab(url: String, pkg: String = "com.android.chrome") {
