@@ -3,7 +3,10 @@ package com.offlineinc.dumbdownlauncher
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
@@ -29,7 +32,7 @@ class MouseAccessibilityService : AccessibilityService() {
             instance?.forceDisable() ?: runMouseCmdStatic("disable")
         }
 
-        private var instance: MouseAccessibilityService? = null
+        @Volatile private var instance: MouseAccessibilityService? = null
         private var webViewActivityActive = false
 
         fun notifyWebViewActive(active: Boolean) {
@@ -59,6 +62,80 @@ class MouseAccessibilityService : AccessibilityService() {
             }
         }
 
+        fun injectText(text: String) {
+            val service = instance ?: run {
+                Log.w("MouseService", "injectText: service not connected, falling back to shell")
+                injectTextViaShell(text)
+                return
+            }
+
+            val root = service.rootInActiveWindow
+            if (root == null) {
+                Log.w("MouseService", "injectText: rootInActiveWindow null, using shell")
+                injectTextViaShell(text)
+                return
+            }
+
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (focused != null && focused.isEditable) {
+                Log.d("MouseService", "injectText via clipboard paste for: \"$text\"")
+                injectViaClipboard(service, focused, text)
+            } else {
+                Log.w("MouseService", "injectText: no focused editable node, using shell")
+                injectTextViaShell(text)
+            }
+        }
+
+        /**
+         * Set [text] via clipboard paste. Selects all existing content first so the
+         * paste fully replaces the field. Bypasses the IME entirely — @, numbers, and
+         * all special characters arrive verbatim regardless of what keyboard is active.
+         */
+        private fun injectViaClipboard(
+            service: MouseAccessibilityService,
+            node: AccessibilityNodeInfo,
+            text: String
+        ) {
+            try {
+                val cm = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("ts", text))
+
+                // Select all existing content (0 → end) so the paste fully replaces it
+                val len = node.text?.length ?: 0
+                val selArgs = Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+                }
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+
+                val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                Log.d("MouseService", "injectText via clipboard paste: success=$pasted")
+                if (!pasted) {
+                    Log.w("MouseService", "clipboard paste failed, falling back to shell")
+                    injectTextViaShell(text)
+                }
+            } catch (t: Throwable) {
+                Log.e("MouseService", "injectViaClipboard failed: ${t.message}")
+                injectTextViaShell(text)
+            }
+        }
+
+        /** Last-resort shell injection. Handles only simple ASCII reliably. */
+        private fun injectTextViaShell(text: String) {
+            val escaped = text.replace("'", "'\\''")
+            Thread {
+                try {
+                    ProcessBuilder("su", "-c", "input text '$escaped'")
+                        .redirectErrorStream(true)
+                        .start()
+                        .waitFor()
+                    Log.i("MouseService", "shell injectText finished")
+                } catch (t: Throwable) {
+                    Log.e("MouseService", "shell injectText failed: ${t.message}")
+                }
+            }.start()
+        }
+
         private fun runMouseCmdStatic(cmd: String) {
             Thread {
                 try {
@@ -75,6 +152,7 @@ class MouseAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        Log.i("MouseService", "✅ Accessibility service connected — text injection ready")
         // Enable key-event interception so onKeyEvent fires for all apps,
         // not just when the launcher is focused.
         val info = serviceInfo
@@ -93,6 +171,8 @@ class MouseAccessibilityService : AccessibilityService() {
         pkg == "com.openbubbles.messaging"
             || pkg == "com.android.chrome"
             || pkg == "org.chromium.chrome"
+            || pkg == "com.google.android.apps.mapslite"
+            || pkg == "com.ubercab.uberlite"
 
     // Returns true if a target-app window is currently on screen.
     // Used to sync mouseEnabled on service (re)connect.

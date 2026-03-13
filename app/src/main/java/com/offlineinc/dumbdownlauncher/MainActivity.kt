@@ -46,6 +46,7 @@ const val NOTIFICATIONS = "__NOTIFICATIONS__"
 const val CHANGE_PLATFORM = "__CHANGE_PLATFORM__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
+const val WEB_KEYBOARD = "__WEB_KEYBOARD__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
@@ -149,7 +150,8 @@ class MainActivity : AppCompatActivity() {
                             else -> {
                                 val component = item.launchComponent ?: return@AppListScreen
                                 if (item.packageName == "com.openbubbles.messaging" ||
-                                    item.packageName == "com.ubercab.uberlite") {
+                                    item.packageName == "com.ubercab.uberlite" ||
+                                    item.packageName == "com.google.android.apps.mapslite") {
                                     MouseAccessibilityService.setMouseEnabled(this@MainActivity, true)
                                 }
                                 val intent = Intent(Intent.ACTION_MAIN).apply {

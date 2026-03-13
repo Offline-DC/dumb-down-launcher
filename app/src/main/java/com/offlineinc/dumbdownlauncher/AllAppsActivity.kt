@@ -1,17 +1,31 @@
 package com.offlineinc.dumbdownlauncher
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.telephony.TelephonyManager
+import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
@@ -71,9 +85,31 @@ class AllAppsActivity : AppCompatActivity() {
         val cached = cachedApps
         if (cached != null) {
             items.addAll(cached)
+            // Restore badge state in case the service was running when this
+            // activity instance was created (e.g. rotated or recreated).
+            setTypeSyncToggle(WebKeyboardService.isRunning)
         }
 
         setContent {
+            // Seed from the service's live flag so the badge is correct if the
+            // activity is recreated while the service is already running.
+            var typeSyncEnabled by remember { mutableStateOf(WebKeyboardService.isRunning) }
+            var showTypeSyncModal by remember { mutableStateOf(false) }
+            val coroutineScope = rememberCoroutineScope()
+
+            // Flip toggle off when the 10-min timer fires from the service
+            DisposableEffect(Unit) {
+                val receiver = object : BroadcastReceiver() {
+                    override fun onReceive(context: Context, intent: Intent) {
+                        typeSyncEnabled = false
+                        setTypeSyncToggle(false)
+                    }
+                }
+                registerReceiver(receiver,
+                    IntentFilter(WebKeyboardService.ACTION_STOP_BROADCAST))
+                onDispose { unregisterReceiver(receiver) }
+            }
+
             AppListScreen(
                 title = "all apps",
                 titleEndLabel = "v${BuildConfig.VERSION_NAME}",
@@ -102,12 +138,62 @@ class AllAppsActivity : AppCompatActivity() {
                             }
                         }.start()
                     }
+                    WEB_KEYBOARD -> {
+                        val newEnabled = !typeSyncEnabled
+                        if (newEnabled) {
+                            val phone = getDevicePhoneNumber()
+                            if (phone == null) {
+                                Toast.makeText(
+                                    this,
+                                    "Couldn't read phone number from SIM",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                typeSyncEnabled = true
+                                setTypeSyncToggle(true)
+                                startService(
+                                    Intent(this, WebKeyboardService::class.java).apply {
+                                        action = WebKeyboardService.ACTION_START
+                                        putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, phone)
+                                    }
+                                )
+                                // Delay slightly so the center-key UP event that
+                                // triggered this toggle has already been consumed
+                                // before the modal appears and steals focus.
+                                coroutineScope.launch {
+                                    delay(200L)
+                                    showTypeSyncModal = true
+                                }
+                            }
+                        } else {
+                            typeSyncEnabled = false
+                            setTypeSyncToggle(false)
+                            startService(
+                                Intent(this, WebKeyboardService::class.java).apply {
+                                    action = WebKeyboardService.ACTION_STOP
+                                }
+                            )
+                        }
+                    }
                     else -> launchApp(item)
                 }
                 },
                 onBack = { finish() },
                 showSoftKeys = false
             )
+
+            if (showTypeSyncModal) {
+                AlertDialog(
+                    onDismissRequest = { showTypeSyncModal = false },
+                    title = { Text("type sync is on") },
+                    text = { Text("go to text fields and use ur smartphone to type.\nturns off after 10 min.") },
+                    confirmButton = {
+                        TextButton(onClick = { showTypeSyncModal = false }) {
+                            Text("got it")
+                        }
+                    }
+                )
+            }
         }
 
         if (cached == null) {
@@ -118,6 +204,7 @@ class AllAppsActivity : AppCompatActivity() {
                     if (isDestroyed) return@runOnUiThread
                     items.clear()
                     items.addAll(loaded)
+                    setTypeSyncToggle(WebKeyboardService.isRunning)
                     if (items.isEmpty()) {
                         Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
                     }
@@ -144,6 +231,9 @@ class AllAppsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         overridePendingTransition(0, 0)
+        // Keep the ON/OFF badge in sync whenever the user navigates back to this
+        // screen — the service state is the source of truth.
+        setTypeSyncToggle(WebKeyboardService.isRunning)
     }
 
     private fun launchApp(item: AppItem) {
@@ -176,6 +266,25 @@ class AllAppsActivity : AppCompatActivity() {
             overridePendingTransition(0, 0)
         } catch (e: Exception) {
             Toast.makeText(this, "Launch failed: ${item.label}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Update the WEB_KEYBOARD row's toggle indicator in the live list. */
+    private fun setTypeSyncToggle(enabled: Boolean) {
+        val idx = items.indexOfFirst { it.packageName == WEB_KEYBOARD }
+        if (idx >= 0) items[idx] = items[idx].copy(isToggleOn = enabled)
+    }
+
+    /** Reads the device's own phone number from the SIM. Returns null if unavailable. */
+    @SuppressLint("MissingPermission", "HardwareIds")
+    private fun getDevicePhoneNumber(): String? {
+        return try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            val number = tm.line1Number
+            if (number.isNullOrBlank()) null else number
+        } catch (e: Exception) {
+            Log.e("AllAppsActivity", "getDevicePhoneNumber failed: ${e.message}")
+            null
         }
     }
 
@@ -225,6 +334,16 @@ class AllAppsActivity : AppCompatActivity() {
                 label = "updates",
                 icon = pm.defaultActivityIcon,
                 launchComponent = null
+            )
+        )
+
+        appItems.add(
+            AppItem(
+                packageName = WEB_KEYBOARD,
+                label = "type sync",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+                isToggleOn = false
             )
         )
 
