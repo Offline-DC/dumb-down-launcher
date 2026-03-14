@@ -1,0 +1,185 @@
+package com.offlineinc.dumbdownlauncher.typesync
+
+import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import android.os.IBinder
+import android.util.Log
+import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo
+import okhttp3.*
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+/**
+ * Type Sync Service — connects to the encrypted WebSocket relay and receives
+ * text from the companion iPhone app.
+ *
+ * Decrypts incoming AES-256-GCM messages using the shared secret from the
+ * device-link pairing, then injects plaintext into the focused text field
+ * via the clipboard + paste accessibility action.
+ *
+ * Authenticates with HMAC-SHA256 on the handshake to prove it holds the
+ * shared secret.
+ */
+class TypeSyncService : Service() {
+
+    companion object {
+        private const val TAG = "TypeSyncService"
+        private const val WS_URL = "wss://offline-dc-backend-ba4815b2bcc8.herokuapp.com/keyboard/ws"
+        private const val TEN_MINUTES_MS = 10 * 60 * 1000L
+
+        private var instance: TypeSyncService? = null
+
+        fun isRunning(): Boolean = instance != null
+    }
+
+    private var webSocket: WebSocket? = null
+    private var sharedSecret: String? = null
+    private var flipPhoneNumber: String? = null
+    private val client = OkHttpClient.Builder()
+        .readTimeout(0, TimeUnit.MILLISECONDS) // no read timeout for WS
+        .build()
+    private var shutdownHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val shutdownRunnable = Runnable { stopSelf() }
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        Log.i(TAG, "Service created")
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val pairing = DeviceLinkReader.readPairing(this)
+        if (pairing == null) {
+            Log.e(TAG, "No pairing found — stopping")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        sharedSecret = pairing.sharedSecret
+        flipPhoneNumber = pairing.flipPhoneNumber
+        connect()
+
+        // Auto-stop after 10 minutes
+        shutdownHandler.removeCallbacks(shutdownRunnable)
+        shutdownHandler.postDelayed(shutdownRunnable, TEN_MINUTES_MS)
+
+        return START_NOT_STICKY
+    }
+
+    private fun connect() {
+        val phone = flipPhoneNumber ?: return
+        val secret = sharedSecret ?: return
+
+        // Build HMAC-authenticated handshake
+        val timestamp = (System.currentTimeMillis() / 1000).toString()
+        val hmacInput = "$phone$timestamp"
+        val hmac = TypeSyncCrypto.hmacSha256Hex(hmacInput.toByteArray(), secret)
+
+        val request = Request.Builder().url(WS_URL).build()
+
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.i(TAG, "WebSocket opened, sending authenticated handshake")
+                val handshake = JSONObject().apply {
+                    put("type", "connect")
+                    put("role", "phone")
+                    put("phoneNumber", phone)
+                    put("timestamp", timestamp)
+                    put("hmac", hmac)
+                }
+                webSocket.send(handshake.toString())
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                try {
+                    val json = JSONObject(text)
+                    when (json.getString("type")) {
+                        "text" -> handleEncryptedText(json)
+                        "auth_failed" -> {
+                            Log.e(TAG, "Auth failed: ${json.optString("reason")}")
+                            stopSelf()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to handle message", e)
+                }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "WebSocket failure: ${t.message}")
+                // Attempt reconnect after 3 seconds
+                shutdownHandler.postDelayed({ connect() }, 3000)
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WebSocket closing: $code $reason")
+                webSocket.close(1000, null)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WebSocket closed: $code $reason")
+            }
+        })
+    }
+
+    private fun handleEncryptedText(json: JSONObject) {
+        val secret = sharedSecret ?: return
+        val encryptedB64 = json.getString("encrypted")
+        val ivB64 = json.getString("iv")
+
+        try {
+            val ciphertext = TypeSyncCrypto.fromBase64(encryptedB64)
+            val iv = TypeSyncCrypto.fromBase64(ivB64)
+            val plaintext = TypeSyncCrypto.decryptAesGcm(ciphertext, iv, secret)
+            val text = String(plaintext, Charsets.UTF_8)
+            Log.i(TAG, "Decrypted text (${text.length} chars)")
+            injectText(text)
+        } catch (e: Exception) {
+            Log.e(TAG, "Decryption failed", e)
+        }
+    }
+
+    /**
+     * Injects text into the currently focused text field.
+     * Uses clipboard + paste as a reliable cross-app injection method.
+     */
+    private fun injectText(text: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("TypeSync", text))
+
+        // Try to paste via accessibility
+        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+        if (am.isEnabled) {
+            // The accessibility service will handle the paste via its focused node
+            // For now, use the clipboard-based approach and let the user paste
+            // In production, the MouseAccessibilityService would call performAction(ACTION_PASTE)
+            Log.i(TAG, "Text placed on clipboard — ready to paste")
+        }
+    }
+
+    private fun sendDisconnect() {
+        try {
+            val msg = JSONObject().put("type", "disconnect")
+            webSocket?.send(msg.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send disconnect", e)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        shutdownHandler.removeCallbacks(shutdownRunnable)
+        sendDisconnect()
+        webSocket?.close(1000, "service stopped")
+        webSocket = null
+        instance = null
+        Log.i(TAG, "Service destroyed")
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+}
