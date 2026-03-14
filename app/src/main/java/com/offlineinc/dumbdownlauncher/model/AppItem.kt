@@ -8,5 +8,6 @@ data class AppItem(
     val label: String,
     val icon: Drawable,
     val launchComponent: ComponentName?,
-    val isMuted: Boolean = false
+    val isMuted: Boolean = false,
+    val isToggleOn: Boolean? = null   // non-null → renders as a toggle row
 )
