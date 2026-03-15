@@ -39,6 +39,7 @@ import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.ui.AppListScreen
 import com.offlineinc.dumbdownlauncher.ui.DND_TOGGLE
 import com.offlineinc.dumbdownlauncher.ui.PlatformChoiceDialog
+import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.ui.RestartPhoneDialog
 
 const val ALL_APPS = "__ALL_APPS__"
@@ -47,6 +48,7 @@ const val CHANGE_PLATFORM = "__CHANGE_PLATFORM__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
 const val WEB_KEYBOARD = "__WEB_KEYBOARD__"
+const val DEVICE_PAIRING = "__DEVICE_PAIRING__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
@@ -133,7 +135,18 @@ class MainActivity : AppCompatActivity() {
                         when (item.packageName) {
                             DND_TOGGLE -> return@AppListScreen
                             GOOGLE_MESSAGES -> openMessagesInChrome()
-                            "com.offlineinc.dumbcontactsync" -> {
+                            DEVICE_PAIRING -> {
+                                // Launch the contact-sync app for pairing
+                                val intent = packageManager.getLaunchIntentForPackage("com.offlineinc.dumbcontactsync")
+                                if (intent != null) {
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    startActivity(intent)
+                                    overridePendingTransition(0, 0)
+                                } else {
+                                    Toast.makeText(this@MainActivity, "Contact Sync app not installed", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        "com.offlineinc.dumbcontactsync" -> {
                                 val component = item.launchComponent ?: return@AppListScreen
                                 val platform = PlatformPreferences.getChoice(this@MainActivity)
                                 val intent = Intent(Intent.ACTION_MAIN).apply {
@@ -265,6 +278,32 @@ class MainActivity : AppCompatActivity() {
         }
         // Re-bind warmup if Chrome died and disconnected while we were away
         bindChromeWarmup()
+        // Remove pairing row if the user just completed pairing in the contact-sync app
+        refreshPairingRow()
+    }
+
+    /** Remove the DEVICE_PAIRING row once the user has paired, or add it back if unpaired. */
+    @Volatile private var pairingRefreshPending = false
+    private fun refreshPairingRow() {
+        if (pairingRefreshPending) return
+        pairingRefreshPending = true
+        Thread {
+            val pairing = try {
+                DeviceLinkReader.readPairing(this)
+            } catch (_: Exception) {
+                null  // Contact Sync app not installed or provider not accessible
+            }
+            runOnUiThread {
+                pairingRefreshPending = false
+                if (isDestroyed) return@runOnUiThread
+                val idx = items.indexOfFirst { it.packageName == DEVICE_PAIRING }
+                if (pairing != null && idx >= 0) {
+                    items.removeAt(idx)
+                } else if (pairing == null && idx < 0) {
+                    items.add(AppItem(DEVICE_PAIRING, "pairing", packageManager.defaultActivityIcon, null))
+                }
+            }
+        }.start()
     }
 
     private fun reloadApps() {
@@ -325,6 +364,12 @@ class MainActivity : AppCompatActivity() {
                 val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, pkg)
                 result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
             } catch (_: Exception) { }
+        }
+
+        // Add "pairing" row if not yet paired with iPhone
+        val pairing = DeviceLinkReader.readPairing(this)
+        if (pairing == null) {
+            result.add(AppItem(DEVICE_PAIRING, "pairing", packageManager.defaultActivityIcon, null))
         }
 
         return result

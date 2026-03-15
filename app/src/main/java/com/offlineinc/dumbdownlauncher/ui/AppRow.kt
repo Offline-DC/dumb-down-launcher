@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.runtime.Composable
@@ -29,6 +30,7 @@ import com.offlineinc.dumbdownlauncher.CHANGE_PLATFORM
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
 import com.offlineinc.dumbdownlauncher.WEB_KEYBOARD
+import com.offlineinc.dumbdownlauncher.DEVICE_PAIRING
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
@@ -39,6 +41,7 @@ private val vectorIcons: Map<String, ImageVector> = mapOf(
     CHANGE_PLATFORM to Icons.Filled.Psychology,
     CHECK_UPDATES to Icons.Filled.SystemUpdate,
     WEB_KEYBOARD to Icons.Filled.Keyboard,
+    DEVICE_PAIRING to Icons.Filled.Link,
 )
 
 @Composable

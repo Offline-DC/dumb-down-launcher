@@ -11,6 +11,9 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
 
+    <!-- Read pairing data from Contact Sync app (signature-level: same signing key) -->
+    <uses-permission android:name="com.offlineinc.dumbcontactsync.DEVICE_LINK_READ"/>
+
     <application
         android:name=".DumbDownApp"
         android:allowBackup="true"

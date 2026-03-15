@@ -1,13 +1,11 @@
 package com.offlineinc.dumbdownlauncher
 
-import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
-import android.telephony.TelephonyManager
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
@@ -141,11 +139,12 @@ class AllAppsActivity : AppCompatActivity() {
                     WEB_KEYBOARD -> {
                         val newEnabled = !typeSyncEnabled
                         if (newEnabled) {
-                            val phone = getDevicePhoneNumber()
-                            if (phone == null) {
+                            // Check pairing first — required for encrypted relay
+                            val pairing = com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(this)
+                            if (pairing == null) {
                                 Toast.makeText(
                                     this,
-                                    "Couldn't read phone number from SIM",
+                                    "Pair with ur iPhone first (open Contact Sync app)",
                                     Toast.LENGTH_LONG
                                 ).show()
                             } else {
@@ -154,12 +153,9 @@ class AllAppsActivity : AppCompatActivity() {
                                 startService(
                                     Intent(this, WebKeyboardService::class.java).apply {
                                         action = WebKeyboardService.ACTION_START
-                                        putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, phone)
+                                        putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, pairing.flipPhoneNumber)
                                     }
                                 )
-                                // Delay slightly so the center-key UP event that
-                                // triggered this toggle has already been consumed
-                                // before the modal appears and steals focus.
                                 coroutineScope.launch {
                                     delay(200L)
                                     showTypeSyncModal = true
@@ -273,19 +269,6 @@ class AllAppsActivity : AppCompatActivity() {
     private fun setTypeSyncToggle(enabled: Boolean) {
         val idx = items.indexOfFirst { it.packageName == WEB_KEYBOARD }
         if (idx >= 0) items[idx] = items[idx].copy(isToggleOn = enabled)
-    }
-
-    /** Reads the device's own phone number from the SIM. Returns null if unavailable. */
-    @SuppressLint("MissingPermission", "HardwareIds")
-    private fun getDevicePhoneNumber(): String? {
-        return try {
-            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-            val number = tm.line1Number
-            if (number.isNullOrBlank()) null else number
-        } catch (e: Exception) {
-            Log.e("AllAppsActivity", "getDevicePhoneNumber failed: ${e.message}")
-            null
-        }
     }
 
     private fun buildAppList(): List<AppItem> {

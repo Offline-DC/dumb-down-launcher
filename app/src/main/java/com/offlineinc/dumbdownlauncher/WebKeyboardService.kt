@@ -12,6 +12,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
+import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -23,15 +25,18 @@ import java.util.concurrent.TimeUnit
 /**
  * TypeSyncService
  *
- * Foreground service that maintains a WebSocket connection to the relay backend.
- * Identified by the device's phone number — no PIN needed.
+ * Foreground service that maintains an encrypted WebSocket connection to the
+ * relay backend.  Authenticates with HMAC-SHA256 on the handshake and decrypts
+ * incoming AES-256-GCM text payloads using the shared secret obtained during
+ * device-link pairing.
  *
  * Lifecycle:
  *   startService(ACTION_START, phoneNumber) → opens WS, starts 10-min timer
  *   startService(ACTION_STOP)               → closes WS, stops service
  *
- * When a { type:"text", text:"..." } message arrives, it is injected into the
- * currently focused field via MouseAccessibilityService.
+ * When an encrypted { type:"text", encrypted:"…", iv:"…" } message arrives,
+ * it is decrypted and injected into the currently focused field via
+ * MouseAccessibilityService.
  */
 class WebKeyboardService : Service() {
 
@@ -53,6 +58,7 @@ class WebKeyboardService : Service() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var webSocket: WebSocket? = null
+    private var sharedSecret: String? = null
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)   // no read timeout — WS is long-lived
         .pingInterval(20, TimeUnit.SECONDS)      // keep-alive pings
@@ -65,12 +71,25 @@ class WebKeyboardService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val phone = intent.getStringExtra(EXTRA_PHONE_NUMBER)
-                if (phone.isNullOrBlank()) {
-                    Log.e(TAG, "ACTION_START missing phone number — stopping")
+                // Shared secret from device-link pairing is required for encryption
+                val pairing = DeviceLinkReader.readPairing(this)
+                if (pairing == null) {
+                    Log.e(TAG, "ACTION_START — no pairing found, cannot start encrypted relay")
                     stopSelf()
                     return START_NOT_STICKY
                 }
+
+                sharedSecret = pairing.sharedSecret
+                val phone = pairing.flipPhoneNumber.ifBlank {
+                    intent.getStringExtra(EXTRA_PHONE_NUMBER)
+                }
+                if (phone.isNullOrBlank()) {
+                    Log.e(TAG, "ACTION_START — no phone number available")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                Log.i(TAG, "Starting encrypted relay for $phone")
                 startRelay(phone)
             }
             ACTION_STOP -> shutDown()
@@ -99,7 +118,7 @@ class WebKeyboardService : Service() {
         ensureNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
 
-        Log.i(TAG, "━━━ startRelay ━━━  phone=$phoneNumber  url=$WS_URL  attempt=$reconnectCount")
+        Log.i(TAG, "━━━ startRelay ━━━  phone=$phoneNumber  url=$WS_URL  attempt=$reconnectCount  encrypted=${sharedSecret != null}")
 
         val request = Request.Builder().url(WS_URL).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -108,26 +127,41 @@ class WebKeyboardService : Service() {
                 reconnectCount = 0
                 // Normalize to E.164 — TelephonyManager.line1Number omits the leading +
                 val e164 = if (phoneNumber.startsWith("+")) phoneNumber else "+$phoneNumber"
-                Log.i(TAG, "✅ WS open (HTTP ${response.code}) — sending connect handshake for $e164")
+                Log.i(TAG, "✅ WS open (HTTP ${response.code}) — sending handshake for $e164")
+
+                // HMAC-authenticated handshake
+                val secret = sharedSecret ?: run {
+                    Log.e(TAG, "No shared secret — closing")
+                    ws.close(1000, "no secret")
+                    return
+                }
+                val timestamp = (System.currentTimeMillis() / 1000).toString()
+                val hmacInput = "$e164$timestamp"
+                val hmac = TypeSyncCrypto.hmacSha256Hex(hmacInput.toByteArray(), secret)
                 val handshake = JSONObject().apply {
                     put("type",        "connect")
                     put("role",        "phone")
                     put("phoneNumber", e164)
-                }.toString()
+                    put("timestamp",   timestamp)
+                    put("hmac",        hmac)
+                }
+
                 Log.d(TAG, "→ sending: $handshake")
-                ws.send(handshake)
+                ws.send(handshake.toString())
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
                 Log.d(TAG, "← received: $text")
                 try {
                     val msg = JSONObject(text)
-                    if (msg.getString("type") == "text") {
-                        val incoming = msg.getString("text")
-                        Log.i(TAG, "💉 injecting text: \"$incoming\"")
-                        MouseAccessibilityService.injectText(incoming)
-                    } else {
-                        Log.d(TAG, "ignoring message type=${msg.getString("type")}")
+                    when (msg.getString("type")) {
+                        "text" -> handleTextMessage(msg)
+                        "auth_failed" -> {
+                            Log.e(TAG, "❌ Auth failed: ${msg.optString("reason")}")
+                            shutDown()
+                            sendBroadcast(Intent(ACTION_STOP_BROADCAST))
+                        }
+                        else -> Log.d(TAG, "ignoring message type=${msg.getString("type")}")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "failed to parse message: ${e.message}  raw=$text")
@@ -157,6 +191,24 @@ class WebKeyboardService : Service() {
             // Broadcast to AllAppsActivity so it can flip the toggle off
             sendBroadcast(Intent(ACTION_STOP_BROADCAST))
         }, TEN_MINUTES)
+    }
+
+    private fun handleTextMessage(msg: JSONObject) {
+        val secret = sharedSecret ?: return
+        if (!msg.has("encrypted") || !msg.has("iv")) {
+            Log.w(TAG, "Received text message without encryption — ignoring")
+            return
+        }
+        try {
+            val ciphertext = TypeSyncCrypto.fromBase64(msg.getString("encrypted"))
+            val iv = TypeSyncCrypto.fromBase64(msg.getString("iv"))
+            val plaintext = TypeSyncCrypto.decryptAesGcm(ciphertext, iv, secret)
+            val text = String(plaintext, Charsets.UTF_8)
+            Log.i(TAG, "🔓 decrypted text (${text.length} chars)")
+            MouseAccessibilityService.injectText(text)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Decryption failed", e)
+        }
     }
 
     private fun shutDown() {
