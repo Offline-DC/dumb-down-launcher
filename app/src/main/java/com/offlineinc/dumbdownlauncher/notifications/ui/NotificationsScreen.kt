@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -28,6 +31,16 @@ private val Black = Color(0xFF000000)
 private val White = Color(0xFFFFFFFF)
 private val Gray = Color(0xFFAAAAAA)
 
+/**
+ * Focus zones (top → bottom):
+ *   1. Clear All button (only when notifications exist)
+ *   2. Notification list (only when notifications exist)
+ *   3. DND toggle (always present at the bottom)
+ *
+ * When empty:
+ *   1. Empty state text
+ *   2. DND toggle
+ */
 @Composable
 fun NotificationsScreen(
     items: List<NotificationItem>,
@@ -36,22 +49,27 @@ fun NotificationsScreen(
     onClearAll: () -> Unit,
     scrollToKey: String? = null,
     onScrollConsumed: () -> Unit = {},
+    messagesMuted: Boolean = false,
+    onToggleMessagesMuted: ((Boolean) -> Unit)? = null,
 ) {
     val fontFamily = DumbTheme.BioRhyme
-
     val hasNotifications = items.isNotEmpty()
+    val hasDndToggle = onToggleMessagesMuted != null
 
-    // Selection state (replaces adapter selection logic)
+    // Selection state
     var selectedIndex by remember { mutableIntStateOf(0) }
     var selectionActive by remember { mutableStateOf(false) }
 
-    // Focus state
+    // Focus requesters
     val clearAllFR = remember { FocusRequester() }
     val emptyFR = remember { FocusRequester() }
     val listFR = remember { FocusRequester() }
+    val dndToggleFR = remember { FocusRequester() }
 
+    // Focus tracking
     var clearAllFocused by remember { mutableStateOf(false) }
     var listFocused by remember { mutableStateOf(false) }
+    var dndToggleFocused by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
 
@@ -65,7 +83,7 @@ fun NotificationsScreen(
         }
     }
 
-    // Scroll to a specific notification key (e.g. after download starts)
+    // Scroll to a specific notification key
     LaunchedEffect(scrollToKey, items) {
         if (scrollToKey != null) {
             val idx = items.indexOfFirst { it.key == scrollToKey }
@@ -82,13 +100,15 @@ fun NotificationsScreen(
     // Default focus behavior
     LaunchedEffect(hasNotifications) {
         if (hasNotifications) {
-            // Start on Clear All and ensure no row highlight
             selectionActive = false
             clearAllFR.requestFocus()
         } else {
-            // Empty state focus
             selectionActive = false
-            emptyFR.requestFocus()
+            if (hasDndToggle) {
+                dndToggleFR.requestFocus()
+            } else {
+                emptyFR.requestFocus()
+            }
         }
     }
 
@@ -97,15 +117,19 @@ fun NotificationsScreen(
             .fillMaxSize()
             .background(Black)
             .padding(12.dp)
-            // Root key handler so DPAD works regardless of which child is focused
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
-                // If empty, swallow navigation/select keys like your old code
-                if (!hasNotifications) {
+                // ── Empty state (no notifications) ───────────────────────
+                if (!hasNotifications && !dndToggleFocused) {
                     return@onPreviewKeyEvent when (event.key) {
+                        Key.DirectionDown -> {
+                            if (hasDndToggle) {
+                                dndToggleFR.requestFocus()
+                                true
+                            } else true
+                        }
                         Key.DirectionUp,
-                        Key.DirectionDown,
                         Key.Enter,
                         Key.NumPadEnter,
                         Key.DirectionCenter -> true
@@ -113,11 +137,33 @@ fun NotificationsScreen(
                     }
                 }
 
-                // CLEAR ALL focused behavior
+                // ── DND toggle focused ───────────────────────────────────
+                if (dndToggleFocused) {
+                    return@onPreviewKeyEvent when (event.key) {
+                        Key.DirectionUp -> {
+                            if (hasNotifications) {
+                                // Go back to last notification
+                                selectedIndex = items.lastIndex
+                                selectionActive = true
+                                listFR.requestFocus()
+                            } else {
+                                emptyFR.requestFocus()
+                            }
+                            true
+                        }
+                        Key.DirectionDown -> true // Already at bottom
+                        Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+                            onToggleMessagesMuted?.invoke(!messagesMuted)
+                            true
+                        }
+                        else -> false
+                    }
+                }
+
+                // ── Clear All focused ────────────────────────────────────
                 if (clearAllFocused) {
                     return@onPreviewKeyEvent when (event.key) {
                         Key.DirectionDown -> {
-                            // Enter list, highlight row 0
                             selectedIndex = 0
                             selectionActive = true
                             listFR.requestFocus()
@@ -131,21 +177,23 @@ fun NotificationsScreen(
                     }
                 }
 
-                // LIST focused behavior
+                // ── List focused ─────────────────────────────────────────
                 if (listFocused) {
                     return@onPreviewKeyEvent when (event.key) {
                         Key.DirectionDown -> {
                             if (items.isNotEmpty()) {
-                                val newIndex = (selectedIndex + 1).coerceIn(0, items.lastIndex)
-                                if (newIndex != selectedIndex) {
-                                    selectedIndex = newIndex
+                                if (selectedIndex < items.lastIndex) {
+                                    selectedIndex += 1
+                                } else if (hasDndToggle) {
+                                    // Past last item → DND toggle
+                                    selectionActive = false
+                                    dndToggleFR.requestFocus()
                                 }
                                 true
                             } else true
                         }
                         Key.DirectionUp -> {
                             if (selectedIndex == 0) {
-                                // Go back to Clear All, remove highlight
                                 selectionActive = false
                                 clearAllFR.requestFocus()
                                 true
@@ -185,10 +233,7 @@ fun NotificationsScreen(
                     .focusRequester(clearAllFR)
                     .onFocusChanged { state ->
                         clearAllFocused = state.isFocused
-                        if (state.isFocused) {
-                            // While Clear All is focused, NEVER highlight a row.
-                            selectionActive = false
-                        }
+                        if (state.isFocused) selectionActive = false
                     },
                 fontFamily = fontFamily,
                 onClick = onClearAll
@@ -196,7 +241,6 @@ fun NotificationsScreen(
 
             Spacer(Modifier.height(10.dp))
 
-            // LazyColumn container is focusable so we can move focus into it
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -220,7 +264,6 @@ fun NotificationsScreen(
                 }
             }
 
-            // Keep selected item visible when it changes
             LaunchedEffect(selectedIndex) {
                 if (items.isNotEmpty()) {
                     listState.animateScrollToItem(selectedIndex)
@@ -235,6 +278,79 @@ fun NotificationsScreen(
             )
             Spacer(Modifier.weight(1f))
         }
+
+        // ── DND toggle (always at bottom) ────────────────────────────
+        if (hasDndToggle) {
+            Spacer(Modifier.height(8.dp))
+            DndToggleButton(
+                enabled = messagesMuted,
+                focused = dndToggleFocused,
+                fontFamily = fontFamily,
+                modifier = Modifier
+                    .focusRequester(dndToggleFR)
+                    .onFocusChanged { dndToggleFocused = it.isFocused }
+                    .focusable(),
+                onClick = { onToggleMessagesMuted?.invoke(!messagesMuted) }
+            )
+        }
+    }
+}
+
+// ── Private composables ──────────────────────────────────────────────────────
+
+@Composable
+private fun DndToggleButton(
+    enabled: Boolean,
+    focused: Boolean,
+    fontFamily: FontFamily,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(if (focused) Yellow else Color.Transparent)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { onClick() },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Toggle pill
+        val trackColor = when {
+            enabled && focused -> Black
+            enabled -> Yellow
+            else -> Gray
+        }
+        val thumbColor = if (focused) Yellow else White
+
+        Box(
+            modifier = Modifier
+                .size(width = 38.dp, height = 22.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(trackColor),
+            contentAlignment = if (enabled) Alignment.CenterEnd else Alignment.CenterStart,
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(2.dp)
+                    .size(18.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(thumbColor)
+            )
+        }
+
+        Spacer(Modifier.width(14.dp))
+
+        BasicText(
+            text = "mute all texts",
+            style = TextStyle(
+                fontFamily = fontFamily,
+                fontSize = 16.sp,
+                color = if (focused) Black else White,
+            ),
+        )
     }
 }
 

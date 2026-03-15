@@ -1,10 +1,8 @@
 package com.offlineinc.dumbdownlauncher
 
 import android.Manifest
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -15,31 +13,20 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
-import androidx.browser.customtabs.CustomTabsClient
-import androidx.browser.customtabs.CustomTabsServiceConnection
-import androidx.browser.customtabs.CustomTabsSession
-import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
-import com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
-import com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
+import com.offlineinc.dumbdownlauncher.launcher.DpadShortcutResolver
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
-import com.offlineinc.dumbdownlauncher.launcher.LaunchResolver
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
-import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
-import com.offlineinc.dumbdownlauncher.ui.AppListScreen
-import com.offlineinc.dumbdownlauncher.ui.DND_TOGGLE
+import com.offlineinc.dumbdownlauncher.ui.DpadDirection
+import com.offlineinc.dumbdownlauncher.ui.HomeScreen
 import com.offlineinc.dumbdownlauncher.ui.PlatformChoiceDialog
-import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.ui.RestartPhoneDialog
 
 const val ALL_APPS = "__ALL_APPS__"
@@ -56,40 +43,9 @@ val WEB_APP_URLS = mapOf(
 
 class MainActivity : AppCompatActivity() {
     private lateinit var dndMuteManager: DndMuteManager
-
-    private val muteIconPackages: Set<String> get() {
-        val platform = PlatformPreferences.getChoice(this)
-        return buildSet {
-            when (platform) {
-                "ios" -> add("com.openbubbles.messaging")
-                "android" -> add(GOOGLE_MESSAGES)
-            }
-            add("com.whatsapp")
-            add("com.android.mms")
-        }
-    }
-
-    private var selectedIndex = 0
-    private val items: SnapshotStateList<AppItem> = mutableStateListOf()
     private lateinit var controller: LauncherController
     private val showPlatformDialog = mutableStateOf(false)
     private val showRestartDialog = mutableStateOf(false)
-
-    private var customTabsSession: CustomTabsSession? = null
-    private var customTabsBound = false
-    private val customTabsConnection = object : CustomTabsServiceConnection() {
-        override fun onCustomTabsServiceConnected(name: ComponentName, client: CustomTabsClient) {
-            client.warmup(0)
-            customTabsSession = client.newSession(null)?.also {
-                it.mayLaunchUrl(Uri.parse(WEB_APP_URLS.getValue(GOOGLE_MESSAGES)), null, null)
-            }
-        }
-        override fun onServiceDisconnected(name: ComponentName) {
-            // Chrome died — clear session and allow rebind on next onResume
-            customTabsSession = null
-            customTabsBound = false
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
@@ -110,10 +66,11 @@ class MainActivity : AppCompatActivity() {
             Log.d("PLATFORM", "onCreate: setting showPlatformDialog=true")
         }
 
+        // Controller is kept for dialer digit launching from KeyDispatcher
         controller = LauncherController(
             context = this,
-            getSelectedIndex = { selectedIndex },
-            getItems = { items },
+            getSelectedIndex = { 0 },
+            getItems = { emptyList() },
             onStartActivity = { startActivity(it) },
             onNoAnim = { overridePendingTransition(0, 0) }
         )
@@ -123,81 +80,24 @@ class MainActivity : AppCompatActivity() {
             val showDialog by showPlatformDialog
             val showRestart by showRestartDialog
 
-            LaunchedEffect(muted) {
-                applyMutedToItems(muted)
-            }
-
             Box(modifier = Modifier.fillMaxSize()) {
-                AppListScreen(
-                    title = null,
-                    items = items,
-                    onActivate = { item ->
-                        when (item.packageName) {
-                            DND_TOGGLE -> return@AppListScreen
-                            GOOGLE_MESSAGES -> openMessagesInChrome()
-                            DEVICE_PAIRING -> {
-                                // Launch the contact-sync app for pairing
-                                val intent = packageManager.getLaunchIntentForPackage("com.offlineinc.dumbcontactsync")
-                                if (intent != null) {
-                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    startActivity(intent)
-                                    overridePendingTransition(0, 0)
-                                } else {
-                                    Toast.makeText(this@MainActivity, "Contact Sync app not installed", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        "com.offlineinc.dumbcontactsync" -> {
-                                val component = item.launchComponent ?: return@AppListScreen
-                                val platform = PlatformPreferences.getChoice(this@MainActivity)
-                                val intent = Intent(Intent.ACTION_MAIN).apply {
-                                    addCategory(Intent.CATEGORY_LAUNCHER)
-                                    setComponent(component)
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    if (platform != null && platform != "skipped") {
-                                        putExtra("platform", platform)
-                                    }
-                                }
-                                startActivity(intent)
-                                overridePendingTransition(0, 0)
-                            }
-                            else -> {
-                                val component = item.launchComponent ?: return@AppListScreen
-                                if (item.packageName == "com.openbubbles.messaging" ||
-                                    item.packageName == "com.ubercab.uberlite" ||
-                                    item.packageName == "com.google.android.apps.mapslite") {
-                                    MouseAccessibilityService.setMouseEnabled(this@MainActivity, true)
-                                }
-                                val intent = Intent(Intent.ACTION_MAIN).apply {
-                                    addCategory(Intent.CATEGORY_LAUNCHER)
-                                    setComponent(component)
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                startActivity(intent)
-                                overridePendingTransition(0, 0)
-                            }
-                        }
+                HomeScreen(
+                    messagesMuted = muted,
+                    onOpenAppsGrid = {
+                        startActivity(Intent(this@MainActivity, MainAppsGridActivity::class.java))
+                        overridePendingTransition(0, 0)
                     },
-                    showSoftKeys = true,
-                    softKeyLeftLabel = "notifications",
-                    softKeyRightLabel = "all apps",
-                    onSoftKeyLeft = {
+                    onOpenNotifications = {
                         startActivity(Intent(this@MainActivity, NotificationsActivity::class.java))
                         overridePendingTransition(0, 0)
                     },
-                    onSoftKeyRight = {
+                    onOpenAllApps = {
                         startActivity(Intent(this@MainActivity, AllAppsActivity::class.java))
                         overridePendingTransition(0, 0)
                     },
-                    messagesMuted = muted,
-                    onToggleMessagesMuted = { enabled ->
-                        if (!dndMuteManager.hasPolicyAccess()) {
-                            startActivity(dndMuteManager.makePolicyAccessIntent())
-                            return@AppListScreen
-                        }
-                        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
-                            .edit { putBoolean("messages_muted", enabled) }
-                        dndMuteManager.setMuted(enabled)
-                    }
+                    onDpadDirection = { direction ->
+                        launchDpadShortcut(direction)
+                    },
                 )
 
                 if (showDialog) {
@@ -211,7 +111,6 @@ class MainActivity : AppCompatActivity() {
                                 Log.d("PLATFORM", "onChoose: skipped/dismissed, not saving")
                             }
                             showPlatformDialog.value = false
-                            reloadApps()
                             if (previousChoice != null && previousChoice != choice) {
                                 showRestartDialog.value = true
                             }
@@ -240,35 +139,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val permissionsNeeded = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+                permissionsNeeded.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-
-        bindChromeWarmup()
-
-        Thread {
-            val loaded = buildMainAppList()
-            runOnUiThread {
-                if (isDestroyed) return@runOnUiThread
-                items.addAll(loaded)
-                applyMutedToItems(dndMuteManager.muted.value)
-                if (items.isEmpty()) {
-                    Toast.makeText(this, "No allowed apps found/installed.", Toast.LENGTH_LONG).show()
-                }
-                // Pairing row is managed exclusively by refreshPairingRow — run it
-                // after the list is populated so position is deterministic (bottom)
-                refreshPairingRow()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                permissionsNeeded.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
-        }.start()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        if (customTabsBound) {
-            unbindService(customTabsConnection)
-            customTabsBound = false
+        }
+        if (permissionsNeeded.isNotEmpty()) {
+            requestPermissions(permissionsNeeded.toTypedArray(), 0)
         }
     }
 
@@ -279,163 +162,60 @@ class MainActivity : AppCompatActivity() {
         if (PlatformPreferences.consumeShowDialog(this)) {
             showPlatformDialog.value = true
         }
-        // Re-bind warmup if Chrome died and disconnected while we were away
-        bindChromeWarmup()
-        // Remove pairing row if the user just completed pairing in the contact-sync app
-        refreshPairingRow()
     }
 
     /**
-     * Single source of truth for the DEVICE_PAIRING row.
-     * Always removes all existing pairing rows, then appends one at the bottom if unpaired.
-     * This makes it safe to call from both onCreate (post-load) and onResume.
+     * Launch the app assigned to a D-pad direction in TCL Flip 2 settings.
+     * Reads from Settings.System "keyshortcut_{direction}key".
      */
-    @Volatile private var pairingRefreshPending = false
-    private fun refreshPairingRow() {
-        if (pairingRefreshPending) return
-        pairingRefreshPending = true
-        Thread {
-            val pairing = try {
-                DeviceLinkReader.readPairing(this)
-            } catch (_: Exception) {
-                null  // Contact Sync app not installed or provider not accessible
-            }
-            runOnUiThread {
-                pairingRefreshPending = false
-                if (isDestroyed) return@runOnUiThread
-                // Remove all existing pairing rows (handles duplicates from race conditions)
-                items.removeAll { it.packageName == DEVICE_PAIRING }
-                // Add one at the top if not paired
-                if (pairing == null) {
-                    items.add(0, AppItem(DEVICE_PAIRING, "pairing", packageManager.defaultActivityIcon, null))
-                }
-            }
-        }.start()
-    }
-
-    private fun reloadApps() {
-        items.clear()
-        selectedIndex = 0
-        Thread {
-            val loaded = buildMainAppList()
-            runOnUiThread {
-                if (isDestroyed) return@runOnUiThread
-                items.addAll(loaded)
-                applyMutedToItems(dndMuteManager.muted.value)
-            }
-        }.start()
-    }
-
-    private fun buildMainAppList(): List<AppItem> {
-        val result = mutableListOf<AppItem>()
-
-        val platform = PlatformPreferences.getChoice(this)
-        val messagingPkg = when (platform) {
-            "ios" -> "com.openbubbles.messaging"
-            "android" -> GOOGLE_MESSAGES
-            else -> null  // skipped or null — hide smart txt
+    private fun launchDpadShortcut(direction: DpadDirection) {
+        val resolverDirection = when (direction) {
+            DpadDirection.UP    -> DpadShortcutResolver.Direction.UP
+            DpadDirection.DOWN  -> DpadShortcutResolver.Direction.DOWN
+            DpadDirection.LEFT  -> DpadShortcutResolver.Direction.LEFT
+            DpadDirection.RIGHT -> DpadShortcutResolver.Direction.RIGHT
         }
 
-        val allowedPackages = listOfNotNull(
-            DND_TOGGLE,
-            messagingPkg,
-            "com.whatsapp",
-            "com.android.mms",
-            "com.android.contacts",
-            "com.android.dialer",
-            "com.android.settings",
-            "com.google.android.apps.mapslite",
-            "com.tcl.camera",
-            "com.apple.android.music",
-            "com.ubercab.uberlite"
-        )
-
-        for (pkg in allowedPackages) {
-            when (pkg) {
-                DND_TOGGLE -> {
-                    result.add(AppItem(DND_TOGGLE, "mute all texts", packageManager.defaultActivityIcon, null, false))
-                    continue
-                }
-                GOOGLE_MESSAGES -> {
-                    result.add(AppItem(GOOGLE_MESSAGES, "smart txt", packageManager.defaultActivityIcon, null, false))
-                    continue
-                }
-            }
-
+        val intent = DpadShortcutResolver.buildLaunchIntent(this, resolverDirection)
+        if (intent != null) {
             try {
-                val appInfo = packageManager.getApplicationInfo(pkg, 0)
-                val defaultLabel = packageManager.getApplicationLabel(appInfo).toString()
-                val label = AppLabelOverrides.getLabel(pkg, defaultLabel).lowercase()
-                val defaultIcon = packageManager.getApplicationIcon(appInfo)
-                val icon = AppIconOverrides.getIcon(this, pkg, defaultIcon)
-                val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, pkg)
-                result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
-            } catch (_: Exception) { }
+                startActivity(intent)
+                overridePendingTransition(0, 0)
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Failed to launch shortcut for $direction: ${e.message}")
+                Toast.makeText(this, "Shortcut app not found", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            // No shortcut configured — open TCL Settings so user can set one up
+            openTclKeyShortcutSettings()
         }
-
-        return result
     }
-
-    private fun hasLaunchedMessagesOnce(): Boolean =
-        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
-            .getBoolean("chrome_messages_launched", false)
-
-    private fun markMessagesLaunched() =
-        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
-            .edit { putBoolean("chrome_messages_launched", true) }
 
     /**
-     * Smart Messages launch:
-     * - First ever tap (flag unset) → Custom Tabs with URL + set flag
-     *   (ensures Chrome opens to Messages on a fresh install)
-     * - Every tap after (flag set)  → ACTION_MAIN, no URL
-     *   - Chrome alive → instant foreground, page preserved, no reload
-     *   - Chrome dead  → session restore brings Messages tab back, reloads once
-     *
-     * Note: getRunningAppProcesses() is restricted to own-app processes on
-     * Android 10+, so process detection is unreliable. The flag approach
-     * sidesteps that entirely.
+     * Opens the TCL Flip 2 Settings app. Tries the key shortcut
+     * settings page first, falls back to main settings.
      */
-    private fun openMessagesInChrome() {
-        MouseAccessibilityService.setMouseEnabled(this, true)
-        if (!hasLaunchedMessagesOnce()) {
-            Log.d("MESSAGES", "First launch — opening with URL via Custom Tabs")
-            openCustomTab(WEB_APP_URLS.getValue(GOOGLE_MESSAGES))
-            markMessagesLaunched()
-        } else {
-            Log.d("MESSAGES", "Subsequent launch — ACTION_MAIN, no reload")
-            Intent(Intent.ACTION_MAIN).apply {
-                setPackage("com.android.chrome")
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            }.let { startActivity(it) }
-        }
-        overridePendingTransition(0, 0)
-    }
-
-    private fun bindChromeWarmup() {
-        if (customTabsBound) return
-        if (PlatformPreferences.getChoice(this) != "android") return
-        val bound = CustomTabsClient.bindCustomTabsService(this, "com.android.chrome", customTabsConnection)
-        if (bound) customTabsBound = true
-    }
-
-    private fun openCustomTab(url: String, pkg: String = "com.android.chrome") {
-        MouseAccessibilityService.setMouseEnabled(this, true)
-        androidx.browser.customtabs.CustomTabsIntent.Builder(customTabsSession)
-            .setUrlBarHidingEnabled(true)
-            .build()
-            .apply { intent.setPackage(pkg) }
-            .launchUrl(this, Uri.parse(url))
-        overridePendingTransition(0, 0)
-    }
-
-    private fun applyMutedToItems(muted: Boolean) {
-        val currentMuteIconPackages = muteIconPackages
-        for (i in items.indices) {
-            val it = items[i]
-            if (it.packageName in currentMuteIconPackages) {
-                items[i] = it.copy(isMuted = muted)
+    private fun openTclKeyShortcutSettings() {
+        try {
+            // TCL key shortcut settings activity
+            val intent = Intent().apply {
+                component = android.content.ComponentName(
+                    "com.android.settings",
+                    "com.android.settings.Settings\$KeyShortcutSettingsActivity"
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            overridePendingTransition(0, 0)
+        } catch (_: Exception) {
+            try {
+                // Fallback: open main Settings
+                startActivity(Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                overridePendingTransition(0, 0)
+            } catch (_: Exception) {
+                Toast.makeText(this, "Set shortcuts in Settings → Key shortcuts", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -470,6 +250,13 @@ class MainActivity : AppCompatActivity() {
             }
             result.dialDigits != null -> {
                 controller.openDialerWithDigits(result.dialDigits)
+                true
+            }
+            // Center/Enter is handled by HomeScreen's onPreviewKeyEvent → onOpenAppsGrid
+            // so it won't reach here, but if it does, open the grid
+            result.activateSelected -> {
+                startActivity(Intent(this, MainAppsGridActivity::class.java))
+                overridePendingTransition(0, 0)
                 true
             }
             else -> super.dispatchKeyEvent(event)

@@ -7,14 +7,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.content.edit
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.lifecycle.lifecycleScope
+import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
 import com.offlineinc.dumbdownlauncher.notifications.DumbNotificationListenerService
 import com.offlineinc.dumbdownlauncher.notifications.NotificationStore
 
 class NotificationsActivity : ComponentActivity() {
+
+    private lateinit var dndMuteManager: DndMuteManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
@@ -24,6 +29,12 @@ class NotificationsActivity : ComponentActivity() {
         window.statusBarColor = Color.BLACK
         WindowCompat.setDecorFitsSystemWindows(window, true)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
+
+        dndMuteManager = DndMuteManager(
+            appContext = applicationContext,
+            scope = lifecycleScope,
+        )
+        dndMuteManager.refreshFromSystem()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -37,6 +48,7 @@ class NotificationsActivity : ComponentActivity() {
 
         setContent {
             val items by NotificationStore.items().observeAsState(initial = emptyList())
+            val muted by dndMuteManager.muted.collectAsState()
             var scrollToKey by remember { mutableStateOf<String?>(null) }
             val scrollToUpdate = intent.getBooleanExtra(EXTRA_SCROLL_TO_UPDATE, false)
             var scrollToUpdateConsumed by remember { mutableStateOf(false) }
@@ -81,7 +93,17 @@ class NotificationsActivity : ComponentActivity() {
                     startService(Intent(this, DumbNotificationListenerService::class.java).apply {
                         action = DumbNotificationListenerService.ACTION_CLEAR_ALL
                     })
-                }
+                },
+                messagesMuted = muted,
+                onToggleMessagesMuted = { enabled ->
+                    if (!dndMuteManager.hasPolicyAccess()) {
+                        startActivity(dndMuteManager.makePolicyAccessIntent())
+                        return@NotificationsScreen
+                    }
+                    getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+                        .edit { putBoolean("messages_muted", enabled) }
+                    dndMuteManager.setMuted(enabled)
+                },
             )
         }
     }

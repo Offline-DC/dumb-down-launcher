@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <!-- Read pairing data from Contact Sync app (signature-level: same signing key) -->
     <uses-permission android:name="com.offlineinc.dumbcontactsync.DEVICE_LINK_READ"/>
@@ -22,6 +24,10 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.DumbDownLauncher">
+
+        <activity
+            android:name=".MainAppsGridActivity"
+            android:exported="false" />
 
         <activity
             android:name=".AllAppsActivity"

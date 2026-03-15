@@ -114,6 +114,16 @@ class AllAppsActivity : AppCompatActivity() {
                 items = items,
                 onActivate = { item ->
                     when (item.packageName) {
+                    DEVICE_PAIRING -> {
+                        // Open the contact sync app for pairing setup
+                        val pairingIntent = packageManager.getLaunchIntentForPackage("com.offlineinc.dumbcontactsync")
+                        if (pairingIntent != null) {
+                            startActivity(pairingIntent)
+                            overridePendingTransition(0, 0)
+                        } else {
+                            Toast.makeText(this, "Install Dumb Down app to pair", Toast.LENGTH_LONG).show()
+                        }
+                    }
                     CHANGE_PLATFORM -> {
                         PlatformPreferences.requestShowDialog(this)
                         finish()
@@ -329,6 +339,19 @@ class AllAppsActivity : AppCompatActivity() {
                 isToggleOn = false
             )
         )
+
+        // Pin "device pairing" at the very top when not yet paired
+        val pairing = com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(this)
+        if (pairing == null) {
+            appItems.add(0,
+                AppItem(
+                    packageName = DEVICE_PAIRING,
+                    label = "device pairing",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null
+                )
+            )
+        }
 
         return appItems
     }
