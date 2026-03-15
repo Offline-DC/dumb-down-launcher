@@ -144,7 +144,7 @@ class AllAppsActivity : AppCompatActivity() {
                             if (pairing == null) {
                                 Toast.makeText(
                                     this,
-                                    "Pair with ur iPhone first (open Contact Sync app)",
+                                    "pair with ur smartphone first using the Dumb Down app",
                                     Toast.LENGTH_LONG
                                 ).show()
                             } else {

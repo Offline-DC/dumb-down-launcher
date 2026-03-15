@@ -257,6 +257,9 @@ class MainActivity : AppCompatActivity() {
                 if (items.isEmpty()) {
                     Toast.makeText(this, "No allowed apps found/installed.", Toast.LENGTH_LONG).show()
                 }
+                // Pairing row is managed exclusively by refreshPairingRow — run it
+                // after the list is populated so position is deterministic (bottom)
+                refreshPairingRow()
             }
         }.start()
     }
@@ -282,7 +285,11 @@ class MainActivity : AppCompatActivity() {
         refreshPairingRow()
     }
 
-    /** Remove the DEVICE_PAIRING row once the user has paired, or add it back if unpaired. */
+    /**
+     * Single source of truth for the DEVICE_PAIRING row.
+     * Always removes all existing pairing rows, then appends one at the bottom if unpaired.
+     * This makes it safe to call from both onCreate (post-load) and onResume.
+     */
     @Volatile private var pairingRefreshPending = false
     private fun refreshPairingRow() {
         if (pairingRefreshPending) return
@@ -296,11 +303,11 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 pairingRefreshPending = false
                 if (isDestroyed) return@runOnUiThread
-                val idx = items.indexOfFirst { it.packageName == DEVICE_PAIRING }
-                if (pairing != null && idx >= 0) {
-                    items.removeAt(idx)
-                } else if (pairing == null && idx < 0) {
-                    items.add(AppItem(DEVICE_PAIRING, "pairing", packageManager.defaultActivityIcon, null))
+                // Remove all existing pairing rows (handles duplicates from race conditions)
+                items.removeAll { it.packageName == DEVICE_PAIRING }
+                // Add one at the top if not paired
+                if (pairing == null) {
+                    items.add(0, AppItem(DEVICE_PAIRING, "pairing", packageManager.defaultActivityIcon, null))
                 }
             }
         }.start()
@@ -364,12 +371,6 @@ class MainActivity : AppCompatActivity() {
                 val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, pkg)
                 result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
             } catch (_: Exception) { }
-        }
-
-        // Add "pairing" row if not yet paired with iPhone
-        val pairing = DeviceLinkReader.readPairing(this)
-        if (pairing == null) {
-            result.add(AppItem(DEVICE_PAIRING, "pairing", packageManager.defaultActivityIcon, null))
         }
 
         return result
