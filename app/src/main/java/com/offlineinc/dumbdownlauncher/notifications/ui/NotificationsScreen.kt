@@ -33,13 +33,13 @@ private val Gray = Color(0xFFAAAAAA)
 
 /**
  * Focus zones (top → bottom):
- *   1. Clear All button (only when notifications exist)
- *   2. Notification list (only when notifications exist)
- *   3. DND toggle (always present at the bottom)
+ *   1. DND toggle (always present at the top)
+ *   2. Clear All button (only when notifications exist; autofocused on open)
+ *   3. Notification list (only when notifications exist)
  *
  * When empty:
- *   1. Empty state text
- *   2. DND toggle
+ *   1. DND toggle
+ *   2. Empty state text
  */
 @Composable
 fun NotificationsScreen(
@@ -97,18 +97,17 @@ fun NotificationsScreen(
         }
     }
 
-    // Default focus behavior
+    // Default focus behavior.
+    // When notifications exist: autofocus Clear All (per design intent).
+    // When empty: autofocus the DND toggle at the top (if present), otherwise empty state.
     LaunchedEffect(hasNotifications) {
+        selectionActive = false
         if (hasNotifications) {
-            selectionActive = false
             clearAllFR.requestFocus()
+        } else if (hasDndToggle) {
+            dndToggleFR.requestFocus()
         } else {
-            selectionActive = false
-            if (hasDndToggle) {
-                dndToggleFR.requestFocus()
-            } else {
-                emptyFR.requestFocus()
-            }
+            emptyFR.requestFocus()
         }
     }
 
@@ -120,38 +119,19 @@ fun NotificationsScreen(
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
-                // ── Empty state (no notifications) ───────────────────────
-                if (!hasNotifications && !dndToggleFocused) {
-                    return@onPreviewKeyEvent when (event.key) {
-                        Key.DirectionDown -> {
-                            if (hasDndToggle) {
-                                dndToggleFR.requestFocus()
-                                true
-                            } else true
-                        }
-                        Key.DirectionUp,
-                        Key.Enter,
-                        Key.NumPadEnter,
-                        Key.DirectionCenter -> true
-                        else -> false
-                    }
-                }
-
-                // ── DND toggle focused ───────────────────────────────────
+                // ── DND toggle focused (now at TOP) ──────────────────────
                 if (dndToggleFocused) {
                     return@onPreviewKeyEvent when (event.key) {
-                        Key.DirectionUp -> {
+                        Key.DirectionUp -> true // Already at top — consume, do nothing
+                        Key.DirectionDown -> {
                             if (hasNotifications) {
-                                // Go back to last notification
-                                selectedIndex = items.lastIndex
-                                selectionActive = true
-                                listFR.requestFocus()
+                                // Move down to Clear All
+                                clearAllFR.requestFocus()
                             } else {
                                 emptyFR.requestFocus()
                             }
                             true
                         }
-                        Key.DirectionDown -> true // Already at bottom
                         Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
                             onToggleMessagesMuted?.invoke(!messagesMuted)
                             true
@@ -160,9 +140,30 @@ fun NotificationsScreen(
                     }
                 }
 
+                // ── Empty state (no notifications, dnd not focused) ──────
+                if (!hasNotifications && !dndToggleFocused) {
+                    return@onPreviewKeyEvent when (event.key) {
+                        Key.DirectionUp -> {
+                            // Navigate up to DND toggle at top
+                            if (hasDndToggle) dndToggleFR.requestFocus()
+                            true
+                        }
+                        Key.DirectionDown,
+                        Key.Enter,
+                        Key.NumPadEnter,
+                        Key.DirectionCenter -> true // Already at bottom — consume
+                        else -> false
+                    }
+                }
+
                 // ── Clear All focused ────────────────────────────────────
                 if (clearAllFocused) {
                     return@onPreviewKeyEvent when (event.key) {
+                        Key.DirectionUp -> {
+                            // Navigate up to DND toggle at top
+                            if (hasDndToggle) dndToggleFR.requestFocus()
+                            true
+                        }
                         Key.DirectionDown -> {
                             selectedIndex = 0
                             selectionActive = true
@@ -181,26 +182,20 @@ fun NotificationsScreen(
                 if (listFocused) {
                     return@onPreviewKeyEvent when (event.key) {
                         Key.DirectionDown -> {
-                            if (items.isNotEmpty()) {
-                                if (selectedIndex < items.lastIndex) {
-                                    selectedIndex += 1
-                                } else if (hasDndToggle) {
-                                    // Past last item → DND toggle
-                                    selectionActive = false
-                                    dndToggleFR.requestFocus()
-                                }
-                                true
-                            } else true
+                            if (items.isNotEmpty() && selectedIndex < items.lastIndex) {
+                                selectedIndex += 1
+                            }
+                            // DND toggle is now at the top — no downward exit from list
+                            true
                         }
                         Key.DirectionUp -> {
                             if (selectedIndex == 0) {
                                 selectionActive = false
                                 clearAllFR.requestFocus()
-                                true
                             } else {
                                 selectedIndex = (selectedIndex - 1).coerceIn(0, items.lastIndex)
-                                true
                             }
+                            true
                         }
                         Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
                             if (items.isNotEmpty()) onOpen(items[selectedIndex])
@@ -217,15 +212,36 @@ fun NotificationsScreen(
                 false
             }
     ) {
-        BasicText(
-            text = "notifications",
-            style = TextStyle(
-                color = White,
-                fontSize = 18.sp,
-                fontFamily = fontFamily
-            ),
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
+        // ── Header row: title (left) + mute toggle (right half) ─────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                text = "notifications",
+                style = TextStyle(
+                    color = White,
+                    fontSize = 18.sp,
+                    fontFamily = fontFamily,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            if (hasDndToggle) {
+                MuteToggleCell(
+                    enabled = messagesMuted,
+                    focused = dndToggleFocused,
+                    fontFamily = fontFamily,
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(dndToggleFR)
+                        .onFocusChanged { dndToggleFocused = it.isFocused }
+                        .focusable(),
+                    onClick = { onToggleMessagesMuted?.invoke(!messagesMuted) },
+                )
+            }
+        }
 
         if (hasNotifications) {
             ClearAllButton(
@@ -278,28 +294,14 @@ fun NotificationsScreen(
             )
             Spacer(Modifier.weight(1f))
         }
-
-        // ── DND toggle (always at bottom) ────────────────────────────
-        if (hasDndToggle) {
-            Spacer(Modifier.height(8.dp))
-            DndToggleButton(
-                enabled = messagesMuted,
-                focused = dndToggleFocused,
-                fontFamily = fontFamily,
-                modifier = Modifier
-                    .focusRequester(dndToggleFR)
-                    .onFocusChanged { dndToggleFocused = it.isFocused }
-                    .focusable(),
-                onClick = { onToggleMessagesMuted?.invoke(!messagesMuted) }
-            )
-        }
     }
 }
 
 // ── Private composables ──────────────────────────────────────────────────────
 
+/** Right-half cell of the header row — shows the mute toggle. */
 @Composable
-private fun DndToggleButton(
+private fun MuteToggleCell(
     enabled: Boolean,
     focused: Boolean,
     fontFamily: FontFamily,
@@ -308,15 +310,26 @@ private fun DndToggleButton(
 ) {
     Row(
         modifier = modifier
-            .fillMaxWidth()
             .background(if (focused) Yellow else Color.Transparent)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() }
             ) { onClick() },
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End,
     ) {
+        BasicText(
+            text = "mute texts",
+            style = TextStyle(
+                fontFamily = fontFamily,
+                fontSize = 14.sp,
+                color = if (focused) Black else White,
+            ),
+        )
+
+        Spacer(Modifier.width(8.dp))
+
         // Toggle pill
         val trackColor = when {
             enabled && focused -> Black
@@ -327,30 +340,19 @@ private fun DndToggleButton(
 
         Box(
             modifier = Modifier
-                .size(width = 38.dp, height = 22.dp)
-                .clip(RoundedCornerShape(11.dp))
+                .size(width = 34.dp, height = 20.dp)
+                .clip(RoundedCornerShape(10.dp))
                 .background(trackColor),
             contentAlignment = if (enabled) Alignment.CenterEnd else Alignment.CenterStart,
         ) {
             Box(
                 modifier = Modifier
                     .padding(2.dp)
-                    .size(18.dp)
-                    .clip(RoundedCornerShape(9.dp))
+                    .size(16.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(thumbColor)
             )
         }
-
-        Spacer(Modifier.width(14.dp))
-
-        BasicText(
-            text = "mute all texts",
-            style = TextStyle(
-                fontFamily = fontFamily,
-                fontSize = 16.sp,
-                color = if (focused) Black else White,
-            ),
-        )
     }
 }
 

@@ -12,8 +12,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -38,8 +38,8 @@ import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
  * Matches the map in AppRow.kt for consistency.
  */
 private val gridVectorIcons: Map<String, ImageVector> = mapOf(
-    "com.openbubbles.messaging" to Icons.Filled.Chat,
-    GOOGLE_MESSAGES to Icons.Filled.Chat,
+    "com.openbubbles.messaging" to Icons.Filled.Psychology,
+    GOOGLE_MESSAGES to Icons.Filled.Psychology,
     "com.ubercab.uberlite" to Icons.Filled.DirectionsCar,
 )
 
@@ -48,7 +48,7 @@ private val gridVectorIcons: Map<String, ImageVector> = mapOf(
  *
  * Sizing targets: 240×320 screen @ 110 dpi.
  *   3 cells across ≈ 72dp each (with 4dp gaps + 8dp padding).
- *   Icon: 48dp, Label: 13sp (2 lines max).
+ *   Icon: 58dp, Label: 12sp (2 lines max).
  */
 @Composable
 fun MainAppGridCell(
@@ -78,24 +78,24 @@ fun MainAppGridCell(
                 Image(
                     painter = rememberVectorPainter(vectorIcon),
                     contentDescription = item.label,
-                    modifier = Modifier.size(48.dp),
+                    modifier = Modifier.size(58.dp),
                     colorFilter = ColorFilter.tint(iconTint),
                 )
             } else {
                 val iconBitmap = remember(item.icon) {
-                    item.icon.toBitmapSafely(96, 96)
+                    item.icon.toBitmapSafely(116, 116)
                 }
                 if (iconBitmap != null) {
                     Image(
                         bitmap = iconBitmap.asImageBitmap(),
                         contentDescription = item.label,
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(58.dp),
                     )
                 } else {
                     // Fallback placeholder
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(58.dp)
                             .background(
                                 if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.Gray,
                                 shape = RoundedCornerShape(4.dp),
@@ -104,13 +104,13 @@ fun MainAppGridCell(
                 }
             }
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(3.dp))
 
             BasicText(
                 text = item.label,
                 style = TextStyle(
                     fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     color = textColor,
                     textAlign = TextAlign.Center,
                 ),

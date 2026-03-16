@@ -35,27 +35,109 @@ import com.offlineinc.dumbdownlauncher.ui.AppListScreen
 class AllAppsActivity : AppCompatActivity() {
 
     companion object {
-        @Volatile private var cachedApps: List<AppItem>? = null
+        @Volatile var cachedApps: List<AppItem>? = null
         fun invalidateCache() { cachedApps = null }
-    }
 
-    private val hiddenPackages = setOf(
-        // smart txt (shown on main screen instead)
-        "com.openbubbles.messaging",
-        "com.offline.googlemessageslauncher",
-        // uber (handled by launcher WebViewActivity)
-        "com.offline.uberlauncher",
-        // launchers
-        "com.offlineinc.dumbdownlauncher",
-        "com.android.launcher3",
-        // apps to hide
-        "com.topjohnwu.magisk",           // Magisk
-        "com.android.chrome",             // Chrome
-        "com.android.quicksearchbox",     // Search
-        "com.iqqijni.dvt912key",          // 12-key keyboard
-        "com.polariswireless.zclient",    // ZClient
-        "com.mediatek.engineermode",      // MTK engineer mode
-    )
+        private val hiddenPackages = setOf(
+            // smart txt (shown on main screen instead)
+            "com.openbubbles.messaging",
+            "com.offline.googlemessageslauncher",
+            // uber (handled by launcher WebViewActivity)
+            "com.offline.uberlauncher",
+            // launchers
+            "com.offlineinc.dumbdownlauncher",
+            "com.android.launcher3",
+            // apps to hide
+            "com.topjohnwu.magisk",           // Magisk
+            "com.android.chrome",             // Chrome
+            "com.android.quicksearchbox",     // Search
+            "com.iqqijni.dvt912key",          // 12-key keyboard
+            "com.polariswireless.zclient",    // ZClient
+            "com.mediatek.engineermode",      // MTK engineer mode
+        )
+
+        /**
+         * Pre-build the app list on a background thread so it's ready before
+         * the user opens All Apps. Safe to call multiple times — no-ops when
+         * cache is already warm.
+         */
+        fun warmCacheAsync(context: android.content.Context) {
+            if (cachedApps != null) return
+            Thread {
+                if (cachedApps != null) return@Thread   // double-checked
+                cachedApps = buildAppList(context)
+            }.start()
+        }
+
+        /** Build the full app list. Runs on whatever thread it's called from. */
+        fun buildAppList(context: android.content.Context): List<AppItem> {
+            val pm = context.packageManager
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+
+            val resolved = pm.queryIntentActivities(intent, 0)
+
+            val appItems = resolved.mapNotNull { ri ->
+                val activityInfo = ri.activityInfo ?: return@mapNotNull null
+                val pkg = activityInfo.packageName
+                if (pkg in hiddenPackages) return@mapNotNull null
+                val appInfo = activityInfo.applicationInfo
+                try {
+                    val defaultLabel = pm.getApplicationLabel(appInfo).toString()
+                    val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
+                        .getLabel(pkg, defaultLabel)
+                        .lowercase()
+                    val defaultIcon = pm.getApplicationIcon(appInfo)
+                    val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
+                        .getIcon(context, pkg, defaultIcon)
+                    val component = ComponentName(activityInfo.packageName, activityInfo.name)
+                    AppItem(pkg, label, icon, component)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+                .distinctBy { it.packageName }
+                .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+                .toMutableList()
+
+            appItems.add(AppItem(
+                packageName = CHANGE_PLATFORM,
+                label = "smart os",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+            appItems.add(AppItem(
+                packageName = CHECK_UPDATES,
+                label = "updates",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+            appItems.add(AppItem(
+                packageName = WEB_KEYBOARD,
+                label = "type sync",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+                isToggleOn = false,
+            ))
+
+            // Pin "device pairing" at the very top when not yet paired.
+            // ContentProvider query — may fail silently if companion app absent.
+            val pairing = try {
+                com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(context)
+            } catch (_: Exception) { null }
+            if (pairing == null) {
+                appItems.add(0, AppItem(
+                    packageName = DEVICE_PAIRING,
+                    label = "device pairing",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                ))
+            }
+
+            return appItems
+        }
+    }
 
     private val items = mutableStateListOf<AppItem>()
     private lateinit var controller: LauncherController
@@ -204,7 +286,7 @@ class AllAppsActivity : AppCompatActivity() {
 
         if (cached == null) {
             Thread {
-                val loaded = buildAppList()
+                val loaded = buildAppList(applicationContext)
                 cachedApps = loaded
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
@@ -240,6 +322,42 @@ class AllAppsActivity : AppCompatActivity() {
         // Keep the ON/OFF badge in sync whenever the user navigates back to this
         // screen — the service state is the source of truth.
         setTypeSyncToggle(WebKeyboardService.isRunning)
+        // Re-check device pairing status — update the pinned "device pairing" row
+        // live so it disappears as soon as the user finishes pairing without needing
+        // a restart or a full cache invalidation.
+        refreshDevicePairingRow()
+    }
+
+    /**
+     * Show or hide the "device pairing" row based on current pairing status.
+     * The ContentProvider query runs on a background thread to avoid blocking
+     * the main thread (it can time-out when the companion app isn't installed).
+     */
+    private fun refreshDevicePairingRow() {
+        Thread {
+            val isPaired = try {
+                com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
+                    .readPairing(applicationContext) != null
+            } catch (_: Exception) { false }
+
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                val existingIdx = items.indexOfFirst { it.packageName == DEVICE_PAIRING }
+                if (isPaired && existingIdx >= 0) {
+                    items.removeAt(existingIdx)
+                    cachedApps = cachedApps?.filter { it.packageName != DEVICE_PAIRING }
+                } else if (!isPaired && existingIdx < 0 && items.isNotEmpty()) {
+                    val pairingItem = AppItem(
+                        packageName = DEVICE_PAIRING,
+                        label = "device pairing",
+                        icon = packageManager.defaultActivityIcon,
+                        launchComponent = null
+                    )
+                    items.add(0, pairingItem)
+                    cachedApps = listOf(pairingItem) + (cachedApps ?: emptyList())
+                }
+            }
+        }.start()
     }
 
     private fun launchApp(item: AppItem) {
@@ -281,80 +399,6 @@ class AllAppsActivity : AppCompatActivity() {
         if (idx >= 0) items[idx] = items[idx].copy(isToggleOn = enabled)
     }
 
-    private fun buildAppList(): List<AppItem> {
-        val pm = packageManager
-        val intent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-        }
-
-        val resolved = pm.queryIntentActivities(intent, 0)
-
-        val appItems = resolved.mapNotNull { ri ->
-            val activityInfo = ri.activityInfo ?: return@mapNotNull null
-            val pkg = activityInfo.packageName
-            if (pkg in hiddenPackages) return@mapNotNull null
-            val appInfo = activityInfo.applicationInfo
-            try {
-                val defaultLabel = pm.getApplicationLabel(appInfo).toString()
-                val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
-                    .getLabel(pkg, defaultLabel)
-                    .lowercase()
-                val defaultIcon = pm.getApplicationIcon(appInfo)
-                val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
-                    .getIcon(this, pkg, defaultIcon)
-                val component = ComponentName(activityInfo.packageName, activityInfo.name)
-                AppItem(pkg, label, icon, component)
-            } catch (_: Exception) {
-                null
-            }
-        }
-            .distinctBy { it.packageName }
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
-            .toMutableList()
-
-        appItems.add(
-            AppItem(
-                packageName = CHANGE_PLATFORM,
-                label = "smart os",
-                icon = pm.defaultActivityIcon,
-                launchComponent = null
-            )
-        )
-
-        appItems.add(
-            AppItem(
-                packageName = CHECK_UPDATES,
-                label = "updates",
-                icon = pm.defaultActivityIcon,
-                launchComponent = null
-            )
-        )
-
-        appItems.add(
-            AppItem(
-                packageName = WEB_KEYBOARD,
-                label = "type sync",
-                icon = pm.defaultActivityIcon,
-                launchComponent = null,
-                isToggleOn = false
-            )
-        )
-
-        // Pin "device pairing" at the very top when not yet paired
-        val pairing = com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(this)
-        if (pairing == null) {
-            appItems.add(0,
-                AppItem(
-                    packageName = DEVICE_PAIRING,
-                    label = "device pairing",
-                    icon = pm.defaultActivityIcon,
-                    launchComponent = null
-                )
-            )
-        }
-
-        return appItems
-    }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val result = KeyDispatcher.handle(event)

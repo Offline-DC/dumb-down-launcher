@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
@@ -46,6 +47,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var controller: LauncherController
     private val showPlatformDialog = mutableStateOf(false)
     private val showRestartDialog = mutableStateOf(false)
+    // Incremented on every onResume so HomeScreen re-fetches the wallpaper
+    // immediately if the user changed it while away.
+    private val wallpaperRefreshKey = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
@@ -79,10 +83,12 @@ class MainActivity : AppCompatActivity() {
             val muted by dndMuteManager.muted.collectAsState()
             val showDialog by showPlatformDialog
             val showRestart by showRestartDialog
+            val wallpaperKey by wallpaperRefreshKey
 
             Box(modifier = Modifier.fillMaxSize()) {
                 HomeScreen(
                     messagesMuted = muted,
+                    wallpaperRefreshKey = wallpaperKey,
                     onOpenAppsGrid = {
                         startActivity(Intent(this@MainActivity, MainAppsGridActivity::class.java))
                         overridePendingTransition(0, 0)
@@ -111,6 +117,10 @@ class MainActivity : AppCompatActivity() {
                                 Log.d("PLATFORM", "onChoose: skipped/dismissed, not saving")
                             }
                             showPlatformDialog.value = false
+                            // Always bust the grid cache after the dialog is dismissed
+                            // (whether ios, android, or skip) so the next grid open
+                            // rebuilds with the correct — or absent — messaging app.
+                            MainAppsGridActivity.invalidateItemCache()
                             if (previousChoice != null && previousChoice != choice) {
                                 showRestartDialog.value = true
                             }
@@ -162,6 +172,11 @@ class MainActivity : AppCompatActivity() {
         if (PlatformPreferences.consumeShowDialog(this)) {
             showPlatformDialog.value = true
         }
+        // Bump the key so HomeScreen re-fetches the wallpaper in case the user
+        // changed it while the launcher was in the background.
+        wallpaperRefreshKey.intValue++
+        // Pre-warm the All Apps list in the background so it's instant when opened.
+        AllAppsActivity.warmCacheAsync(applicationContext)
     }
 
     /**
@@ -223,6 +238,14 @@ class MainActivity : AppCompatActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
             Log.d("DUMB_KEYS", "DOWN keyCode=${event.keyCode} scanCode=${event.scanCode} unicode=${event.unicodeChar}")
+        }
+
+        // While the platform-picker (or restart) dialog is on screen, let all key
+        // events flow straight to Compose so the dialog's onPreviewKeyEvent handles
+        // Up/Down/Enter/Back correctly.  Without this guard, KeyDispatcher intercepts
+        // Enter/Center and launches the 3×3 grid before the dialog can react.
+        if (showPlatformDialog.value || showRestartDialog.value) {
+            return super.dispatchKeyEvent(event)
         }
 
         val result = KeyDispatcher.handle(event)

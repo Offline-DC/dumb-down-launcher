@@ -37,7 +37,7 @@ fun DndStatusIndicator(
     Row(
         modifier = modifier
             .background(
-                color = DumbTheme.Colors.Yellow.copy(alpha = 0.85f),
+                color = DumbTheme.Colors.Yellow.copy(alpha = 0.40f),
                 shape = RoundedCornerShape(6.dp),
             )
             .padding(horizontal = 6.dp, vertical = 3.dp),

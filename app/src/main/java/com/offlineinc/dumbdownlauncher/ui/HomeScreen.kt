@@ -32,7 +32,6 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,6 +64,7 @@ fun HomeScreen(
     onOpenNotifications: () -> Unit,
     onOpenAllApps: () -> Unit,
     onDpadDirection: (DpadDirection) -> Unit,
+    wallpaperRefreshKey: Int = 0,
 ) {
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
@@ -87,8 +87,10 @@ fun HomeScreen(
     }
 
     // ── Wallpaper ────────────────────────────────────────────────────────
+    // Re-keyed on wallpaperRefreshKey so a new bitmap is fetched whenever
+    // the Activity signals that the wallpaper may have changed (e.g. onResume).
     var wallpaperBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(wallpaperRefreshKey) {
         wallpaperBitmap = withContext(Dispatchers.IO) {
             try {
                 val wm = WallpaperManager.getInstance(context)
@@ -162,14 +164,6 @@ fun HomeScreen(
             )
         }
 
-        // ── DND status badge ─────────────────────────────────────────────
-        DndStatusIndicator(
-            enabled = messagesMuted,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp),
-        )
-
         // ── Clock (upper area) ─────────────────────────────────────────
         HomeClockDisplay(
             timeText = timeText,
@@ -179,7 +173,7 @@ fun HomeScreen(
                 .padding(top = 36.dp),
         )
 
-        // ── Bottom: black bar with soft key labels ────────────────────
+        // ── Bottom bar: notifications | [mute badge] | all apps ──────
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -187,19 +181,22 @@ fun HomeScreen(
                 .background(Color.Black)
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicText(
                 text = "notifications",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow,
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
             )
+            // Mute badge in the center — only visible when muted
+            DndStatusIndicator(enabled = messagesMuted)
             BasicText(
                 text = "all apps",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow,
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
@@ -228,13 +225,6 @@ private fun PreviewHomeScreen() {
             .fillMaxSize()
             .background(DumbTheme.Colors.Black)
     ) {
-        DndStatusIndicator(
-            enabled = false,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp),
-        )
-
         HomeClockDisplay(
             timeText = "9:41",
             dateText = "sun, mar 15",
@@ -250,19 +240,21 @@ private fun PreviewHomeScreen() {
                 .background(Color.Black)
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicText(
                 text = "notifications",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow,
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
             )
+            DndStatusIndicator(enabled = false)
             BasicText(
                 text = "all apps",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow,
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
@@ -284,13 +276,6 @@ private fun PreviewHomeScreenDndOn() {
             .fillMaxSize()
             .background(DumbTheme.Colors.Black)
     ) {
-        DndStatusIndicator(
-            enabled = true,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp),
-        )
-
         HomeClockDisplay(
             timeText = "2:30",
             dateText = "mon, mar 16",
@@ -306,19 +291,21 @@ private fun PreviewHomeScreenDndOn() {
                 .background(Color.Black)
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicText(
                 text = "notifications",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow,
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
             )
+            DndStatusIndicator(enabled = true)
             BasicText(
                 text = "all apps",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow,
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),

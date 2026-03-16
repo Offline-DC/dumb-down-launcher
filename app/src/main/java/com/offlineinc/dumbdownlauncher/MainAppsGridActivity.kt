@@ -1,7 +1,9 @@
 package com.offlineinc.dumbdownlauncher
 
+import android.app.WallpaperManager
 import android.content.ComponentName
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -15,6 +17,8 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.browser.customtabs.CustomTabsServiceConnection
 import androidx.browser.customtabs.CustomTabsSession
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.core.graphics.drawable.toBitmap
 import com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
 import com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
@@ -30,6 +34,24 @@ import com.offlineinc.dumbdownlauncher.ui.MainAppGridScreen
  * Back key returns to the homepage (MainActivity).
  */
 class MainAppsGridActivity : AppCompatActivity() {
+
+    companion object {
+        /**
+         * Process-level cache for the 9 fixed grid apps.
+         * Built once and reused on every subsequent launch for instant display.
+         * Cleared when the platform preference changes (messaging app swap).
+         */
+        @Volatile var cachedGridItems: List<AppItem>? = null
+
+        /**
+         * Process-level wallpaper bitmap cache shared with the home screen.
+         * Avoids re-reading WallpaperManager on every grid open.
+         */
+        @Volatile var cachedWallpaper: Bitmap? = null
+
+        fun invalidateItemCache() { cachedGridItems = null }
+        fun invalidateWallpaperCache() { cachedWallpaper = null }
+    }
 
     private val items = mutableStateListOf<AppItem>()
     private lateinit var controller: LauncherController
@@ -63,9 +85,13 @@ class MainAppsGridActivity : AppCompatActivity() {
             onNoAnim = { overridePendingTransition(0, 0) }
         )
 
+        // Use cached wallpaper immediately if available, then refresh in background.
+        val wallpaperState = mutableStateOf(cachedWallpaper)
+
         setContent {
             MainAppGridScreen(
                 items = items,
+                wallpaperBitmap = wallpaperState.value,
                 onActivate = { item -> launchGridApp(item) },
                 onBack = { finish() },
             )
@@ -73,16 +99,44 @@ class MainAppsGridActivity : AppCompatActivity() {
 
         bindChromeWarmup()
 
-        Thread {
-            val loaded = buildGridAppList()
-            runOnUiThread {
-                if (isDestroyed) return@runOnUiThread
-                items.addAll(loaded)
-                if (items.isEmpty()) {
-                    Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
+        // Load grid items from cache (instant) or build them on a background thread.
+        val cachedItems = cachedGridItems
+        if (cachedItems != null) {
+            items.addAll(cachedItems)
+        } else {
+            Thread {
+                val loaded = buildGridAppList()
+                cachedGridItems = loaded
+                // Persist the platform key used when this cache was built so
+                // onResume can detect staleness without a full rebuild.
+                val platform = PlatformPreferences.getChoice(this)
+                getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+                    .edit().putString("grid_cache_platform", platform).apply()
+                runOnUiThread {
+                    if (isDestroyed) return@runOnUiThread
+                    items.clear()
+                    items.addAll(loaded)
+                    if (items.isEmpty()) {
+                        Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
+                    }
                 }
-            }
-        }.start()
+            }.start()
+        }
+
+        // Load wallpaper on a background thread — update state when ready.
+        if (cachedWallpaper == null) {
+            Thread {
+                val bmp = try {
+                    val wm = WallpaperManager.getInstance(applicationContext)
+                    val drawable = wm.peekDrawable() ?: wm.drawable
+                    drawable?.toBitmap()
+                } catch (_: Exception) { null }
+                cachedWallpaper = bmp
+                runOnUiThread {
+                    if (!isDestroyed) wallpaperState.value = bmp
+                }
+            }.start()
+        }
     }
 
     override fun onResume() {
@@ -90,6 +144,14 @@ class MainAppsGridActivity : AppCompatActivity() {
         MouseAccessibilityService.forceDisable(this)
         overridePendingTransition(0, 0)
         bindChromeWarmup()
+        // If the platform choice changed while we were away, the cached list has
+        // the wrong messaging app — rebuild it on the next open.
+        val currentPlatform = PlatformPreferences.getChoice(this)
+        val cachedPlatformKey = getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+            .getString("grid_cache_platform", null)
+        if (currentPlatform != cachedPlatformKey) {
+            invalidateItemCache()
+        }
     }
 
     override fun onDestroy() {
@@ -110,10 +172,13 @@ class MainAppsGridActivity : AppCompatActivity() {
         val result = mutableListOf<AppItem>()
 
         val platform = PlatformPreferences.getChoice(this)
+        // Only include smart txt when the user has actually chosen a platform.
+        // null / "skipped" means the picker was dismissed — omit the slot entirely
+        // rather than guessing.
         val messagingPkg = when (platform) {
-            "ios" -> "com.openbubbles.messaging"
+            "ios"     -> "com.openbubbles.messaging"
             "android" -> GOOGLE_MESSAGES
-            else -> null
+            else      -> null   // not chosen yet — leave slot empty
         }
 
         val allowedPackages = listOfNotNull(
@@ -132,6 +197,24 @@ class MainAppsGridActivity : AppCompatActivity() {
             when (pkg) {
                 GOOGLE_MESSAGES -> {
                     result.add(AppItem(GOOGLE_MESSAGES, "smart txt", packageManager.defaultActivityIcon, null, false))
+                    continue
+                }
+                "com.openbubbles.messaging" -> {
+                    // Use the installed OpenBubbles app; if it isn't installed yet
+                    // (e.g. mid-setup or after a reinstall) fall back to the web app
+                    // so the smart txt slot is never empty.
+                    try {
+                        val appInfo = packageManager.getApplicationInfo(pkg, 0)
+                        val defaultLabel = packageManager.getApplicationLabel(appInfo).toString()
+                        val label = AppLabelOverrides.getLabel(pkg, defaultLabel).lowercase()
+                        val defaultIcon = packageManager.getApplicationIcon(appInfo)
+                        val icon = AppIconOverrides.getIcon(this, pkg, defaultIcon)
+                        val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, pkg)
+                        result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
+                    } catch (_: Exception) {
+                        // OpenBubbles not installed — fall back to web Google Messages
+                        result.add(AppItem(GOOGLE_MESSAGES, "smart txt", packageManager.defaultActivityIcon, null, false))
+                    }
                     continue
                 }
             }
