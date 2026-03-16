@@ -89,7 +89,7 @@ fun MainAppGridScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 6.dp, vertical = 6.dp)
+                .padding(horizontal = 2.dp, vertical = 6.dp)
                 .focusRequester(focusRequester)
                 .focusable()
                 .onPreviewKeyEvent { event ->

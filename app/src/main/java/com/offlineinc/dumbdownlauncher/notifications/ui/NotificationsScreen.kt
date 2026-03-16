@@ -115,7 +115,7 @@ fun NotificationsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Black)
-            .padding(12.dp)
+            .padding(8.dp)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
@@ -223,7 +223,7 @@ fun NotificationsScreen(
                 text = "notifications",
                 style = TextStyle(
                     color = White,
-                    fontSize = 18.sp,
+                    fontSize = 14.sp,
                     fontFamily = fontFamily,
                 ),
                 modifier = Modifier.weight(1f),
@@ -255,7 +255,7 @@ fun NotificationsScreen(
                 onClick = onClearAll
             )
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
 
             Box(
                 modifier = Modifier
@@ -311,7 +311,7 @@ private fun MuteToggleCell(
     Row(
         modifier = modifier
             .background(if (focused) Yellow else Color.Transparent)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() }
@@ -323,12 +323,12 @@ private fun MuteToggleCell(
             text = "mute texts",
             style = TextStyle(
                 fontFamily = fontFamily,
-                fontSize = 14.sp,
+                fontSize = 11.sp,
                 color = if (focused) Black else White,
             ),
         )
 
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(5.dp))
 
         // Toggle pill
         val trackColor = when {
@@ -340,16 +340,16 @@ private fun MuteToggleCell(
 
         Box(
             modifier = Modifier
-                .size(width = 34.dp, height = 20.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .size(width = 28.dp, height = 16.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .background(trackColor),
             contentAlignment = if (enabled) Alignment.CenterEnd else Alignment.CenterStart,
         ) {
             Box(
                 modifier = Modifier
                     .padding(2.dp)
-                    .size(16.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .size(12.dp)
+                    .clip(RoundedCornerShape(6.dp))
                     .background(thumbColor)
             )
         }
@@ -368,7 +368,7 @@ private fun ClearAllButton(
         modifier = modifier
             .wrapContentWidth()
             .background(if (focused) Yellow else Color.Transparent)
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .clickable(
@@ -380,7 +380,7 @@ private fun ClearAllButton(
             text = "clear all",
             style = TextStyle(
                 color = if (focused) Black else Yellow,
-                fontSize = 16.sp,
+                fontSize = 14.sp,
                 fontFamily = fontFamily
             )
         )
@@ -396,7 +396,7 @@ private fun EmptyState(
         text = "none... ur free!",
         style = TextStyle(
             color = Gray,
-            fontSize = 16.sp,
+            fontSize = 14.sp,
             fontFamily = fontFamily
         ),
         modifier = modifier
@@ -416,7 +416,7 @@ private fun NotificationRow(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (selected) Yellow else Color.Transparent)
-            .padding(14.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() }
@@ -426,17 +426,17 @@ private fun NotificationRow(
             text = item.title,
             style = TextStyle(
                 color = if (selected) Black else White,
-                fontSize = 16.sp,
+                fontSize = 14.sp,
                 fontFamily = fontFamily
             ),
             maxLines = 1
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(2.dp))
         BasicText(
             text = item.text,
             style = TextStyle(
                 color = if (selected) Black else Gray,
-                fontSize = 14.sp,
+                fontSize = 12.sp,
                 fontFamily = fontFamily
             ),
             maxLines = 2

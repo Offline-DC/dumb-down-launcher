@@ -19,7 +19,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
-import com.offlineinc.dumbdownlauncher.launcher.DpadShortcutResolver
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
@@ -180,58 +179,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Launch the app assigned to a D-pad direction in TCL Flip 2 settings.
-     * Reads from Settings.System "keyshortcut_{direction}key".
+     * Launch a fixed app for each D-pad direction on the home screen.
+     *   Up    → Settings
+     *   Down  → Call history (Dialer)
+     *   Left  → Camera
+     *   Right → Contacts
      */
     private fun launchDpadShortcut(direction: DpadDirection) {
-        val resolverDirection = when (direction) {
-            DpadDirection.UP    -> DpadShortcutResolver.Direction.UP
-            DpadDirection.DOWN  -> DpadShortcutResolver.Direction.DOWN
-            DpadDirection.LEFT  -> DpadShortcutResolver.Direction.LEFT
-            DpadDirection.RIGHT -> DpadShortcutResolver.Direction.RIGHT
+        val pkg = when (direction) {
+            DpadDirection.UP    -> "com.android.settings"
+            DpadDirection.DOWN  -> "com.android.dialer"
+            DpadDirection.LEFT  -> "com.tcl.camera"
+            DpadDirection.RIGHT -> "com.android.contacts"
         }
 
-        val intent = DpadShortcutResolver.buildLaunchIntent(this, resolverDirection)
-        if (intent != null) {
-            try {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(pkg)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
                 overridePendingTransition(0, 0)
-            } catch (e: Exception) {
-                Log.w("MainActivity", "Failed to launch shortcut for $direction: ${e.message}")
-                Toast.makeText(this, "Shortcut app not found", Toast.LENGTH_SHORT).show()
+            } else {
+                Log.w("MainActivity", "No launch intent for $pkg")
+                Toast.makeText(this, "App not found", Toast.LENGTH_SHORT).show()
             }
-        } else {
-            // No shortcut configured — open TCL Settings so user can set one up
-            openTclKeyShortcutSettings()
-        }
-    }
-
-    /**
-     * Opens the TCL Flip 2 Settings app. Tries the key shortcut
-     * settings page first, falls back to main settings.
-     */
-    private fun openTclKeyShortcutSettings() {
-        try {
-            // TCL key shortcut settings activity
-            val intent = Intent().apply {
-                component = android.content.ComponentName(
-                    "com.android.settings",
-                    "com.android.settings.Settings\$KeyShortcutSettingsActivity"
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-            overridePendingTransition(0, 0)
-        } catch (_: Exception) {
-            try {
-                // Fallback: open main Settings
-                startActivity(Intent(android.provider.Settings.ACTION_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-                overridePendingTransition(0, 0)
-            } catch (_: Exception) {
-                Toast.makeText(this, "Set shortcuts in Settings → Key shortcuts", Toast.LENGTH_LONG).show()
-            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to launch $pkg for $direction: ${e.message}")
+            Toast.makeText(this, "App not found", Toast.LENGTH_SHORT).show()
         }
     }
 

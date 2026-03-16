@@ -35,7 +35,7 @@ fun HomeClockDisplay(
             text = timeText,
             style = TextStyle(
                 fontFamily    = font,
-                fontSize      = 46.sp,
+                fontSize      = 54.sp,
                 color         = DumbTheme.Colors.White,
                 letterSpacing = (-1).sp,
                 textAlign     = TextAlign.Center,
@@ -46,7 +46,7 @@ fun HomeClockDisplay(
             text = dateText,
             style = TextStyle(
                 fontFamily    = font,
-                fontSize      = 14.sp,
+                fontSize      = 16.sp,
                 color         = DumbTheme.Colors.White.copy(alpha = 0.7f),
                 letterSpacing = 0.5.sp,
                 textAlign     = TextAlign.Center,

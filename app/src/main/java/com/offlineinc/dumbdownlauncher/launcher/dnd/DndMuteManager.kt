@@ -1,153 +1,94 @@
 package com.offlineinc.dumbdownlauncher.launcher.dnd
 
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.provider.Settings
-import android.util.Log
+import com.offlineinc.dumbdownlauncher.notifications.DumbNotificationListenerService
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
+/**
+ * Manages the "mute all texts" preference flag.
+ *
+ * The actual silencing is done in [DumbNotificationListenerService]
+ * via [requestListenerHints(HINT_HOST_DISABLE_NOTIFICATION_EFFECTS)].
+ * When muted, the system suppresses sound and vibration for all
+ * notifications while keeping them fully visible in the status bar
+ * and notification shade.
+ *
+ * Call ringtones are unaffected — they are played by the telephony /
+ * InCallUI via STREAM_RING, completely outside the notification system.
+ *
+ * This approach does NOT touch AudioManager, Do Not Disturb, ringer
+ * mode, or any volume stream — so the phone's normal silent / vibrate /
+ * ringer controls stay fully functional for calls and everything else.
+ */
 class DndMuteManager(
     private val appContext: Context,
     private val scope: CoroutineScope,
 ) {
-    private val mutex = Mutex()
-
-    private val nm: NotificationManager by lazy {
-        appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    private val prefs by lazy {
+        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
     private val _muted = MutableStateFlow(false)
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
 
-    private val _policyGranted = MutableStateFlow(false)
-    val policyGranted: StateFlow<Boolean> = _policyGranted.asStateFlow()
+    // ── public API ──────────────────────────────────────────────────────
 
     /**
-     * Call on startup to sync state from prefs and apply to system if needed.
-     * Defaults to muted=true if pref has never been set (fresh install).
+     * Call on startup. Reads saved pref (default = true / muted) and
+     * publishes to both [muted] flow and [MuteState] singleton, then
+     * tells the listener service to apply the hint.
      */
     fun refreshFromSystem() {
         scope.launch {
-            val granted = hasPolicyAccess()
-            _policyGranted.value = granted
-
-            val prefs = appContext.getSharedPreferences("launcher_prefs", Context.MODE_PRIVATE)
-            val savedMuted = prefs.getBoolean("messages_muted", true) // default true
-
-            if (granted) {
-                if (savedMuted) {
-                    applySystem(true)
-                    _muted.value = true
-                } else {
-                    _muted.value = isDndOn()
-                }
-            } else {
-                _muted.value = savedMuted
-            }
+            val wantMuted = prefs.getBoolean(KEY_MESSAGES_MUTED, true)
+            _muted.value = wantMuted
+            MuteState.muted = wantMuted
+            notifyService()
         }
     }
 
     /**
-     * Attempt to set DND to "muted" (true) or "not muted" (false).
+     * Toggle mute on / off. Persists immediately and tells the
+     * listener service to update its hint.
      */
     fun setMuted(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_MESSAGES_MUTED, enabled).apply()
         _muted.value = enabled
+        MuteState.muted = enabled
+        notifyService()
+    }
 
-        scope.launch {
-            mutex.withLock {
-                val granted = hasPolicyAccess()
-                _policyGranted.value = granted
+    // ── internals ───────────────────────────────────────────────────────
 
-                if (!granted) {
-                    _muted.value = false
-                    return@withLock
-                }
-
-                applySystem(enabled)
-
-                delay(80)
-
-                val real = isDndOn()
-                _muted.value = real
+    private fun notifyService() {
+        try {
+            val intent = Intent(appContext, DumbNotificationListenerService::class.java).apply {
+                action = DumbNotificationListenerService.ACTION_UPDATE_MUTE
             }
+            appContext.startService(intent)
+        } catch (_: Exception) {
+            // Service may not be bound yet — it will pick up MuteState
+            // in onListenerConnected().
         }
-    }
-
-    fun makePolicyAccessIntent(): Intent {
-        return Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-    }
-
-    fun hasPolicyAccess(): Boolean {
-        return nm.isNotificationPolicyAccessGranted
-    }
-
-    private suspend fun applySystem(enabled: Boolean) {
-        withContext(Dispatchers.Main) {
-            try {
-                if (enabled) {
-                    applyMuteSystemDirect(appContext)
-                } else {
-                    nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
-                    restoreFullPolicy()
-                }
-            } catch (t: Throwable) {
-                Log.e("DUMB_DND", "Failed to set DND", t)
-            }
-        }
-    }
-
-    private fun restoreFullPolicy() {
-        val categories =
-            NotificationManager.Policy.PRIORITY_CATEGORY_CALLS or
-                    NotificationManager.Policy.PRIORITY_CATEGORY_REPEAT_CALLERS or
-                    NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS or
-                    NotificationManager.Policy.PRIORITY_CATEGORY_MEDIA or
-                    NotificationManager.Policy.PRIORITY_CATEGORY_MESSAGES or
-                    NotificationManager.Policy.PRIORITY_CATEGORY_CONVERSATIONS
-
-        val policy = NotificationManager.Policy(
-            categories,
-            NotificationManager.Policy.PRIORITY_SENDERS_ANY,
-            NotificationManager.Policy.PRIORITY_SENDERS_ANY
-        )
-
-        nm.notificationPolicy = policy
-    }
-
-    private fun isDndOn(): Boolean {
-        return nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
     }
 
     companion object {
-        fun applyMuteSystemDirect(context: Context) {
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (!nm.isNotificationPolicyAccessGranted) return
-
-            val categories =
-                NotificationManager.Policy.PRIORITY_CATEGORY_CALLS or
-                        NotificationManager.Policy.PRIORITY_CATEGORY_REPEAT_CALLERS or
-                        NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS or
-                        NotificationManager.Policy.PRIORITY_CATEGORY_MEDIA
-
-            val policy = NotificationManager.Policy(
-                categories,
-                NotificationManager.Policy.PRIORITY_SENDERS_ANY,
-                NotificationManager.Policy.PRIORITY_SENDERS_ANY
-            )
-            nm.notificationPolicy = policy
-            nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
-        }
+        private const val PREFS_NAME = "launcher_prefs"
+        private const val KEY_MESSAGES_MUTED = "messages_muted"
     }
+}
+
+/**
+ * Simple shared flag so the [DumbNotificationListenerService] can
+ * read the mute state without needing a Context lookup on every
+ * notification. Updated from [DndMuteManager.setMuted] and on startup.
+ */
+object MuteState {
+    @Volatile
+    var muted: Boolean = false
 }

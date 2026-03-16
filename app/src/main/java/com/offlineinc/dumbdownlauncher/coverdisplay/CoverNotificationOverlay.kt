@@ -66,7 +66,7 @@ internal fun CoverNotificationOverlay(overlay: OverlayState?) {
                 text     = o.line2,
                 style    = TextStyle(
                     fontFamily = font,
-                    fontSize   = 10.sp,
+                    fontSize   = 8.sp,
                     color      = White,
                     textAlign  = TextAlign.Center,
                 ),

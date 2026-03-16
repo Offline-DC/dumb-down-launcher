@@ -1,9 +1,11 @@
 package com.offlineinc.dumbdownlauncher.ui
 
 import android.content.Context.MODE_PRIVATE
+import android.graphics.Bitmap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -17,7 +19,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,6 +43,7 @@ fun AppListScreen(
     onSoftKeyRight: (() -> Unit)? = null,
     messagesMuted: Boolean = false,
     onToggleMessagesMuted: ((Boolean) -> Unit)? = null,
+    wallpaperBitmap: Bitmap? = null,
 ) {
     val fontFamily = DumbTheme.BioRhyme
     val listState = rememberLazyListState()
@@ -54,10 +60,31 @@ fun AppListScreen(
         if (items.isNotEmpty()) listState.scrollToItem(0)
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
+        // ── Wallpaper background (dark overlay) ───────────────────────
+        if (wallpaperBitmap != null) {
+            Image(
+                bitmap = wallpaperBitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f))
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(DumbTheme.Colors.Black)
+            )
+        }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DumbTheme.Colors.Black)
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .focusRequester(focusRequester)
             .focusable()
@@ -199,6 +226,8 @@ fun AppListScreen(
             }
         }
     }
+
+    } // end outer Box
 
     LaunchedEffect(selectedIndex) {
         if (items.isNotEmpty()) {

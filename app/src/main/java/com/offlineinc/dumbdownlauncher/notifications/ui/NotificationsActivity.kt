@@ -7,7 +7,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatDelegate
-import androidx.core.content.edit
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.*
@@ -96,12 +95,6 @@ class NotificationsActivity : ComponentActivity() {
                 },
                 messagesMuted = muted,
                 onToggleMessagesMuted = { enabled ->
-                    if (!dndMuteManager.hasPolicyAccess()) {
-                        startActivity(dndMuteManager.makePolicyAccessIntent())
-                        return@NotificationsScreen
-                    }
-                    getSharedPreferences("launcher_prefs", MODE_PRIVATE)
-                        .edit { putBoolean("messages_muted", enabled) }
                     dndMuteManager.setMuted(enabled)
                 },
             )

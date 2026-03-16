@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -160,20 +161,29 @@ fun HomeScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.4f))
+                    .background(Color.Black.copy(alpha = 0.25f))
             )
         }
 
-        // ── Clock (upper area) ─────────────────────────────────────────
-        HomeClockDisplay(
-            timeText = timeText,
-            dateText = dateText,
+        // ── Clock + mute badge (upper area) ─────────────────────────────
+        Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 36.dp),
-        )
+                .padding(top = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            HomeClockDisplay(
+                timeText = timeText,
+                dateText = dateText,
+            )
+            // Mute badge centered below date — only visible when muted
+            DndStatusIndicator(
+                enabled = messagesMuted,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
 
-        // ── Bottom bar: notifications | [mute badge] | all apps ──────
+        // ── Bottom bar: notifications | all apps ─────────────────────
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -186,17 +196,15 @@ fun HomeScreen(
             BasicText(
                 text = "notifications",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
             )
-            // Mute badge in the center — only visible when muted
-            DndStatusIndicator(enabled = messagesMuted)
             BasicText(
                 text = "all apps",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
@@ -225,13 +233,15 @@ private fun PreviewHomeScreen() {
             .fillMaxSize()
             .background(DumbTheme.Colors.Black)
     ) {
-        HomeClockDisplay(
-            timeText = "9:41",
-            dateText = "sun, mar 15",
+        Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 36.dp),
-        )
+                .padding(top = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            HomeClockDisplay(timeText = "9:41", dateText = "sun, mar 15")
+            DndStatusIndicator(enabled = false)
+        }
 
         Row(
             modifier = Modifier
@@ -245,16 +255,15 @@ private fun PreviewHomeScreen() {
             BasicText(
                 text = "notifications",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
             )
-            DndStatusIndicator(enabled = false)
             BasicText(
                 text = "all apps",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
@@ -276,13 +285,15 @@ private fun PreviewHomeScreenDndOn() {
             .fillMaxSize()
             .background(DumbTheme.Colors.Black)
     ) {
-        HomeClockDisplay(
-            timeText = "2:30",
-            dateText = "mon, mar 16",
+        Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 36.dp),
-        )
+                .padding(top = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            HomeClockDisplay(timeText = "2:30", dateText = "mon, mar 16")
+            DndStatusIndicator(enabled = true, modifier = Modifier.padding(top = 6.dp))
+        }
 
         Row(
             modifier = Modifier
@@ -296,16 +307,15 @@ private fun PreviewHomeScreenDndOn() {
             BasicText(
                 text = "notifications",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),
             )
-            DndStatusIndicator(enabled = true)
             BasicText(
                 text = "all apps",
                 style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.45f),
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
                 ),

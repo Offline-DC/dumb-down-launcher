@@ -1,10 +1,12 @@
 package com.offlineinc.dumbdownlauncher
 
+import android.app.WallpaperManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -22,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
@@ -141,6 +144,7 @@ class AllAppsActivity : AppCompatActivity() {
 
     private val items = mutableStateListOf<AppItem>()
     private lateinit var controller: LauncherController
+    private val wallpaperState = mutableStateOf<Bitmap?>(null)
 
     private val packageChangeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -267,7 +271,8 @@ class AllAppsActivity : AppCompatActivity() {
                 }
                 },
                 onBack = { finish() },
-                showSoftKeys = false
+                showSoftKeys = false,
+                wallpaperBitmap = wallpaperState.value,
             )
 
             if (showTypeSyncModal) {
@@ -296,6 +301,24 @@ class AllAppsActivity : AppCompatActivity() {
                     if (items.isEmpty()) {
                         Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
                     }
+                }
+            }.start()
+        }
+
+        // Load wallpaper — reuse the grid's cached bitmap if available.
+        val cachedWp = MainAppsGridActivity.cachedWallpaper
+        if (cachedWp != null) {
+            wallpaperState.value = cachedWp
+        } else {
+            Thread {
+                val bmp = try {
+                    val wm = WallpaperManager.getInstance(applicationContext)
+                    val drawable = wm.peekDrawable() ?: wm.drawable
+                    drawable?.toBitmap()
+                } catch (_: Exception) { null }
+                MainAppsGridActivity.cachedWallpaper = bmp
+                runOnUiThread {
+                    if (!isDestroyed) wallpaperState.value = bmp
                 }
             }.start()
         }
