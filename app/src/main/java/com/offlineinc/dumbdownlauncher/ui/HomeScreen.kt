@@ -165,7 +165,7 @@ fun HomeScreen(
             )
         }
 
-        // ── Clock + mute badge (upper area) ─────────────────────────────
+        // ── Clock (upper area) ───────────────────────────────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -176,12 +176,15 @@ fun HomeScreen(
                 timeText = timeText,
                 dateText = dateText,
             )
-            // Mute badge centered below date — only visible when muted
-            DndStatusIndicator(
-                enabled = messagesMuted,
-                modifier = Modifier.padding(top = 6.dp),
-            )
         }
+
+        // ── Mute badge — top-right corner, only visible when muted ───────
+        DndStatusIndicator(
+            enabled = messagesMuted,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 6.dp, end = 6.dp),
+        )
 
         // ── Bottom bar: notifications | all apps ─────────────────────
         Row(
@@ -194,7 +197,7 @@ fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicText(
-                text = "notifications",
+                text = "notifs",
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
@@ -202,7 +205,15 @@ fun HomeScreen(
                 ),
             )
             BasicText(
-                text = "all apps",
+                text = "apps",
+                style = TextStyle(
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
+                    fontSize = 12.sp,
+                    fontFamily = DumbTheme.BioRhyme,
+                ),
+            )
+            BasicText(
+                text = "all",
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
@@ -253,7 +264,7 @@ private fun PreviewHomeScreen() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicText(
-                text = "notifications",
+                text = "notifs",
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
@@ -261,7 +272,15 @@ private fun PreviewHomeScreen() {
                 ),
             )
             BasicText(
-                text = "all apps",
+                text = "apps",
+                style = TextStyle(
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
+                    fontSize = 12.sp,
+                    fontFamily = DumbTheme.BioRhyme,
+                ),
+            )
+            BasicText(
+                text = "all",
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
@@ -305,7 +324,7 @@ private fun PreviewHomeScreenDndOn() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicText(
-                text = "notifications",
+                text = "notifs",
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
@@ -313,7 +332,15 @@ private fun PreviewHomeScreenDndOn() {
                 ),
             )
             BasicText(
-                text = "all apps",
+                text = "apps",
+                style = TextStyle(
+                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
+                    fontSize = 12.sp,
+                    fontFamily = DumbTheme.BioRhyme,
+                ),
+            )
+            BasicText(
+                text = "all",
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,

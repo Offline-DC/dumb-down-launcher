@@ -7,7 +7,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatDelegate
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
@@ -24,9 +23,7 @@ class NotificationsActivity : ComponentActivity() {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         super.onCreate(savedInstanceState)
 
-        // Status bar black + light icons
         window.statusBarColor = Color.BLACK
-        WindowCompat.setDecorFitsSystemWindows(window, true)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
         dndMuteManager = DndMuteManager(

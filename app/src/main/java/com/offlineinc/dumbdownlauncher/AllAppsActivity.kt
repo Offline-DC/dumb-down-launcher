@@ -25,8 +25,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.graphics.drawable.toBitmap
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
@@ -57,6 +59,18 @@ class AllAppsActivity : AppCompatActivity() {
             "com.iqqijni.dvt912key",          // 12-key keyboard
             "com.polariswireless.zclient",    // ZClient
             "com.mediatek.engineermode",      // MTK engineer mode
+            // Trustonic TEE services (not user-facing)
+            "com.trustonic.rsu.support",
+            "com.trustonic.alpsservice",
+            // Carrier device unlock tool
+            "com.att.deviceunlock",
+            // MTK system tools not meant for end users
+            "com.mediatek.lbs.em2.ui",        // MTK LBS engineering
+            "com.mediatek.duraspeed",         // MTK DuraSpeed
+            "com.mediatek.callrecorder",      // MTK call recorder
+            "com.mediatek.calendarimporter",  // MTK calendar importer
+            // SIM tool kit
+            "com.android.stk",
         )
 
         /**
@@ -235,24 +249,26 @@ class AllAppsActivity : AppCompatActivity() {
                     WEB_KEYBOARD -> {
                         val newEnabled = !typeSyncEnabled
                         if (newEnabled) {
-                            // Check pairing first — required for encrypted relay
-                            val pairing = com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(this)
-                            if (pairing == null) {
-                                Toast.makeText(
-                                    this,
-                                    "pair with ur smartphone first using the Dumb Down app",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } else {
-                                typeSyncEnabled = true
-                                setTypeSyncToggle(true)
-                                startService(
-                                    Intent(this, WebKeyboardService::class.java).apply {
-                                        action = WebKeyboardService.ACTION_START
-                                        putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, pairing.flipPhoneNumber)
-                                    }
-                                )
-                                coroutineScope.launch {
+                            // ContentProvider query — must NOT run on the main thread
+                            coroutineScope.launch {
+                                val pairing = withContext(Dispatchers.IO) {
+                                    com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(this@AllAppsActivity)
+                                }
+                                if (pairing == null) {
+                                    Toast.makeText(
+                                        this@AllAppsActivity,
+                                        "pair with ur smartphone first using the Dumb Down app",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } else {
+                                    typeSyncEnabled = true
+                                    setTypeSyncToggle(true)
+                                    startService(
+                                        Intent(this@AllAppsActivity, WebKeyboardService::class.java).apply {
+                                            action = WebKeyboardService.ACTION_START
+                                            putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, pairing.flipPhoneNumber)
+                                        }
+                                    )
                                     delay(200L)
                                     showTypeSyncModal = true
                                 }
@@ -301,6 +317,14 @@ class AllAppsActivity : AppCompatActivity() {
                     if (items.isEmpty()) {
                         Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
                     }
+                    // Fix race condition: refreshDevicePairingRow() in onResume() may
+                    // have run before buildAppList() finished (items was empty then, so
+                    // it was a no-op). Re-run it now that items are populated so the
+                    // "device pairing" row is correctly shown or hidden. Also handles
+                    // the case where buildAppList() added the row defensively due to a
+                    // transient ContentProvider failure — by now dumb-contacts-sync has
+                    // started up and the second query below will succeed.
+                    refreshDevicePairingRow()
                 }
             }.start()
         }

@@ -320,10 +320,10 @@ private fun MuteToggleCell(
         horizontalArrangement = Arrangement.End,
     ) {
         BasicText(
-            text = "mute texts",
+            text = "mute txts",
             style = TextStyle(
                 fontFamily = fontFamily,
-                fontSize = 11.sp,
+                fontSize = 14.sp,
                 color = if (focused) Black else White,
             ),
         )

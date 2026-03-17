@@ -126,7 +126,7 @@ fun AppRow(
             val toggleOn = item.isToggleOn
             Box(
                 modifier = Modifier
-                    .width(52.dp)
+                    .width(64.dp)
                     .height(28.dp)
                     .background(
                         color = if (toggleOn)

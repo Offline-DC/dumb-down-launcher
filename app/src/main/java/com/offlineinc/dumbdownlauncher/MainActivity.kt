@@ -27,7 +27,7 @@ import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
 import com.offlineinc.dumbdownlauncher.ui.PlatformChoiceDialog
-import com.offlineinc.dumbdownlauncher.ui.RestartPhoneDialog
+
 
 const val ALL_APPS = "__ALL_APPS__"
 const val NOTIFICATIONS = "__NOTIFICATIONS__"
@@ -45,7 +45,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dndMuteManager: DndMuteManager
     private lateinit var controller: LauncherController
     private val showPlatformDialog = mutableStateOf(false)
-    private val showRestartDialog = mutableStateOf(false)
     // Incremented on every onResume so HomeScreen re-fetches the wallpaper
     // immediately if the user changed it while away.
     private val wallpaperRefreshKey = mutableIntStateOf(0)
@@ -81,7 +80,6 @@ class MainActivity : AppCompatActivity() {
         setContent {
             val muted by dndMuteManager.muted.collectAsState()
             val showDialog by showPlatformDialog
-            val showRestart by showRestartDialog
             val wallpaperKey by wallpaperRefreshKey
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -120,31 +118,10 @@ class MainActivity : AppCompatActivity() {
                             // (whether ios, android, or skip) so the next grid open
                             // rebuilds with the correct — or absent — messaging app.
                             MainAppsGridActivity.invalidateItemCache()
-                            if (previousChoice != null && previousChoice != choice) {
-                                showRestartDialog.value = true
-                            }
                         }
                     )
                 }
 
-                if (showRestart) {
-                    RestartPhoneDialog(
-                        onRestart = {
-                            showRestartDialog.value = false
-                            Thread {
-                                try {
-                                    ProcessBuilder("su", "-c", "reboot")
-                                        .redirectErrorStream(true)
-                                        .start()
-                                        .waitFor()
-                                } catch (t: Throwable) {
-                                    Log.e("MainActivity", "Reboot failed: ${t.message}")
-                                }
-                            }.start()
-                        },
-                        onDismiss = { showRestartDialog.value = false }
-                    )
-                }
             }
         }
 
@@ -218,7 +195,7 @@ class MainActivity : AppCompatActivity() {
         // events flow straight to Compose so the dialog's onPreviewKeyEvent handles
         // Up/Down/Enter/Back correctly.  Without this guard, KeyDispatcher intercepts
         // Enter/Center and launches the 3×3 grid before the dialog can react.
-        if (showPlatformDialog.value || showRestartDialog.value) {
+        if (showPlatformDialog.value) {
             return super.dispatchKeyEvent(event)
         }
 
