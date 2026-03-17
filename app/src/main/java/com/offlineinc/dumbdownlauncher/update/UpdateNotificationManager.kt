@@ -12,6 +12,7 @@ object UpdateNotificationManager {
     private const val CHANNEL_ID = "app_updates"
     const val NOTIFICATION_ID_LAUNCHER = 1001
     const val NOTIFICATION_ID_CONTACTS = 1002
+    const val NOTIFICATION_ID_SNAKE = 1003
 
     const val ACTION_DOWNLOAD_APK = "com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK"
     const val EXTRA_DOWNLOAD_URL = "extra_download_url"
@@ -69,8 +70,8 @@ object UpdateNotificationManager {
     fun notifyDownloading(context: Context, appKey: String) {
         ensureChannel(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notificationId = if (appKey == "dumb-down-launcher") NOTIFICATION_ID_LAUNCHER else NOTIFICATION_ID_CONTACTS
-        val appDisplayName = if (appKey == "dumb-down-launcher") "Dumb Launcher" else "Dumb Contacts Sync"
+        val notificationId = notificationIdFor(appKey)
+        val appDisplayName = displayNameFor(appKey)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Downloading update")
@@ -85,8 +86,8 @@ object UpdateNotificationManager {
     fun notifyFailed(context: Context, appKey: String) {
         ensureChannel(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notificationId = if (appKey == "dumb-down-launcher") NOTIFICATION_ID_LAUNCHER else NOTIFICATION_ID_CONTACTS
-        val appDisplayName = if (appKey == "dumb-down-launcher") "Dumb Launcher" else "Dumb Contacts Sync"
+        val notificationId = notificationIdFor(appKey)
+        val appDisplayName = displayNameFor(appKey)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle("Update failed")
@@ -96,6 +97,18 @@ object UpdateNotificationManager {
             .setAutoCancel(true)
             .build()
         nm.notify(notificationId, notification)
+    }
+
+    private fun notificationIdFor(appKey: String) = when (appKey) {
+        "dumb-down-launcher" -> NOTIFICATION_ID_LAUNCHER
+        "snake" -> NOTIFICATION_ID_SNAKE
+        else -> NOTIFICATION_ID_CONTACTS
+    }
+
+    private fun displayNameFor(appKey: String) = when (appKey) {
+        "dumb-down-launcher" -> "Dumb Launcher"
+        "snake" -> "Snake"
+        else -> "Dumb Contacts Sync"
     }
 
     fun cancel(context: Context, notificationId: Int) {

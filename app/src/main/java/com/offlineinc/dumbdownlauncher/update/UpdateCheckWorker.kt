@@ -49,6 +49,22 @@ class UpdateCheckWorker(
                 }
             }
 
+            // Check snake update (only if installed)
+            val snakeInfo = latest["snake"]
+            if (snakeInfo != null) {
+                val installedCode = getInstalledVersionCode("com.snake")
+                if (installedCode != null && snakeInfo.versionCode > installedCode) {
+                    UpdateNotificationManager.notify(
+                        context = context,
+                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_SNAKE,
+                        appKey = "snake",
+                        appDisplayName = "Snake",
+                        versionName = snakeInfo.versionName,
+                        downloadUrl = snakeInfo.downloadUrl,
+                    )
+                }
+            }
+
             Result.success()
         } catch (_: Exception) {
             Result.retry()
@@ -113,6 +129,25 @@ class UpdateCheckWorker(
                             appDisplayName = "Dumb Contacts Sync",
                             versionName = contactsInfo.versionName,
                             downloadUrl = contactsInfo.downloadUrl,
+                        )
+                        found = true
+                    }
+                }
+
+                val snakeInfo = latest["snake"]
+                if (snakeInfo != null) {
+                    val installedCode = try {
+                        val info = context.packageManager.getPackageInfo("com.snake", 0)
+                        PackageInfoCompat.getLongVersionCode(info).toInt()
+                    } catch (_: Exception) { null }
+                    if (installedCode != null && snakeInfo.versionCode > installedCode) {
+                        UpdateNotificationManager.notify(
+                            context = context,
+                            notificationId = UpdateNotificationManager.NOTIFICATION_ID_SNAKE,
+                            appKey = "snake",
+                            appDisplayName = "Snake",
+                            versionName = snakeInfo.versionName,
+                            downloadUrl = snakeInfo.downloadUrl,
                         )
                         found = true
                     }
