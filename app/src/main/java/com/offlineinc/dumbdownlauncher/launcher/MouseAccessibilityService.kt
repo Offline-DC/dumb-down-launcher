@@ -17,6 +17,7 @@ class MouseAccessibilityService : AccessibilityService() {
 
     private var mouseEnabled = false
     private var currentPackage = ""
+    private var currentDensity = -1
 
     // True while the star-key special-char picker is open.
     // The mouse is disabled for this duration.
@@ -269,6 +270,48 @@ class MouseAccessibilityService : AccessibilityService() {
             runMouseCmd("disable")
             Log.d("MOUSE_SVC", "handlePackage: disabled mouse")
         }
+
+        // Density switching: only act when WhatsApp is foreground, or we need to reset
+        if (!webViewActivityActive) {
+            if (pkg == "com.whatsapp") {
+                handleWhatsAppDensity()
+            } else if (currentDensity != 120) {
+                setDensity(120)
+            }
+        }
+    }
+
+    private fun handleWhatsAppDensity() {
+        Thread {
+            try {
+                val proc = ProcessBuilder("su", "-mm", "-c", "test -f /data/user/0/com.whatsapp/files/me && echo yes || echo no")
+                    .redirectErrorStream(true)
+                    .start()
+                val output = proc.inputStream.bufferedReader().readText().trim()
+                proc.waitFor()
+                val loggedIn = output.lines().any { it.trim() == "yes" }
+                setDensity(if (loggedIn) 120 else 100)
+            } catch (t: Throwable) {
+                Log.e("MOUSE_SVC", "handleWhatsAppDensity failed: ${t.message}")
+            }
+        }.start()
+    }
+
+    private fun setDensity(density: Int) {
+        if (currentDensity == density) return
+        currentDensity = density
+        Thread {
+            try {
+                val proc = ProcessBuilder("su", "-c", "wm density $density")
+                    .redirectErrorStream(true)
+                    .start()
+                proc.inputStream.bufferedReader().readText()
+                proc.waitFor()
+                Log.d("MOUSE_SVC", "setDensity $density done")
+            } catch (t: Throwable) {
+                Log.e("MOUSE_SVC", "setDensity failed: ${t.message}")
+            }
+        }.start()
     }
 
     private fun runMouseCmd(cmd: String) {
