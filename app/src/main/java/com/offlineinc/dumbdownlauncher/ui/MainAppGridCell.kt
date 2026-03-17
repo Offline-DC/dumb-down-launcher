@@ -11,15 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Contacts
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.Message
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -28,7 +19,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -36,7 +26,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
@@ -45,21 +34,6 @@ private val GrayscaleMatrix = ColorFilter.colorMatrix(
     ColorMatrix().apply { setToSaturation(0f) }
 )
 
-/**
- * Known vector icon overrides for the 3×3 grid.
- * All icons render as tinted vectors (inherently monochrome).
- */
-private val gridVectorIcons: Map<String, ImageVector> = mapOf(
-    "com.openbubbles.messaging" to Icons.Filled.Psychology,
-    GOOGLE_MESSAGES to Icons.Filled.Psychology,
-    "com.android.mms" to Icons.Filled.Message,
-    "com.ubercab.uberlite" to Icons.Filled.DirectionsCar,
-    "com.google.android.apps.mapslite" to Icons.Filled.Map,
-    "com.android.contacts" to Icons.Filled.Contacts,
-    "com.android.dialer" to Icons.Filled.History,
-    "com.tcl.camera" to Icons.Filled.CameraAlt,
-    "com.android.settings" to Icons.Filled.Settings,
-)
 
 /**
  * Single cell in the 3×3 main app grid.
@@ -90,7 +64,7 @@ fun MainAppGridCell(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            val vectorIcon = gridVectorIcons[item.packageName]
+            val vectorIcon = appVectorIcons[item.packageName]
 
             if (vectorIcon != null) {
                 Image(

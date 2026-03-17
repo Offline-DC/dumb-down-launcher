@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit
  * device-link pairing.
  *
  * Lifecycle:
- *   startService(ACTION_START, phoneNumber) → opens WS, starts 10-min timer
+ *   startService(ACTION_START, phoneNumber) → opens WS, starts 5-min timer
  *   startService(ACTION_STOP)               → closes WS, stops service
  *
  * When an encrypted { type:"text", encrypted:"…", iv:"…" } message arrives,
@@ -51,7 +51,7 @@ class WebKeyboardService : Service() {
         private const val NOTIF_ID    = 9001
         private const val WS_URL      =
             "wss://offline-dc-backend-ba4815b2bcc8.herokuapp.com/keyboard/ws"
-        private const val TEN_MINUTES = 10 * 60 * 1000L
+        private const val FIVE_MINUTES = 5 * 60 * 1000L
 
         @Volatile var isRunning = false
     }
@@ -184,13 +184,13 @@ class WebKeyboardService : Service() {
             }
         })
 
-        // 10-minute hard cutoff
+        // 5-minute hard cutoff
         mainHandler.postDelayed({
-            Log.i(TAG, "⏱ 10-minute timer expired — stopping Type Sync for $phoneNumber")
+            Log.i(TAG, "⏱ 5-minute timer expired — stopping Type Sync for $phoneNumber")
             shutDown()
             // Broadcast to AllAppsActivity so it can flip the toggle off
             sendBroadcast(Intent(ACTION_STOP_BROADCAST))
-        }, TEN_MINUTES)
+        }, FIVE_MINUTES)
     }
 
     private fun handleTextMessage(msg: JSONObject) {

@@ -44,9 +44,6 @@ class AllAppsActivity : AppCompatActivity() {
         fun invalidateCache() { cachedApps = null }
 
         private val hiddenPackages = setOf(
-            // smart txt (shown on main screen instead)
-            "com.openbubbles.messaging",
-            "com.offline.googlemessageslauncher",
             // uber (handled by launcher WebViewActivity)
             "com.offline.uberlauncher",
             // launchers
@@ -130,23 +127,25 @@ class AllAppsActivity : AppCompatActivity() {
                 icon = pm.defaultActivityIcon,
                 launchComponent = null,
             ))
-            appItems.add(AppItem(
-                packageName = WEB_KEYBOARD,
-                label = "type sync",
-                icon = pm.defaultActivityIcon,
-                launchComponent = null,
-                isToggleOn = false,
-            ))
-
-            // Pin "device pairing" at the very top when not yet paired.
             // ContentProvider query — may fail silently if companion app absent.
             val pairing = try {
                 com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(context)
             } catch (_: Exception) { null }
-            if (pairing == null) {
+
+            if (pairing != null) {
+                // Only show type sync once paired — it requires a linked device to work
+                appItems.add(AppItem(
+                    packageName = WEB_KEYBOARD,
+                    label = "type sync",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                    isToggleOn = false,
+                ))
+            } else {
+                // Pin "device pairing" at the very top when not yet paired
                 appItems.add(0, AppItem(
                     packageName = DEVICE_PAIRING,
-                    label = "device pairing",
+                    label = "device sync",
                     icon = pm.defaultActivityIcon,
                     launchComponent = null,
                 ))
@@ -295,7 +294,7 @@ class AllAppsActivity : AppCompatActivity() {
                 AlertDialog(
                     onDismissRequest = { showTypeSyncModal = false },
                     title = { Text("type sync is on") },
-                    text = { Text("go to text fields and use ur smartphone to type.\nturns off after 10 min.") },
+                    text = { Text("go to text fields and use ur smartphone to type.\nturns off after 5 min.") },
                     confirmButton = {
                         TextButton(onClick = { showTypeSyncModal = false }) {
                             Text("got it")

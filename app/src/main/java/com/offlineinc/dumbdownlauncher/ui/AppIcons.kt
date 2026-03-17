@@ -1,0 +1,51 @@
+package com.offlineinc.dumbdownlauncher.ui
+
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Message
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.offlineinc.dumbdownlauncher.CHANGE_PLATFORM
+import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
+import com.offlineinc.dumbdownlauncher.DEVICE_PAIRING
+import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
+import com.offlineinc.dumbdownlauncher.WEB_KEYBOARD
+
+/**
+ * Single source of truth for app icon overrides.
+ * Used by both the 3×3 grid (MainAppGridCell) and the app list (AppRow).
+ * Change an icon here and it updates everywhere.
+ */
+val appVectorIcons: Map<String, ImageVector> = mapOf(
+    // Smart txt
+    "com.openbubbles.messaging"       to Icons.Filled.Psychology,
+    "com.offline.googlemessageslauncher" to Icons.Filled.Psychology,
+    GOOGLE_MESSAGES                   to Icons.Filled.Psychology,
+    // SMS
+    "com.android.mms"                 to Icons.Filled.Message,
+    // Uber
+    "com.ubercab.uberlite"            to Icons.Filled.DirectionsCar,
+    // Maps
+    "com.google.android.apps.mapslite" to Icons.Filled.Map,
+    // Contacts
+    "com.android.contacts"            to Icons.Filled.Contacts,
+    // Call history
+    "com.android.dialer"              to Icons.Filled.History,
+    // Camera
+    "com.tcl.camera"                  to Icons.Filled.CameraAlt,
+    // Settings
+    "com.android.settings"            to Icons.Filled.Settings,
+    // Special all-apps items
+    CHANGE_PLATFORM                   to Icons.Filled.Psychology,
+    CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
+    WEB_KEYBOARD                      to Icons.Filled.Keyboard,
+    DEVICE_PAIRING                    to Icons.Filled.Link,
+)

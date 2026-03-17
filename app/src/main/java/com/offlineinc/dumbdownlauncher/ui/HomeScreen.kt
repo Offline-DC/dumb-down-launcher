@@ -33,6 +33,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -198,26 +199,32 @@ fun HomeScreen(
         ) {
             BasicText(
                 text = "notifs",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.Start,
                 ),
             )
             BasicText(
                 text = "apps",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.Center,
                 ),
             )
             BasicText(
                 text = "all",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.End,
                 ),
             )
         }
@@ -265,26 +272,32 @@ private fun PreviewHomeScreen() {
         ) {
             BasicText(
                 text = "notifs",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.Start,
                 ),
             )
             BasicText(
                 text = "apps",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.Center,
                 ),
             )
             BasicText(
                 text = "all",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.End,
                 ),
             )
         }
@@ -325,26 +338,32 @@ private fun PreviewHomeScreenDndOn() {
         ) {
             BasicText(
                 text = "notifs",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.Start,
                 ),
             )
             BasicText(
                 text = "apps",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.Center,
                 ),
             )
             BasicText(
                 text = "all",
+                modifier = Modifier.weight(1f),
                 style = TextStyle(
                     color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
                     fontSize = 12.sp,
                     fontFamily = DumbTheme.BioRhyme,
+                    textAlign = TextAlign.End,
                 ),
             )
         }

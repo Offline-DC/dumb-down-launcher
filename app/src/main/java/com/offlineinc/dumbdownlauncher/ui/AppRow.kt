@@ -4,13 +4,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicText
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -19,30 +12,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.offlineinc.dumbdownlauncher.CHANGE_PLATFORM
-import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
-import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
-import com.offlineinc.dumbdownlauncher.WEB_KEYBOARD
-import com.offlineinc.dumbdownlauncher.DEVICE_PAIRING
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
-
-private val vectorIcons: Map<String, ImageVector> = mapOf(
-    "com.openbubbles.messaging" to Icons.Filled.Chat,
-    GOOGLE_MESSAGES to Icons.Filled.Chat,
-    "com.ubercab.uberlite" to Icons.Filled.DirectionsCar,
-    CHANGE_PLATFORM to Icons.Filled.Psychology,
-    CHECK_UPDATES to Icons.Filled.SystemUpdate,
-    WEB_KEYBOARD to Icons.Filled.Keyboard,
-    DEVICE_PAIRING to Icons.Filled.Link,
-)
 
 @Composable
 fun AppRow(
@@ -60,13 +37,13 @@ fun AppRow(
     ) {
 
         // ---- App Icon ----
-        val vectorIcon = vectorIcons[item.packageName]
+        val vectorIcon = appVectorIcons[item.packageName]
 
         if (vectorIcon != null) {
             Image(
                 painter = rememberVectorPainter(vectorIcon),
                 contentDescription = item.label,
-                modifier = Modifier.size(38.dp),
+                modifier = Modifier.size(36.dp),
                 colorFilter = ColorFilter.tint(
                     if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.White
                 )
@@ -110,7 +87,7 @@ fun AppRow(
             style = TextStyle(
                 fontFamily = fontFamily,
                 // Slightly smaller when an ON/OFF badge is present so the label fits
-                fontSize = if (item.isToggleOn != null) 26.sp else 32.sp,
+                fontSize = if (item.isToggleOn != null) 24.sp else 28.sp,
                 color = if (selected)
                     DumbTheme.Colors.Black
                 else
