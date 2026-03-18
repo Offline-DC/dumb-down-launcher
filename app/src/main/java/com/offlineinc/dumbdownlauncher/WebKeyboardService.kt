@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.offlineinc.dumbdownlauncher.launcher.MouseAccessibilityService
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
@@ -54,6 +55,9 @@ class WebKeyboardService : Service() {
         private const val FIVE_MINUTES = 5 * 60 * 1000L
 
         @Volatile var isRunning = false
+
+        private const val A11Y_WAIT_TIMEOUT_MS = 5000L
+        private const val A11Y_POLL_MS = 200L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -90,7 +94,10 @@ class WebKeyboardService : Service() {
                 }
 
                 Log.i(TAG, "Starting encrypted relay for $phone")
-                startRelay(phone)
+                // Wait for the accessibility service to be ready before
+                // opening the WebSocket.  Text arriving before the service
+                // is bound would fall back to the broken shell injection.
+                waitForAccessibilityThenRelay(phone)
             }
             ACTION_STOP -> shutDown()
         }
@@ -105,6 +112,33 @@ class WebKeyboardService : Service() {
         webSocket?.close(1000, "service destroyed")
         webSocket = null
         super.onDestroy()
+    }
+
+    // -------------------------------------------------------------------------
+    // Accessibility gate — wait for the service before opening the WS
+    // -------------------------------------------------------------------------
+
+    /**
+     * Waits (on a background thread) for MouseAccessibilityService to be
+     * connected, then starts the relay.  If the service doesn't appear within
+     * the timeout we start anyway — injectText has its own retry loop — but
+     * this avoids the common post-boot race where text arrives before the
+     * accessibility service is bound.
+     */
+    private fun waitForAccessibilityThenRelay(phoneNumber: String) {
+        Thread {
+            val deadline = System.currentTimeMillis() + A11Y_WAIT_TIMEOUT_MS
+            while (MouseAccessibilityService.instance == null &&
+                   System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(A11Y_POLL_MS) } catch (_: InterruptedException) { break }
+            }
+            if (MouseAccessibilityService.instance != null) {
+                Log.i(TAG, "Accessibility service ready — starting relay")
+            } else {
+                Log.w(TAG, "Accessibility service not ready after ${A11Y_WAIT_TIMEOUT_MS}ms — starting relay anyway (injectText will retry)")
+            }
+            mainHandler.post { startRelay(phoneNumber) }
+        }.start()
     }
 
     // -------------------------------------------------------------------------

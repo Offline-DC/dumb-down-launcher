@@ -33,7 +33,8 @@ class MouseAccessibilityService : AccessibilityService() {
             instance?.forceDisable() ?: runMouseCmdStatic("disable")
         }
 
-        @Volatile private var instance: MouseAccessibilityService? = null
+        @Volatile var instance: MouseAccessibilityService? = null
+            private set
         private var webViewActivityActive = false
 
         fun notifyWebViewActive(active: Boolean) {
@@ -63,28 +64,56 @@ class MouseAccessibilityService : AccessibilityService() {
             }
         }
 
+        /**
+         * Maximum time (ms) to wait for the accessibility service to connect
+         * before giving up. After a fresh boot, Android can take a few seconds
+         * to bind the service — we poll in short intervals rather than
+         * immediately falling back to the broken shell path.
+         */
+        private const val A11Y_WAIT_TIMEOUT_MS = 3000L
+        private const val A11Y_POLL_INTERVAL_MS = 150L
+
         fun injectText(text: String) {
-            val service = instance ?: run {
-                Log.w("MouseService", "injectText: service not connected, falling back to shell")
-                injectTextViaShell(text)
-                return
-            }
+            // Run on a background thread so polling doesn't block the caller.
+            Thread {
+                val service = waitForService()
+                if (service == null) {
+                    Log.e("MouseService", "injectText: accessibility service never connected after ${A11Y_WAIT_TIMEOUT_MS}ms — falling back to shell")
+                    injectTextViaShell(text)
+                    return@Thread
+                }
 
-            val root = service.rootInActiveWindow
-            if (root == null) {
-                Log.w("MouseService", "injectText: rootInActiveWindow null, using shell")
-                injectTextViaShell(text)
-                return
-            }
+                val root = service.rootInActiveWindow
+                if (root == null) {
+                    Log.w("MouseService", "injectText: rootInActiveWindow null, using shell")
+                    injectTextViaShell(text)
+                    return@Thread
+                }
 
-            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            if (focused != null && focused.isEditable) {
-                Log.d("MouseService", "injectText via clipboard paste for: \"$text\"")
-                injectViaClipboard(service, focused, text)
-            } else {
-                Log.w("MouseService", "injectText: no focused editable node, using shell")
-                injectTextViaShell(text)
+                val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                if (focused != null && focused.isEditable) {
+                    Log.d("MouseService", "injectText via clipboard paste for: \"$text\"")
+                    injectViaClipboard(service, focused, text)
+                } else {
+                    Log.w("MouseService", "injectText: no focused editable node, using shell")
+                    injectTextViaShell(text)
+                }
+            }.start()
+        }
+
+        /**
+         * Polls for the accessibility service instance, waiting up to
+         * [A11Y_WAIT_TIMEOUT_MS]. Returns the instance or null if it
+         * never connected in time.
+         */
+        private fun waitForService(): MouseAccessibilityService? {
+            instance?.let { return it }
+            val deadline = System.currentTimeMillis() + A11Y_WAIT_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                instance?.let { return it }
+                try { Thread.sleep(A11Y_POLL_INTERVAL_MS) } catch (_: InterruptedException) { break }
             }
+            return instance
         }
 
         /**
