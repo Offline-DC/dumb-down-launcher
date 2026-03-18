@@ -392,6 +392,20 @@ class AllAppsActivity : AppCompatActivity() {
                 if (isPaired && existingIdx >= 0) {
                     items.removeAt(existingIdx)
                     cachedApps = cachedApps?.filter { it.packageName != DEVICE_PAIRING }
+
+                    // Add "type sync" if it isn't already in the list
+                    val hasTypeSync = items.any { it.packageName == WEB_KEYBOARD }
+                    if (!hasTypeSync) {
+                        val typeSyncItem = AppItem(
+                            packageName = WEB_KEYBOARD,
+                            label = "type sync",
+                            icon = packageManager.defaultActivityIcon,
+                            launchComponent = null,
+                            isToggleOn = false,
+                        )
+                        items.add(typeSyncItem)
+                        cachedApps = (cachedApps ?: emptyList()) + typeSyncItem
+                    }
                 } else if (!isPaired && existingIdx < 0 && items.isNotEmpty()) {
                     val pairingItem = AppItem(
                         packageName = DEVICE_PAIRING,
