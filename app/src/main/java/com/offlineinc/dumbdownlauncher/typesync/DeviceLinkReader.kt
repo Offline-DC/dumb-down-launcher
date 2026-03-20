@@ -24,14 +24,15 @@ object DeviceLinkReader {
             context.contentResolver.query(CONTENT_URI, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val isPaired = cursor.getInt(cursor.getColumnIndexOrThrow("is_paired")) == 1
-                    val secret = cursor.getString(cursor.getColumnIndexOrThrow("shared_secret"))
-                    val phone = cursor.getString(cursor.getColumnIndexOrThrow("flip_phone_number"))
+                    val secret = cursor.getString(cursor.getColumnIndexOrThrow("shared_secret")).orEmpty()
+                    val phone = cursor.getString(cursor.getColumnIndexOrThrow("flip_phone_number")).orEmpty()
                     val pairingId = cursor.getInt(cursor.getColumnIndexOrThrow("pairing_id"))
 
                     if (isPaired && secret.isNotEmpty()) {
+                        Log.d(TAG, "Paired: phone=$phone, pairingId=$pairingId")
                         PairingInfo(isPaired, secret, phone, pairingId)
                     } else {
-                        Log.w(TAG, "Not paired or missing secret")
+                        Log.w(TAG, "Not paired or missing secret (isPaired=$isPaired, secretLen=${secret.length})")
                         null
                     }
                 } else {

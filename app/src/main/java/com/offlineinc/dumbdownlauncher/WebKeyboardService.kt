@@ -12,7 +12,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.offlineinc.dumbdownlauncher.launcher.MouseAccessibilityService
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient

@@ -116,7 +116,13 @@ fun MainAppGridScreen(
                             true
                         }
                         Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                            if (items.isNotEmpty()) onActivate(items[selectedIndex])
+                            // Only activate on a fresh press (repeatCount == 0).
+                            // Held-down keys from the previous screen arrive as
+                            // repeats (repeatCount > 0) and are consumed but ignored.
+                            val repeat = event.nativeKeyEvent.repeatCount
+                            if (repeat == 0 && items.isNotEmpty()) {
+                                onActivate(items[selectedIndex])
+                            }
                             true
                         }
                         Key.Back -> {

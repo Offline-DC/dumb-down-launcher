@@ -84,7 +84,7 @@ class UpdateCheckWorker(
         private const val WORK_NAME = "update_check"
 
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(24, TimeUnit.HOURS)
+            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(30, TimeUnit.DAYS)
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
