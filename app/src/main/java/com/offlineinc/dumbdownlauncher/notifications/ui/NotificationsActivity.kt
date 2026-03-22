@@ -3,10 +3,9 @@ package com.offlineinc.dumbdownlauncher.notifications.ui
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
-import androidx.appcompat.app.AppCompatDelegate
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
@@ -15,12 +14,11 @@ import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
 import com.offlineinc.dumbdownlauncher.notifications.DumbNotificationListenerService
 import com.offlineinc.dumbdownlauncher.notifications.NotificationStore
 
-class NotificationsActivity : ComponentActivity() {
+class NotificationsActivity : AppCompatActivity() {
 
     private lateinit var dndMuteManager: DndMuteManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = Color.BLACK

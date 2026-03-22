@@ -11,7 +11,6 @@ import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.browser.customtabs.CustomTabsServiceConnection
@@ -20,6 +19,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.graphics.drawable.toBitmap
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides
 import com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
@@ -52,6 +55,104 @@ class MainAppsGridActivity : AppCompatActivity() {
 
         fun invalidateItemCache() { cachedGridItems = null }
         fun invalidateWallpaperCache() { cachedWallpaper = null }
+
+        private val bgExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+        /**
+         * Pre-build the 9-item grid list on a background thread so it's ready
+         * before the user opens the grid. Safe to call multiple times — no-ops
+         * when cache is already warm.
+         */
+        fun warmCacheAsync(context: android.content.Context) {
+            if (cachedGridItems != null) return
+            bgExecutor.execute {
+                if (cachedGridItems != null) return@execute  // double-checked
+                cachedGridItems = buildGridAppListStatic(context)
+                // Persist the platform key so onResume can detect staleness.
+                val platform = PlatformPreferences.getChoice(context)
+                context.getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+                    .edit().putString("grid_cache_platform", platform).apply()
+            }
+        }
+
+        /**
+         * Pre-load the wallpaper bitmap on a background thread. Shared between
+         * the grid and all-apps screens.
+         */
+        fun warmWallpaperAsync(context: android.content.Context) {
+            if (cachedWallpaper != null) return
+            bgExecutor.execute {
+                if (cachedWallpaper != null) return@execute
+                try {
+                    val wm = WallpaperManager.getInstance(context)
+                    val drawable = wm.peekDrawable() ?: wm.drawable
+                    cachedWallpaper = drawable?.toBitmap()
+                } catch (_: Exception) {}
+            }
+        }
+
+        /**
+         * Static version of buildGridAppList that takes a Context so it can
+         * be called from the companion without an Activity instance.
+         */
+        private fun buildGridAppListStatic(context: android.content.Context): List<AppItem> {
+            val pm = context.packageManager
+            val result = mutableListOf<AppItem>()
+
+            val platform = PlatformPreferences.getChoice(context)
+            val messagingPkg = when (platform) {
+                "ios"     -> "com.openbubbles.messaging"
+                "android" -> GOOGLE_MESSAGES
+                else      -> null
+            }
+
+            val allowedPackages = listOfNotNull(
+                messagingPkg,
+                "com.whatsapp",
+                "com.android.mms",
+                "com.android.contacts",
+                "com.android.dialer",
+                "com.android.settings",
+                "com.google.android.apps.mapslite",
+                "com.tcl.camera",
+                "com.ubercab.uberlite",
+            )
+
+            for (pkg in allowedPackages) {
+                when (pkg) {
+                    GOOGLE_MESSAGES -> {
+                        result.add(AppItem(GOOGLE_MESSAGES, "smart txt", pm.defaultActivityIcon, null, false))
+                        continue
+                    }
+                    "com.openbubbles.messaging" -> {
+                        try {
+                            val appInfo = pm.getApplicationInfo(pkg, 0)
+                            val defaultLabel = pm.getApplicationLabel(appInfo).toString()
+                            val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides.getLabel(pkg, defaultLabel).lowercase()
+                            val defaultIcon = pm.getApplicationIcon(appInfo)
+                            val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides.getIcon(context, pkg, defaultIcon)
+                            val launchComponent = com.offlineinc.dumbdownlauncher.launcher.LaunchResolver.resolveLaunchComponent(pm, pkg)
+                            result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
+                        } catch (_: Exception) {
+                            result.add(AppItem(GOOGLE_MESSAGES, "smart txt", pm.defaultActivityIcon, null, false))
+                        }
+                        continue
+                    }
+                }
+
+                try {
+                    val appInfo = pm.getApplicationInfo(pkg, 0)
+                    val defaultLabel = pm.getApplicationLabel(appInfo).toString()
+                    val label = com.offlineinc.dumbdownlauncher.launcher.AppLabelOverrides.getLabel(pkg, defaultLabel).lowercase()
+                    val defaultIcon = pm.getApplicationIcon(appInfo)
+                    val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides.getIcon(context, pkg, defaultIcon)
+                    val launchComponent = com.offlineinc.dumbdownlauncher.launcher.LaunchResolver.resolveLaunchComponent(pm, pkg)
+                    result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
+                } catch (_: Exception) { }
+            }
+
+            return result
+        }
     }
 
     private val items = mutableStateListOf<AppItem>()
@@ -73,7 +174,6 @@ class MainAppsGridActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = 0xFF000000.toInt()
@@ -105,38 +205,38 @@ class MainAppsGridActivity : AppCompatActivity() {
         if (cachedItems != null) {
             items.addAll(cachedItems)
         } else {
-            Thread {
+            lifecycleScope.launch(Dispatchers.IO) {
                 val loaded = buildGridAppList()
                 cachedGridItems = loaded
                 // Persist the platform key used when this cache was built so
                 // onResume can detect staleness without a full rebuild.
-                val platform = PlatformPreferences.getChoice(this)
+                val platform = PlatformPreferences.getChoice(this@MainAppsGridActivity)
                 getSharedPreferences("launcher_prefs", MODE_PRIVATE)
                     .edit().putString("grid_cache_platform", platform).apply()
-                runOnUiThread {
-                    if (isDestroyed) return@runOnUiThread
+                withContext(Dispatchers.Main) {
+                    if (isDestroyed) return@withContext
                     items.clear()
                     items.addAll(loaded)
                     if (items.isEmpty()) {
-                        Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@MainAppsGridActivity, "No apps found.", Toast.LENGTH_LONG).show()
                     }
                 }
-            }.start()
+            }
         }
 
         // Load wallpaper on a background thread — update state when ready.
         if (cachedWallpaper == null) {
-            Thread {
+            lifecycleScope.launch(Dispatchers.IO) {
                 val bmp = try {
                     val wm = WallpaperManager.getInstance(applicationContext)
                     val drawable = wm.peekDrawable() ?: wm.drawable
                     drawable?.toBitmap()
                 } catch (_: Exception) { null }
                 cachedWallpaper = bmp
-                runOnUiThread {
+                withContext(Dispatchers.Main) {
                     if (!isDestroyed) wallpaperState.value = bmp
                 }
-            }.start()
+            }
         }
     }
 

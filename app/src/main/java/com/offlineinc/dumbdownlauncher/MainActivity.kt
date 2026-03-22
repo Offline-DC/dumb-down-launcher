@@ -10,7 +10,6 @@ import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
@@ -50,7 +49,6 @@ class MainActivity : AppCompatActivity() {
     private val wallpaperRefreshKey = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = 0xFF000000.toInt()
@@ -87,15 +85,21 @@ class MainActivity : AppCompatActivity() {
                     messagesMuted = muted,
                     wallpaperRefreshKey = wallpaperKey,
                     onOpenAppsGrid = {
-                        startActivity(Intent(this@MainActivity, MainAppsGridActivity::class.java))
+                        startActivity(Intent(this@MainActivity, MainAppsGridActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                        })
                         overridePendingTransition(0, 0)
                     },
                     onOpenNotifications = {
-                        startActivity(Intent(this@MainActivity, NotificationsActivity::class.java))
+                        startActivity(Intent(this@MainActivity, NotificationsActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                        })
                         overridePendingTransition(0, 0)
                     },
                     onOpenAllApps = {
-                        startActivity(Intent(this@MainActivity, AllAppsActivity::class.java))
+                        startActivity(Intent(this@MainActivity, AllAppsActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                        })
                         overridePendingTransition(0, 0)
                     },
                     onDpadDirection = { direction ->
@@ -151,8 +155,10 @@ class MainActivity : AppCompatActivity() {
         // Bump the key so HomeScreen re-fetches the wallpaper in case the user
         // changed it while the launcher was in the background.
         wallpaperRefreshKey.intValue++
-        // Pre-warm the All Apps list in the background so it's instant when opened.
+        // Pre-warm caches in the background so sub-screens open instantly.
         AllAppsActivity.warmCacheAsync(applicationContext)
+        MainAppsGridActivity.warmCacheAsync(applicationContext)
+        MainAppsGridActivity.warmWallpaperAsync(applicationContext)
     }
 
     /**
@@ -209,12 +215,16 @@ class MainActivity : AppCompatActivity() {
 
         return when {
             result.openNotifications -> {
-                startActivity(Intent(this, NotificationsActivity::class.java))
+                startActivity(Intent(this, NotificationsActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                })
                 overridePendingTransition(0, 0)
                 true
             }
             result.openAllApps -> {
-                startActivity(Intent(this, AllAppsActivity::class.java))
+                startActivity(Intent(this, AllAppsActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                })
                 overridePendingTransition(0, 0)
                 true
             }
@@ -229,7 +239,9 @@ class MainActivity : AppCompatActivity() {
             // Center/Enter is handled by HomeScreen's onPreviewKeyEvent → onOpenAppsGrid
             // so it won't reach here, but if it does, open the grid
             result.activateSelected -> {
-                startActivity(Intent(this, MainAppsGridActivity::class.java))
+                startActivity(Intent(this, MainAppsGridActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                })
                 overridePendingTransition(0, 0)
                 true
             }

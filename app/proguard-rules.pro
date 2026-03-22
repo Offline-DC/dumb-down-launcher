@@ -5,12 +5,23 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# ── OkHttp ────────────────────────────────────────────────────────────────────
+# OkHttp uses reflection and the platform's built-in TLS; keep its internals.
+-dontwarn okhttp3.internal.platform.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.conscrypt.**
+-dontwarn org.openjsse.**
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+-dontwarn okio.**
+
+# ── WorkManager ───────────────────────────────────────────────────────────────
+# Workers are instantiated by reflection — keep the constructor.
+-keep class com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker { *; }
+
+# ── Compose / Kotlin ──────────────────────────────────────────────────────────
+# Kotlin coroutines (already handled by default R8 rules but belt-and-suspenders)
+-dontwarn kotlinx.coroutines.**
 
 # Uncomment this to preserve the line number information for
 # debugging stack traces.

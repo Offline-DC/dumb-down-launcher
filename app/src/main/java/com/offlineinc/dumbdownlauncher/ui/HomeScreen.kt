@@ -75,16 +75,17 @@ fun HomeScreen(
     var timeText by remember { mutableStateOf("") }
     var dateText by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
-        val dateFmt = java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault())
+        val locale = java.util.Locale.getDefault()
+        val dateFmt = java.text.SimpleDateFormat("EEE, MMM d", locale)
+        val is24 = android.text.format.DateFormat.is24HourFormat(context)
+        val timeFmt = java.text.SimpleDateFormat(if (is24) "HH:mm" else "h:mm", locale)
         while (true) {
             val now = java.util.Date()
-            val timeFmt = if (android.text.format.DateFormat.is24HourFormat(context))
-                java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-            else
-                java.text.SimpleDateFormat("h:mm", java.util.Locale.getDefault())
             timeText = timeFmt.format(now)
             dateText = dateFmt.format(now).lowercase()
-            delay(1_000)
+            // Clock only shows HH:mm — sync to the next minute boundary
+            val delayMs = 60_000L - (System.currentTimeMillis() % 60_000L)
+            delay(delayMs)
         }
     }
 
@@ -152,8 +153,9 @@ fun HomeScreen(
     ) {
         // ── Wallpaper background ─────────────────────────────────────────
         wallpaperBitmap?.let { bmp ->
+            val imageBitmap = remember(bmp) { bmp.asImageBitmap() }
             Image(
-                bitmap = bmp.asImageBitmap(),
+                bitmap = imageBitmap,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,

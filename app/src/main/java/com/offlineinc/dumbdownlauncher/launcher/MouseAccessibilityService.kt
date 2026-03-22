@@ -29,6 +29,9 @@ class MouseAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        /** Shared single-thread executor for all shell commands — avoids raw Thread{} churn. */
+        private val shellExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
         fun forceDisable(context: Context) {
             instance?.forceDisable() ?: runMouseCmdStatic("disable")
         }
@@ -74,20 +77,20 @@ class MouseAccessibilityService : AccessibilityService() {
         private const val A11Y_POLL_INTERVAL_MS = 150L
 
         fun injectText(text: String) {
-            // Run on a background thread so polling doesn't block the caller.
-            Thread {
+            // Run on the shared executor so polling doesn't block the caller.
+            shellExecutor.execute {
                 val service = waitForService()
                 if (service == null) {
                     Log.e("MouseService", "injectText: accessibility service never connected after ${A11Y_WAIT_TIMEOUT_MS}ms — falling back to shell")
                     injectTextViaShell(text)
-                    return@Thread
+                    return@execute
                 }
 
                 val root = service.rootInActiveWindow
                 if (root == null) {
                     Log.w("MouseService", "injectText: rootInActiveWindow null, using shell")
                     injectTextViaShell(text)
-                    return@Thread
+                    return@execute
                 }
 
                 val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
@@ -98,7 +101,7 @@ class MouseAccessibilityService : AccessibilityService() {
                     Log.w("MouseService", "injectText: no focused editable node, using shell")
                     injectTextViaShell(text)
                 }
-            }.start()
+            }
         }
 
         /**
@@ -150,32 +153,33 @@ class MouseAccessibilityService : AccessibilityService() {
             }
         }
 
-        /** Last-resort shell injection. Handles only simple ASCII reliably. */
+        /**
+         * Last-resort shell injection. Handles only simple ASCII reliably.
+         * Runs the command inline — callers are already on a background thread/executor.
+         */
         private fun injectTextViaShell(text: String) {
             val escaped = text.replace("'", "'\\''")
-            Thread {
-                try {
-                    ProcessBuilder("su", "-c", "input text '$escaped'")
-                        .redirectErrorStream(true)
-                        .start()
-                        .waitFor()
-                    Log.i("MouseService", "shell injectText finished")
-                } catch (t: Throwable) {
-                    Log.e("MouseService", "shell injectText failed: ${t.message}")
-                }
-            }.start()
+            try {
+                ProcessBuilder("su", "-c", "input text '$escaped'")
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor()
+                Log.i("MouseService", "shell injectText finished")
+            } catch (t: Throwable) {
+                Log.e("MouseService", "shell injectText failed: ${t.message}")
+            }
         }
 
         private fun runMouseCmdStatic(cmd: String) {
-            Thread {
+            shellExecutor.execute {
                 try {
                     val proc = ProcessBuilder("su", "-c", "/data/adb/modules/DumbMouse/mouse $cmd")
                         .redirectErrorStream(true)
                         .start()
                     proc.inputStream.bufferedReader().readText()
                     proc.waitFor()
-                } catch (t: Throwable) {}
-            }.start()
+                } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -311,7 +315,7 @@ class MouseAccessibilityService : AccessibilityService() {
     }
 
     private fun handleWhatsAppDensity() {
-        Thread {
+        shellExecutor.execute {
             try {
                 val proc = ProcessBuilder("su", "-mm", "-c", "test -f /data/user/0/com.whatsapp/files/me && echo yes || echo no")
                     .redirectErrorStream(true)
@@ -323,13 +327,13 @@ class MouseAccessibilityService : AccessibilityService() {
             } catch (t: Throwable) {
                 Log.e("MOUSE_SVC", "handleWhatsAppDensity failed: ${t.message}")
             }
-        }.start()
+        }
     }
 
     private fun setDensity(density: Int) {
         if (currentDensity == density) return
         currentDensity = density
-        Thread {
+        shellExecutor.execute {
             try {
                 val proc = ProcessBuilder("su", "-c", "wm density $density")
                     .redirectErrorStream(true)
@@ -340,19 +344,19 @@ class MouseAccessibilityService : AccessibilityService() {
             } catch (t: Throwable) {
                 Log.e("MOUSE_SVC", "setDensity failed: ${t.message}")
             }
-        }.start()
+        }
     }
 
     private fun runMouseCmd(cmd: String) {
-        Thread {
+        shellExecutor.execute {
             try {
                 val proc = ProcessBuilder("su", "-c", "/data/adb/modules/DumbMouse/mouse $cmd")
                     .redirectErrorStream(true)
                     .start()
                 proc.inputStream.bufferedReader().readText()
                 proc.waitFor()
-            } catch (t: Throwable) {}
-        }.start()
+            } catch (_: Throwable) {}
+        }
     }
 
     override fun onInterrupt() {}

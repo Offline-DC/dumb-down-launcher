@@ -13,7 +13,6 @@ import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -25,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.graphics.drawable.toBitmap
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -70,6 +70,8 @@ class AllAppsActivity : AppCompatActivity() {
             "com.android.stk",
         )
 
+        private val bgExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
         /**
          * Pre-build the app list on a background thread so it's ready before
          * the user opens All Apps. Safe to call multiple times — no-ops when
@@ -77,10 +79,10 @@ class AllAppsActivity : AppCompatActivity() {
          */
         fun warmCacheAsync(context: android.content.Context) {
             if (cachedApps != null) return
-            Thread {
-                if (cachedApps != null) return@Thread   // double-checked
+            bgExecutor.execute {
+                if (cachedApps != null) return@execute   // double-checked
                 cachedApps = buildAppList(context)
-            }.start()
+            }
         }
 
         /** Build the full app list. Runs on whatever thread it's called from. */
@@ -166,7 +168,6 @@ class AllAppsActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = 0xFF000000.toInt()
@@ -229,21 +230,21 @@ class AllAppsActivity : AppCompatActivity() {
                     }
                     CHECK_UPDATES -> {
                         Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
-                        Thread {
+                        lifecycleScope.launch(Dispatchers.IO) {
                             val found = UpdateCheckWorker.runNow(applicationContext)
-                            runOnUiThread {
+                            withContext(Dispatchers.Main) {
                                 if (found) {
                                     startActivity(
-                                        Intent(this, NotificationsActivity::class.java).apply {
+                                        Intent(this@AllAppsActivity, NotificationsActivity::class.java).apply {
                                             putExtra(NotificationsActivity.EXTRA_SCROLL_TO_UPDATE, true)
                                         }
                                     )
                                     overridePendingTransition(0, 0)
                                 } else {
-                                    Toast.makeText(this, "Already up to date", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(this@AllAppsActivity, "Already up to date", Toast.LENGTH_SHORT).show()
                                 }
                             }
-                        }.start()
+                        }
                     }
                     WEB_KEYBOARD -> {
                         val newEnabled = !typeSyncEnabled
@@ -305,16 +306,16 @@ class AllAppsActivity : AppCompatActivity() {
         }
 
         if (cached == null) {
-            Thread {
+            lifecycleScope.launch(Dispatchers.IO) {
                 val loaded = buildAppList(applicationContext)
                 cachedApps = loaded
-                runOnUiThread {
-                    if (isDestroyed) return@runOnUiThread
+                withContext(Dispatchers.Main) {
+                    if (isDestroyed) return@withContext
                     items.clear()
                     items.addAll(loaded)
                     setTypeSyncToggle(WebKeyboardService.isRunning)
                     if (items.isEmpty()) {
-                        Toast.makeText(this, "No apps found.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this@AllAppsActivity, "No apps found.", Toast.LENGTH_LONG).show()
                     }
                     // Fix race condition: refreshDevicePairingRow() in onResume() may
                     // have run before buildAppList() finished (items was empty then, so
@@ -325,7 +326,7 @@ class AllAppsActivity : AppCompatActivity() {
                     // started up and the second query below will succeed.
                     refreshDevicePairingRow()
                 }
-            }.start()
+            }
         }
 
         // Load wallpaper — reuse the grid's cached bitmap if available.
@@ -333,17 +334,17 @@ class AllAppsActivity : AppCompatActivity() {
         if (cachedWp != null) {
             wallpaperState.value = cachedWp
         } else {
-            Thread {
+            lifecycleScope.launch(Dispatchers.IO) {
                 val bmp = try {
                     val wm = WallpaperManager.getInstance(applicationContext)
                     val drawable = wm.peekDrawable() ?: wm.drawable
                     drawable?.toBitmap()
                 } catch (_: Exception) { null }
                 MainAppsGridActivity.cachedWallpaper = bmp
-                runOnUiThread {
+                withContext(Dispatchers.Main) {
                     if (!isDestroyed) wallpaperState.value = bmp
                 }
-            }.start()
+            }
         }
     }
 
@@ -380,14 +381,14 @@ class AllAppsActivity : AppCompatActivity() {
      * the main thread (it can time-out when the companion app isn't installed).
      */
     private fun refreshDevicePairingRow() {
-        Thread {
+        lifecycleScope.launch(Dispatchers.IO) {
             val isPaired = try {
                 com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
                     .readPairing(applicationContext) != null
             } catch (_: Exception) { false }
 
-            runOnUiThread {
-                if (isDestroyed) return@runOnUiThread
+            withContext(Dispatchers.Main) {
+                if (isDestroyed) return@withContext
                 val existingIdx = items.indexOfFirst { it.packageName == DEVICE_PAIRING }
                 if (isPaired && existingIdx >= 0) {
                     items.removeAt(existingIdx)
@@ -424,7 +425,7 @@ class AllAppsActivity : AppCompatActivity() {
                     cachedApps = listOf(pairingItem) + (cachedApps ?: emptyList())
                 }
             }
-        }.start()
+        }
     }
 
     private fun launchApp(item: AppItem) {
