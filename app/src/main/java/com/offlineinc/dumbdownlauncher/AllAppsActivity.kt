@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.os.Bundle
-import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
@@ -117,9 +116,26 @@ class AllAppsActivity : AppCompatActivity() {
                 .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
                 .toMutableList()
 
+            // Hide contact sync when not paired
+            val pairingStore = com.offlineinc.dumbdownlauncher.pairing.PairingStore(context)
+            if (!pairingStore.isPaired) {
+                appItems.removeAll { it.packageName == "com.offlineinc.dumbcontactsync" }
+            }
+
+            // Show type sync if paired
+            if (pairingStore.isPaired) {
+                appItems.add(AppItem(
+                    packageName = WEB_KEYBOARD,
+                    label = "type sync",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                    isToggleOn = false,
+                ))
+            }
+
             appItems.add(AppItem(
-                packageName = CHANGE_PLATFORM,
-                label = "smart os",
+                packageName = DEVICE_SETUP,
+                label = "device setup",
                 icon = pm.defaultActivityIcon,
                 launchComponent = null,
             ))
@@ -129,29 +145,6 @@ class AllAppsActivity : AppCompatActivity() {
                 icon = pm.defaultActivityIcon,
                 launchComponent = null,
             ))
-            // ContentProvider query — may fail silently if companion app absent.
-            val pairing = try {
-                com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(context)
-            } catch (_: Exception) { null }
-
-            if (pairing != null) {
-                // Only show type sync once paired — it requires a linked device to work
-                appItems.add(AppItem(
-                    packageName = WEB_KEYBOARD,
-                    label = "type sync",
-                    icon = pm.defaultActivityIcon,
-                    launchComponent = null,
-                    isToggleOn = false,
-                ))
-            } else {
-                // Pin "device pairing" at the very top when not yet paired
-                appItems.add(0, AppItem(
-                    packageName = DEVICE_PAIRING,
-                    label = "device sync",
-                    icon = pm.defaultActivityIcon,
-                    launchComponent = null,
-                ))
-            }
 
             return appItems
         }
@@ -193,6 +186,7 @@ class AllAppsActivity : AppCompatActivity() {
             // activity is recreated while the service is already running.
             var typeSyncEnabled by remember { mutableStateOf(WebKeyboardService.isRunning) }
             var showTypeSyncModal by remember { mutableStateOf(false) }
+            var showUnpairDialog by remember { mutableStateOf(false) }
             val coroutineScope = rememberCoroutineScope()
 
             // Flip toggle off when the 10-min timer fires from the service
@@ -214,19 +208,16 @@ class AllAppsActivity : AppCompatActivity() {
                 items = items,
                 onActivate = { item ->
                     when (item.packageName) {
-                    DEVICE_PAIRING -> {
-                        // Open the contact sync app for pairing setup
-                        val pairingIntent = packageManager.getLaunchIntentForPackage("com.offlineinc.dumbcontactsync")
-                        if (pairingIntent != null) {
-                            startActivity(pairingIntent)
-                            overridePendingTransition(0, 0)
+                    DEVICE_SETUP -> {
+                        val pairingStore = com.offlineinc.dumbdownlauncher.pairing.PairingStore(this@AllAppsActivity)
+                        if (pairingStore.isPaired) {
+                            // Already paired — show unpair confirmation
+                            showUnpairDialog = true
                         } else {
-                            Toast.makeText(this, "Install Dumb Down app to pair", Toast.LENGTH_LONG).show()
+                            // Not paired — go straight to pairing
+                            PlatformPreferences.requestShowDialog(this)
+                            finish()
                         }
-                    }
-                    CHANGE_PLATFORM -> {
-                        PlatformPreferences.requestShowDialog(this)
-                        finish()
                     }
                     CHECK_UPDATES -> {
                         Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
@@ -249,26 +240,23 @@ class AllAppsActivity : AppCompatActivity() {
                     WEB_KEYBOARD -> {
                         val newEnabled = !typeSyncEnabled
                         if (newEnabled) {
-                            // ContentProvider query — must NOT run on the main thread
-                            coroutineScope.launch {
-                                val pairing = withContext(Dispatchers.IO) {
-                                    com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader.readPairing(this@AllAppsActivity)
-                                }
-                                if (pairing == null) {
-                                    Toast.makeText(
-                                        this@AllAppsActivity,
-                                        "pair with ur smartphone first using the Dumb Down app",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                } else {
-                                    typeSyncEnabled = true
-                                    setTypeSyncToggle(true)
-                                    startService(
-                                        Intent(this@AllAppsActivity, WebKeyboardService::class.java).apply {
-                                            action = WebKeyboardService.ACTION_START
-                                            putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, pairing.flipPhoneNumber)
-                                        }
-                                    )
+                            val pairingStore = com.offlineinc.dumbdownlauncher.pairing.PairingStore(this@AllAppsActivity)
+                            if (!pairingStore.isPaired) {
+                                Toast.makeText(
+                                    this@AllAppsActivity,
+                                    "pair with ur smartphone first in device setup",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                typeSyncEnabled = true
+                                setTypeSyncToggle(true)
+                                startService(
+                                    Intent(this@AllAppsActivity, WebKeyboardService::class.java).apply {
+                                        action = WebKeyboardService.ACTION_START
+                                        putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, pairingStore.flipPhoneNumber)
+                                    }
+                                )
+                                coroutineScope.launch {
                                     delay(200L)
                                     showTypeSyncModal = true
                                 }
@@ -303,6 +291,46 @@ class AllAppsActivity : AppCompatActivity() {
                     }
                 )
             }
+
+            if (showUnpairDialog) {
+                val pairingStore = remember {
+                    com.offlineinc.dumbdownlauncher.pairing.PairingStore(this@AllAppsActivity)
+                }
+                val phoneNum = pairingStore.flipPhoneNumber ?: "dumb phone"
+                AlertDialog(
+                    onDismissRequest = { showUnpairDialog = false },
+                    title = { Text("unpair device?") },
+                    text = { Text("this will disconnect from $phoneNum. u can pair again after.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showUnpairDialog = false
+                            pairingStore.clear()
+                            // Clear platform so it gets re-detected on next pairing
+                            PlatformPreferences.saveChoice(this@AllAppsActivity, "")
+                            invalidateCache()
+                            // Rebuild list to hide contact sync and type sync
+                            Thread {
+                                val loaded = buildAppList(applicationContext)
+                                cachedApps = loaded
+                                runOnUiThread {
+                                    if (!isDestroyed) {
+                                        items.clear()
+                                        items.addAll(loaded)
+                                    }
+                                }
+                            }.start()
+                            Toast.makeText(this@AllAppsActivity, "unpaired", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text("unpair")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showUnpairDialog = false }) {
+                            Text("cancel")
+                        }
+                    }
+                )
+            }
         }
 
         if (cached == null) {
@@ -317,14 +345,6 @@ class AllAppsActivity : AppCompatActivity() {
                     if (items.isEmpty()) {
                         Toast.makeText(this@AllAppsActivity, "No apps found.", Toast.LENGTH_LONG).show()
                     }
-                    // Fix race condition: refreshDevicePairingRow() in onResume() may
-                    // have run before buildAppList() finished (items was empty then, so
-                    // it was a no-op). Re-run it now that items are populated so the
-                    // "device pairing" row is correctly shown or hidden. Also handles
-                    // the case where buildAppList() added the row defensively due to a
-                    // transient ContentProvider failure — by now dumb-contacts-sync has
-                    // started up and the second query below will succeed.
-                    refreshDevicePairingRow()
                 }
             }
         }
@@ -376,9 +396,8 @@ class AllAppsActivity : AppCompatActivity() {
     }
 
     /**
-     * Show or hide the "device pairing" row based on current pairing status.
-     * The ContentProvider query runs on a background thread to avoid blocking
-     * the main thread (it can time-out when the companion app isn't installed).
+     * Refresh pairing-dependent rows (type sync, contact sync) on resume.
+     * "device setup" is always visible — it doubles as the unpair entry point.
      */
     private fun refreshDevicePairingRow() {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -389,12 +408,9 @@ class AllAppsActivity : AppCompatActivity() {
 
             withContext(Dispatchers.Main) {
                 if (isDestroyed) return@withContext
-                val existingIdx = items.indexOfFirst { it.packageName == DEVICE_PAIRING }
-                if (isPaired && existingIdx >= 0) {
-                    items.removeAt(existingIdx)
-                    cachedApps = cachedApps?.filter { it.packageName != DEVICE_PAIRING }
 
-                    // Add "type sync" at the end if it isn't already in the list
+                if (isPaired) {
+                    // Add "type sync" if it isn't already in the list
                     val hasTypeSync = items.any { it.packageName == WEB_KEYBOARD }
                     if (!hasTypeSync) {
                         val typeSyncItem = AppItem(
@@ -407,22 +423,13 @@ class AllAppsActivity : AppCompatActivity() {
                         items.add(typeSyncItem)
                         cachedApps = (cachedApps ?: emptyList()) + typeSyncItem
                     }
-                } else if (!isPaired && existingIdx < 0 && items.isNotEmpty()) {
-                    // Remove "type sync" if present (inverse of paired logic)
+                } else {
+                    // Remove "type sync" if present when not paired
                     val typeSyncIdx = items.indexOfFirst { it.packageName == WEB_KEYBOARD }
                     if (typeSyncIdx >= 0) {
                         items.removeAt(typeSyncIdx)
                         cachedApps = cachedApps?.filter { it.packageName != WEB_KEYBOARD }
                     }
-
-                    val pairingItem = AppItem(
-                        packageName = DEVICE_PAIRING,
-                        label = "device pairing",
-                        icon = packageManager.defaultActivityIcon,
-                        launchComponent = null
-                    )
-                    items.add(0, pairingItem)
-                    cachedApps = listOf(pairingItem) + (cachedApps ?: emptyList())
                 }
             }
         }

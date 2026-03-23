@@ -13,9 +13,8 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.ui.graphics.vector.ImageVector
-import com.offlineinc.dumbdownlauncher.CHANGE_PLATFORM
+import com.offlineinc.dumbdownlauncher.DEVICE_SETUP
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
-import com.offlineinc.dumbdownlauncher.DEVICE_PAIRING
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
 import com.offlineinc.dumbdownlauncher.WEB_KEYBOARD
 
@@ -44,8 +43,7 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     // Settings
     "com.android.settings"            to Icons.Filled.Settings,
     // Special all-apps items
-    CHANGE_PLATFORM                   to Icons.Filled.Psychology,
+    DEVICE_SETUP                      to Icons.Filled.Link,
     CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
     WEB_KEYBOARD                      to Icons.Filled.Keyboard,
-    DEVICE_PAIRING                    to Icons.Filled.Link,
 )

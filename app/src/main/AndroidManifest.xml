@@ -12,8 +12,10 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!-- Read pairing data from Contact Sync app (signature-level: same signing key) -->
-    <uses-permission android:name="com.offlineinc.dumbcontactsync.DEVICE_LINK_READ"/>
+    <!-- Signature-level permission: only apps signed with the same key can read pairing data -->
+    <permission
+        android:name="com.offlineinc.dumbdownlauncher.DEVICE_LINK_READ"
+        android:protectionLevel="signature" />
 
     <application
         android:name=".DumbDownApp"
@@ -124,6 +126,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_provider_paths" />
         </provider>
+
+        <!-- Exposes device-link pairing state to the contact-sync app.
+             Both apps are signed with the same key on the TCL Flip Go. -->
+        <provider
+            android:name=".pairing.DeviceLinkProvider"
+            android:authorities="com.offlineinc.dumbdownlauncher.devicelink"
+            android:exported="true"
+            android:readPermission="com.offlineinc.dumbdownlauncher.DEVICE_LINK_READ" />
 
     </application>
 

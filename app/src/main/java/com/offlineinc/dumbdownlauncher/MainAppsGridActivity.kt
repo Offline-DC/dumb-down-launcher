@@ -374,12 +374,6 @@ class MainAppsGridActivity : AppCompatActivity() {
 
     // ── Chrome Custom Tabs for smart txt ──────────────────────────────────
 
-    /**
-     * True if messages was opened recently enough that Chrome's tab is almost
-     * certainly still alive. 6 hours covers normal usage gaps; anything longer
-     * (overnight, device restart) means Chrome may have been killed and won't
-     * restore to the messages tab when brought to front via ACTION_MAIN.
-     */
     private fun chromeSessionIsWarm(): Boolean {
         val lastMs = getSharedPreferences("launcher_prefs", MODE_PRIVATE)
             .getLong("messages_last_opened_ms", 0L)
@@ -393,7 +387,6 @@ class MainAppsGridActivity : AppCompatActivity() {
     private fun openMessagesInChrome() {
         MouseAccessibilityService.setMouseEnabled(this, true)
         if (chromeSessionIsWarm()) {
-            // Chrome was used recently — tab should still be alive, bring to front
             Log.d("MESSAGES", "Warm session — bringing Chrome to front (no reload)")
             Intent(Intent.ACTION_MAIN).apply {
                 setPackage("com.android.chrome")
@@ -401,7 +394,6 @@ class MainAppsGridActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             }.let { startActivity(it) }
         } else {
-            // Cold session (restart, long gap) — navigate to messages URL explicitly
             Log.d("MESSAGES", "Cold session — opening messages URL via Custom Tabs")
             openCustomTab(WEB_APP_URLS.getValue(GOOGLE_MESSAGES))
         }

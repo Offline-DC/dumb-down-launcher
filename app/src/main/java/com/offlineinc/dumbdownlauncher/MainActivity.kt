@@ -23,18 +23,19 @@ import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
+import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
+import com.offlineinc.dumbdownlauncher.ui.PairingScreen
 import com.offlineinc.dumbdownlauncher.ui.PlatformChoiceDialog
 
 
 const val ALL_APPS = "__ALL_APPS__"
 const val NOTIFICATIONS = "__NOTIFICATIONS__"
-const val CHANGE_PLATFORM = "__CHANGE_PLATFORM__"
+const val DEVICE_SETUP = "__DEVICE_SETUP__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
 const val WEB_KEYBOARD = "__WEB_KEYBOARD__"
-const val DEVICE_PAIRING = "__DEVICE_PAIRING__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
@@ -43,7 +44,8 @@ val WEB_APP_URLS = mapOf(
 class MainActivity : AppCompatActivity() {
     private lateinit var dndMuteManager: DndMuteManager
     private lateinit var controller: LauncherController
-    private val showPlatformDialog = mutableStateOf(false)
+    /** Onboarding step: "pairing" → "platform" → null (done) */
+    private val onboardingStep = mutableStateOf<String?>(null)
     // Incremented on every onResume so HomeScreen re-fetches the wallpaper
     // immediately if the user changed it while away.
     private val wallpaperRefreshKey = mutableIntStateOf(0)
@@ -59,11 +61,42 @@ class MainActivity : AppCompatActivity() {
         )
         dndMuteManager.refreshFromSystem()
 
-        val choiceOnCreate = PlatformPreferences.getChoice(this)
-        Log.d("PLATFORM", "onCreate: getChoice=$choiceOnCreate showDialog=${showPlatformDialog.value}")
-        if (choiceOnCreate != "ios" && choiceOnCreate != "android") {
-            showPlatformDialog.value = true
-            Log.d("PLATFORM", "onCreate: setting showPlatformDialog=true")
+        // Determine onboarding step: pairing first, then platform choice
+        val pairingStore = PairingStore(this)
+        val platformChoice = PlatformPreferences.getChoice(this)
+        val needsPairing = !pairingStore.isPaired
+        val needsPlatform = platformChoice != "ios" && platformChoice != "android"
+
+        onboardingStep.value = when {
+            needsPairing -> "pairing"
+            needsPlatform -> "platform"
+            else -> null
+        }
+        Log.d("ONBOARDING", "onCreate: isPaired=${pairingStore.isPaired} platform=$platformChoice step=${onboardingStep.value}")
+
+        // If paired but platform unknown, fetch it from the server in the background
+        if (!needsPairing && needsPlatform) {
+            val phone = pairingStore.flipPhoneNumber
+            if (phone != null) {
+                Thread {
+                    try {
+                        val api = com.offlineinc.dumbdownlauncher.pairing.PairingApiClient(okhttp3.OkHttpClient())
+                        val status = api.getPairingStatus(phone)
+                        val serverPlatform = status.optString("smartPlatform", "")
+                        if (serverPlatform == "ios" || serverPlatform == "android") {
+                            PlatformPreferences.saveChoice(this@MainActivity, serverPlatform)
+                            Log.d("ONBOARDING", "Auto-detected platform from server: $serverPlatform")
+                            runOnUiThread {
+                                if (!isDestroyed && onboardingStep.value == "platform") {
+                                    onboardingStep.value = null
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w("ONBOARDING", "Failed to fetch platform from server: ${e.message}")
+                    }
+                }.start()
+            }
         }
 
         // Controller is kept for dialer digit launching from KeyDispatcher
@@ -77,7 +110,7 @@ class MainActivity : AppCompatActivity() {
 
         setContent {
             val muted by dndMuteManager.muted.collectAsState()
-            val showDialog by showPlatformDialog
+            val currentStep by onboardingStep
             val wallpaperKey by wallpaperRefreshKey
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -107,29 +140,55 @@ class MainActivity : AppCompatActivity() {
                     },
                 )
 
-                if (showDialog) {
-                    PlatformChoiceDialog(
-                        onChoose = { choice ->
-                            val previousChoice = PlatformPreferences.getChoice(this@MainActivity)
-                            if (choice != "skipped" && choice != "skip") {
-                                PlatformPreferences.saveChoice(this@MainActivity, choice)
-                                Log.d("PLATFORM", "onChoose: saved choice=$choice")
-                            } else {
-                                Log.d("PLATFORM", "onChoose: skipped/dismissed, not saving")
+                when (currentStep) {
+                    "pairing" -> {
+                        PairingScreen(
+                            onPaired = {
+                                val platform = PlatformPreferences.getChoice(this@MainActivity)
+                                if (platform == "ios" || platform == "android") {
+                                    // Platform was auto-detected from server — skip the picker
+                                    Log.d("ONBOARDING", "Pairing complete, platform auto-detected: $platform")
+                                    onboardingStep.value = null
+                                } else {
+                                    // Old server or old smartphone app — fall back to manual picker
+                                    Log.d("ONBOARDING", "Pairing complete, platform unknown — showing picker")
+                                    onboardingStep.value = "platform"
+                                }
+                                AllAppsActivity.invalidateCache()
+                                MainAppsGridActivity.invalidateItemCache()
                             }
-                            showPlatformDialog.value = false
-                            // Always bust the grid cache after the dialog is dismissed
-                            // (whether ios, android, or skip) so the next grid open
-                            // rebuilds with the correct — or absent — messaging app.
-                            MainAppsGridActivity.invalidateItemCache()
-                        }
-                    )
+                        )
+                    }
+                    "platform" -> {
+                        PlatformChoiceDialog(
+                            onChoose = { choice ->
+                                if (choice != "skipped" && choice != "skip") {
+                                    PlatformPreferences.saveChoice(this@MainActivity, choice)
+                                    Log.d("ONBOARDING", "Platform choice saved: $choice")
+                                } else {
+                                    Log.d("ONBOARDING", "Platform choice skipped")
+                                }
+                                onboardingStep.value = null
+                                MainAppsGridActivity.invalidateItemCache()
+                            }
+                        )
+                    }
                 }
-
             }
         }
 
         val permissionsNeeded = mutableListOf<String>()
+        // Phone number permission — needed for device pairing
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED) {
+                permissionsNeeded.add(Manifest.permission.READ_PHONE_NUMBERS)
+            }
+        } else {
+            if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+                @Suppress("DEPRECATION")
+                permissionsNeeded.add(Manifest.permission.READ_PHONE_STATE)
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 permissionsNeeded.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -150,7 +209,8 @@ class MainActivity : AppCompatActivity() {
         MouseAccessibilityService.forceDisable(this)
         overridePendingTransition(0, 0)
         if (PlatformPreferences.consumeShowDialog(this)) {
-            showPlatformDialog.value = true
+            // "device setup" from AllAppsActivity re-runs both steps from the beginning
+            onboardingStep.value = "pairing"
         }
         // Bump the key so HomeScreen re-fetches the wallpaper in case the user
         // changed it while the launcher was in the background.
@@ -197,11 +257,11 @@ class MainActivity : AppCompatActivity() {
             Log.d("DUMB_KEYS", "DOWN keyCode=${event.keyCode} scanCode=${event.scanCode} unicode=${event.unicodeChar}")
         }
 
-        // While the platform-picker (or restart) dialog is on screen, let all key
+        // While onboarding (pairing or platform-picker) is on screen, let all key
         // events flow straight to Compose so the dialog's onPreviewKeyEvent handles
         // Up/Down/Enter/Back correctly.  Without this guard, KeyDispatcher intercepts
         // Enter/Center and launches the 3×3 grid before the dialog can react.
-        if (showPlatformDialog.value) {
+        if (onboardingStep.value != null) {
             return super.dispatchKeyEvent(event)
         }
 
