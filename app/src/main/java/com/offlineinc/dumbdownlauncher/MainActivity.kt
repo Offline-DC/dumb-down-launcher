@@ -24,6 +24,7 @@ import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
+import android.net.Uri
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
 import com.offlineinc.dumbdownlauncher.ui.PairingScreen
@@ -63,6 +64,16 @@ class MainActivity : AppCompatActivity() {
 
         // Determine onboarding step: pairing first, then platform choice
         val pairingStore = PairingStore(this)
+
+        // ── Migration: import pairing data from the old contact-sync app ────
+        // Before this update, pairing was owned by the contact-sync app and
+        // exposed via its ContentProvider. If the user is already paired
+        // there, pull that data into the launcher's own PairingStore so the
+        // onboarding screen doesn't re-appear after the update.
+        if (!pairingStore.isPaired) {
+            migrateFromContactSync(pairingStore)
+        }
+
         val platformChoice = PlatformPreferences.getChoice(this)
         val needsPairing = !pairingStore.isPaired
         val needsPlatform = platformChoice != "ios" && platformChoice != "android"
@@ -306,6 +317,52 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             else -> super.dispatchKeyEvent(event)
+        }
+    }
+
+    /**
+     * One-time migration: pull pairing data from the old contact-sync app's
+     * ContentProvider (content://com.offlineinc.dumbcontactsync.devicelink/pairing)
+     * into the launcher's PairingStore.
+     *
+     * If the contact-sync app has already been updated and removed its provider,
+     * we fall back to checking whether the user previously completed setup
+     * (platform choice is saved). If so, mark as paired so we don't force
+     * re-onboarding — the full pairing credentials will be re-established
+     * when the user opens device setup or the next sync occurs.
+     */
+    private fun migrateFromContactSync(store: PairingStore) {
+        // Attempt 1: read from the old contact-sync ContentProvider
+        try {
+            val oldUri = Uri.parse("content://com.offlineinc.dumbcontactsync.devicelink/pairing")
+            contentResolver.query(oldUri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val isPaired = cursor.getInt(cursor.getColumnIndexOrThrow("is_paired")) == 1
+                    val secret = cursor.getString(cursor.getColumnIndexOrThrow("shared_secret")).orEmpty()
+                    val phone = cursor.getString(cursor.getColumnIndexOrThrow("flip_phone_number")).orEmpty()
+                    val pairingId = cursor.getInt(cursor.getColumnIndexOrThrow("pairing_id"))
+
+                    if (isPaired && secret.isNotEmpty()) {
+                        store.isPaired = true
+                        store.sharedSecret = secret
+                        store.flipPhoneNumber = phone
+                        store.pairingId = pairingId
+                        Log.i("ONBOARDING", "Migrated pairing from contact-sync: pairingId=$pairingId phone=$phone")
+                        return
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("ONBOARDING", "Could not read old contact-sync provider (may already be updated): ${e.message}")
+        }
+
+        // Attempt 2: if the user already chose a platform, they went through
+        // setup before this update — treat them as paired so they don't see
+        // the pairing screen again.
+        val existingPlatform = PlatformPreferences.getChoice(this)
+        if (existingPlatform == "ios" || existingPlatform == "android") {
+            store.isPaired = true
+            Log.i("ONBOARDING", "Marked as paired based on existing platform choice ($existingPlatform) — credentials will sync on next use")
         }
     }
 }

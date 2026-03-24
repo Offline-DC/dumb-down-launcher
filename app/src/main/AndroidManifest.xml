@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Read pairing data from contact-sync app (legacy migration) -->
+    <uses-permission android:name="com.offlineinc.dumbcontactsync.DEVICE_LINK_READ"/>
+
     <!-- Signature-level permission: only apps signed with the same key can read pairing data -->
     <permission
         android:name="com.offlineinc.dumbdownlauncher.DEVICE_LINK_READ"
