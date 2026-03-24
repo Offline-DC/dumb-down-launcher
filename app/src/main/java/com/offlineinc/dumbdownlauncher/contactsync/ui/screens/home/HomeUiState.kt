@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlineinc.dumbdownlauncher.contactsync.icloud.ServiceLocator
 import com.offlineinc.dumbdownlauncher.contactsync.icloud.hasContactsPermissions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -148,15 +150,18 @@ class HomeViewModel : ViewModel() {
                 _ui.update {
                     it.copy(isConnecting = false, isConnected = true, status = "connected!")
                 }
+            } catch (e: CancellationException) {
+                // If the ViewModel scope itself is dead, don't retry — just stop
+                if (!viewModelScope.isActive) throw e
+                // Otherwise the inner coroutine was cancelled (e.g. WebSocket timeout) — silently retry
+                Log.w(TAG, "[ContactSync] connectWebSocket: cancelled — will retry silently")
+                _ui.update { it.copy(isConnecting = true, isConnected = false, error = null) }
+                connectJob = null
+                connectWebSocket(ctx)
             } catch (t: Throwable) {
                 Log.e(TAG, "[ContactSync] connectWebSocket: FAILED", t)
-                _ui.update {
-                    it.copy(
-                        isConnecting = false, isConnected = false,
-                        error = t.message ?: "Connection failed"
-                    )
-                }
-                // Auto-retry after a brief delay
+                // Don't show error — silently retry
+                _ui.update { it.copy(isConnecting = true, isConnected = false, error = null) }
                 delay(2000)
                 connectJob = null
                 connectWebSocket(ctx)

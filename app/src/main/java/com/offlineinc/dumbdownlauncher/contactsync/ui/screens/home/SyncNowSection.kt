@@ -110,7 +110,7 @@ fun SyncNowSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    if (ui.canClose) "you can now close this app"
+                    if (ui.canClose) "u can close this page while it syncs, it may take several minutes"
                     else "keep this app open until sync completes",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -131,7 +131,7 @@ fun SyncNowSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "you can now close this app",
+                    "u can close this page",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center

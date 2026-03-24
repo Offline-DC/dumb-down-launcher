@@ -18,6 +18,7 @@ class ContactSyncActivity : AppCompatActivity() {
     @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = 0xFF000000.toInt()
 
         setContent {
             DumbContactSyncTheme(darkTheme = true) {

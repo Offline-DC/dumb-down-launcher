@@ -6,6 +6,7 @@ import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -42,11 +44,14 @@ private const val TAG = "PairingScreen"
  */
 @Composable
 fun PairingScreen(
-    onPaired: () -> Unit
+    onPaired: () -> Unit,
+    onSkip: () -> Unit = {}
 ) {
     val ctx = LocalContext.current
     val focusRequester = remember { FocusRequester() }
+    val skipFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+    var skipFocused by remember { mutableStateOf(false) }
 
     var phoneNumber by remember { mutableStateOf<String?>(null) }
     var phoneError by remember { mutableStateOf<String?>(null) }
@@ -90,6 +95,27 @@ fun PairingScreen(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
+                // If skip button is focused, handle its keys
+                if (skipFocused) {
+                    return@onPreviewKeyEvent when (event.key) {
+                        Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+                            onSkip()
+                            true
+                        }
+                        Key.DirectionDown, Key.Back -> {
+                            focusRequester.requestFocus()
+                            true
+                        }
+                        else -> false
+                    }
+                }
+
+                // Up arrow → move focus to skip button
+                if (event.key == Key.DirectionUp) {
+                    skipFocusRequester.requestFocus()
+                    return@onPreviewKeyEvent true
+                }
 
                 // Number key input (0-9) via D-pad numpad
                 val digit = keyToDigit(event.key)
@@ -272,6 +298,33 @@ fun PairingScreen(
                 )
             }
         }
+
+        // Skip button — top right, not focused by default.
+        // User presses Up arrow to reach it; it highlights when focused.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 6.dp, end = 8.dp)
+                .focusRequester(skipFocusRequester)
+                .onFocusChanged { skipFocused = it.isFocused }
+                .focusable()
+                .then(
+                    if (skipFocused) Modifier
+                        .background(DumbTheme.Colors.Yellow, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                    else Modifier
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+        ) {
+            BasicText(
+                text = "skip",
+                style = TextStyle(
+                    fontFamily = DumbTheme.BioRhyme,
+                    fontSize = 11.sp,
+                    color = if (skipFocused) DumbTheme.Colors.Black else DumbTheme.Colors.Gray
+                )
+            )
+        }
     }
 }
 
@@ -357,7 +410,7 @@ private suspend fun confirmPairing(
     try {
         val apiClient = PairingApiClient(OkHttpClient())
         val result = withContext(Dispatchers.IO) {
-            apiClient.confirmPairing(code, phoneNumber)
+            apiClient.confirmPairing(code, phoneNumber, com.offlineinc.dumbdownlauncher.BuildConfig.VERSION_NAME)
         }
 
         val secret = result.getString("sharedSecret")

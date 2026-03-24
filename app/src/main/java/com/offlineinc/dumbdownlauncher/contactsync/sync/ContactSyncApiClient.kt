@@ -15,11 +15,14 @@ class ContactSyncApiClient(private val httpClient: OkHttpClient) {
         private val JSON_TYPE = "application/json".toMediaType()
     }
 
-    fun confirmPairing(pairingCode: String, flipPhoneNumber: String): JSONObject {
-        Log.i(TAG, "[ContactSync] confirmPairing: code=$pairingCode, phone=$flipPhoneNumber")
+    fun confirmPairing(pairingCode: String, flipPhoneNumber: String, flipLauncherVersion: String? = null): JSONObject {
+        Log.i(TAG, "[ContactSync] confirmPairing: code=$pairingCode, phone=$flipPhoneNumber, version=$flipLauncherVersion")
         val body = JSONObject()
             .put("pairingCode", pairingCode)
             .put("flipPhoneNumber", flipPhoneNumber)
+        if (flipLauncherVersion != null) {
+            body.put("flipLauncherVersion", flipLauncherVersion)
+        }
         val request = Request.Builder()
             .url("$BASE_URL/pairing/confirm")
             .post(body.toString().toRequestBody(JSON_TYPE))
@@ -43,7 +46,7 @@ class ContactSyncApiClient(private val httpClient: OkHttpClient) {
         return result
     }
 
-    fun upload(flipPhoneNumber: String, source: String, encryptedVcf: String, iv: String, contentHash: String, contactCount: Int, sharedSecret: String): JSONObject {
+    fun upload(flipPhoneNumber: String, source: String, encryptedVcf: String, iv: String, contentHash: String, contactCount: Int, sharedSecret: String, flipLauncherVersion: String? = null): JSONObject {
         val vcfLen = encryptedVcf.length
         Log.i(TAG, "[ContactSync] upload: source=$source, hash=${contentHash.take(12)}..., contacts=$contactCount, vcfLen=$vcfLen")
         val body = JSONObject()
@@ -53,6 +56,9 @@ class ContactSyncApiClient(private val httpClient: OkHttpClient) {
             .put("iv", iv)
             .put("contentHash", contentHash)
             .put("contactCount", contactCount)
+        if (flipLauncherVersion != null) {
+            body.put("flipLauncherVersion", flipLauncherVersion)
+        }
         val hmac = CryptoUtil.hmacSha256Hex(body.toString().toByteArray(), sharedSecret)
         Log.d(TAG, "[ContactSync] upload: bodySize=${body.toString().length} bytes, hmac=${hmac.take(12)}...")
         val request = Request.Builder()

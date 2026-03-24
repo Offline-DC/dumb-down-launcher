@@ -154,6 +154,10 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
+            // Re-sort so virtual items (contact sync, type sync, device setup, updates)
+            // appear in alphabetical order alongside real apps.
+            appItems.sortWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+
             return appItems
         }
     }

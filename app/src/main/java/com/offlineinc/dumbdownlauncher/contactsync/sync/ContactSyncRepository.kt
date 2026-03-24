@@ -2,6 +2,7 @@ package com.offlineinc.dumbdownlauncher.contactsync.sync
 
 import android.content.Context
 import android.util.Log
+import com.offlineinc.dumbdownlauncher.BuildConfig
 import com.offlineinc.dumbdownlauncher.contactsync.icloud.AndroidContactsReader
 import com.offlineinc.dumbdownlauncher.contactsync.icloud.AndroidContactsUpserter
 import com.offlineinc.dumbdownlauncher.contactsync.icloud.VCardMini
@@ -142,9 +143,11 @@ class ContactSyncRepository(
         val contentHash = CryptoUtil.sha256Hex(vcf.toByteArray())
         Log.i(TAG, "[ContactSync] uploadFlipContacts: VCF size=$vcfSize bytes, hash=${contentHash.take(12)}...")
 
+        val version = BuildConfig.VERSION_NAME
+
         if (contentHash == store.lastFlipHash) {
             Log.i(TAG, "[ContactSync] uploadFlipContacts: hash unchanged — uploading metadata only")
-            apiClient.upload(phoneNumber, "flip", "", "", contentHash, contacts.size, secret)
+            apiClient.upload(phoneNumber, "flip", "", "", contentHash, contacts.size, secret, version)
             store.flipContactCount = contacts.size
             return
         }
@@ -159,7 +162,8 @@ class ContactSyncRepository(
             CryptoUtil.toBase64(iv),
             contentHash,
             contacts.size,
-            secret
+            secret,
+            version
         )
 
         store.lastFlipHash = contentHash

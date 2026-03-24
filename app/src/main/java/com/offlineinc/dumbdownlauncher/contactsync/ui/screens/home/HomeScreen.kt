@@ -9,6 +9,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
+private fun formatPhoneNumber(raw: String): String {
+    val digits = raw.filter { it.isDigit() }
+    // Handle US numbers: strip leading 1 if 11 digits
+    val local = if (digits.length == 11 && digits.startsWith("1")) digits.drop(1) else digits
+    return if (local.length == 10) {
+        "${local.substring(0, 3)}-${local.substring(3, 6)}-${local.substring(6)}"
+    } else {
+        raw
+    }
+}
+
 @Composable
 fun HomeScreen(
     ui: HomeUiState,
@@ -31,7 +42,7 @@ fun HomeScreen(
         )
 
         Text(
-            if (ui.flipPhoneNumber != null) "Paired with ${ui.flipPhoneNumber}"
+            if (ui.flipPhoneNumber != null) "Paired with ${formatPhoneNumber(ui.flipPhoneNumber)}"
             else "Paired with smart phone",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.primary
