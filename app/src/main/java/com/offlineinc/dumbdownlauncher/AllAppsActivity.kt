@@ -48,6 +48,8 @@ class AllAppsActivity : AppCompatActivity() {
             // launchers
             "com.offlineinc.dumbdownlauncher",
             "com.android.launcher3",
+            // Contact sync is now integrated into the launcher — hide standalone APK
+            "com.offlineinc.dumbcontactsync",
             // apps to hide
             "com.topjohnwu.magisk",           // Magisk
             "com.android.chrome",             // Chrome
@@ -116,10 +118,16 @@ class AllAppsActivity : AppCompatActivity() {
                 .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
                 .toMutableList()
 
-            // Hide contact sync when not paired
             val pairingStore = com.offlineinc.dumbdownlauncher.pairing.PairingStore(context)
-            if (!pairingStore.isPaired) {
-                appItems.removeAll { it.packageName == "com.offlineinc.dumbcontactsync" }
+
+            // Show contact sync (built-in) when paired
+            if (pairingStore.isPaired) {
+                appItems.add(AppItem(
+                    packageName = CONTACT_SYNC,
+                    label = "contact sync",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                ))
             }
 
             // Show type sync if paired
@@ -145,6 +153,10 @@ class AllAppsActivity : AppCompatActivity() {
                 icon = pm.defaultActivityIcon,
                 launchComponent = null,
             ))
+
+            // Re-sort so virtual items (contact sync, type sync, device setup, updates)
+            // appear in alphabetical order alongside real apps.
+            appItems.sortWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
 
             return appItems
         }
@@ -270,6 +282,13 @@ class AllAppsActivity : AppCompatActivity() {
                                 }
                             )
                         }
+                    }
+                    CONTACT_SYNC -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        overridePendingTransition(0, 0)
                     }
                     else -> launchApp(item)
                 }
@@ -423,12 +442,30 @@ class AllAppsActivity : AppCompatActivity() {
                         items.add(typeSyncItem)
                         cachedApps = (cachedApps ?: emptyList()) + typeSyncItem
                     }
+                    // Add "contact sync" if it isn't already in the list
+                    val hasContactSync = items.any { it.packageName == CONTACT_SYNC }
+                    if (!hasContactSync) {
+                        val contactSyncItem = AppItem(
+                            packageName = CONTACT_SYNC,
+                            label = "contact sync",
+                            icon = packageManager.defaultActivityIcon,
+                            launchComponent = null,
+                        )
+                        items.add(contactSyncItem)
+                        cachedApps = (cachedApps ?: emptyList()) + contactSyncItem
+                    }
                 } else {
                     // Remove "type sync" if present when not paired
                     val typeSyncIdx = items.indexOfFirst { it.packageName == WEB_KEYBOARD }
                     if (typeSyncIdx >= 0) {
                         items.removeAt(typeSyncIdx)
                         cachedApps = cachedApps?.filter { it.packageName != WEB_KEYBOARD }
+                    }
+                    // Remove "contact sync" if present when not paired
+                    val contactSyncIdx = items.indexOfFirst { it.packageName == CONTACT_SYNC }
+                    if (contactSyncIdx >= 0) {
+                        items.removeAt(contactSyncIdx)
+                        cachedApps = cachedApps?.filter { it.packageName != CONTACT_SYNC }
                     }
                 }
             }
@@ -443,12 +480,6 @@ class AllAppsActivity : AppCompatActivity() {
                     addCategory(Intent.CATEGORY_LAUNCHER)
                     setComponent(component)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    if (item.packageName == "com.offlineinc.dumbcontactsync") {
-                        val platform = PlatformPreferences.getChoice(this@AllAppsActivity)
-                        if (platform != null && platform != "skipped") {
-                            putExtra("platform", platform)
-                        }
-                    }
                 }
             } else {
                 packageManager.getLaunchIntentForPackage(item.packageName)?.apply {

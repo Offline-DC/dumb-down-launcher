@@ -1,15 +1,10 @@
 package com.offlineinc.dumbdownlauncher.typesync
 
 import android.app.Service
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
-import android.view.accessibility.AccessibilityManager
-import android.view.accessibility.AccessibilityNodeInfo
+import com.offlineinc.dumbdownlauncher.MouseAccessibilityService
 import okhttp3.*
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -145,21 +140,11 @@ class TypeSyncService : Service() {
     }
 
     /**
-     * Injects text into the currently focused text field.
-     * Uses clipboard + paste as a reliable cross-app injection method.
+     * Injects text into the currently focused text field via the accessibility
+     * service's clipboard paste (or ACTION_SET_TEXT fallback).
      */
     private fun injectText(text: String) {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("TypeSync", text))
-
-        // Try to paste via accessibility
-        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        if (am.isEnabled) {
-            // The accessibility service will handle the paste via its focused node
-            // For now, use the clipboard-based approach and let the user paste
-            // In production, the MouseAccessibilityService would call performAction(ACTION_PASTE)
-            Log.i(TAG, "Text placed on clipboard — ready to paste")
-        }
+        MouseAccessibilityService.injectText(text)
     }
 
     private fun sendDisconnect() {

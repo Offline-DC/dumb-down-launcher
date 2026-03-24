@@ -23,6 +23,7 @@ import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
+import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import android.net.Uri
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
@@ -37,6 +38,7 @@ const val DEVICE_SETUP = "__DEVICE_SETUP__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
 const val WEB_KEYBOARD = "__WEB_KEYBOARD__"
+const val CONTACT_SYNC = "__CONTACT_SYNC__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
@@ -50,7 +52,6 @@ class MainActivity : AppCompatActivity() {
     // Incremented on every onResume so HomeScreen re-fetches the wallpaper
     // immediately if the user changed it while away.
     private val wallpaperRefreshKey = mutableIntStateOf(0)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -110,6 +111,27 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Report launcher version to server if it changed since last report
+        if (pairingStore.isPaired) {
+            val currentVersion = BuildConfig.VERSION_NAME
+            if (currentVersion != pairingStore.lastReportedVersion) {
+                val phone = pairingStore.flipPhoneNumber
+                val secret = pairingStore.sharedSecret
+                if (phone != null && secret != null) {
+                    Thread {
+                        try {
+                            val api = PairingApiClient(okhttp3.OkHttpClient())
+                            api.reportVersion(phone, currentVersion, secret)
+                            pairingStore.lastReportedVersion = currentVersion
+                            Log.d("ONBOARDING", "Reported launcher version $currentVersion to server")
+                        } catch (e: Exception) {
+                            Log.w("ONBOARDING", "Failed to report version: ${e.message}")
+                        }
+                    }.start()
+                }
+            }
+        }
+
         // Controller is kept for dialer digit launching from KeyDispatcher
         controller = LauncherController(
             context = this,
@@ -155,21 +177,26 @@ class MainActivity : AppCompatActivity() {
                     "pairing" -> {
                         PairingScreen(
                             onPaired = {
-                                val platform = PlatformPreferences.getChoice(this@MainActivity)
-                                if (platform == "ios" || platform == "android") {
-                                    // Platform was auto-detected from server — skip the picker
-                                    Log.d("ONBOARDING", "Pairing complete, platform auto-detected: $platform")
-                                    onboardingStep.value = null
-                                } else {
-                                    // Old server or old smartphone app — fall back to manual picker
-                                    Log.d("ONBOARDING", "Pairing complete, platform unknown — showing picker")
-                                    onboardingStep.value = "platform"
-                                }
+                                Log.d("ONBOARDING", "Pairing complete — launching contact sync")
                                 AllAppsActivity.invalidateCache()
                                 MainAppsGridActivity.invalidateItemCache()
+                                // After pairing, send user straight to contact sync
+                                onboardingStep.value = "contactsync"
+                                startActivity(
+                                    Intent(this@MainActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                                overridePendingTransition(0, 0)
+                            },
+                            onSkip = {
+                                Log.d("ONBOARDING", "User skipped onboarding")
+                                onboardingStep.value = null
                             }
                         )
                     }
+                    // ContactSyncActivity is running on top — nothing to render here.
+                    // When the user presses back, onResume advances to "platform" or done.
+                    "contactsync" -> { }
                     "platform" -> {
                         PlatformChoiceDialog(
                             onChoose = { choice ->
@@ -185,6 +212,7 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                 }
+
             }
         }
 
@@ -222,6 +250,17 @@ class MainActivity : AppCompatActivity() {
         if (PlatformPreferences.consumeShowDialog(this)) {
             // "device setup" from AllAppsActivity re-runs both steps from the beginning
             onboardingStep.value = "pairing"
+        }
+        // User returned from ContactSyncActivity — advance to platform picker or done
+        if (onboardingStep.value == "contactsync") {
+            val platform = PlatformPreferences.getChoice(this)
+            if (platform == "ios" || platform == "android") {
+                Log.d("ONBOARDING", "Contact sync done, platform auto-detected: $platform")
+                onboardingStep.value = null
+            } else {
+                Log.d("ONBOARDING", "Contact sync done, platform unknown — showing picker")
+                onboardingStep.value = "platform"
+            }
         }
         // Bump the key so HomeScreen re-fetches the wallpaper in case the user
         // changed it while the launcher was in the background.

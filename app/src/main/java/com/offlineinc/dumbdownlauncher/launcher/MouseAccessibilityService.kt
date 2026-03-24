@@ -76,6 +76,14 @@ class MouseAccessibilityService : AccessibilityService() {
         private const val A11Y_WAIT_TIMEOUT_MS = 3000L
         private const val A11Y_POLL_INTERVAL_MS = 150L
 
+        /**
+         * Maximum number of attempts to find a focused editable node before
+         * falling back. Covers the common case where the text field hasn't
+         * received focus yet right after a screen transition.
+         */
+        private const val FIND_FOCUS_MAX_RETRIES = 5
+        private const val FIND_FOCUS_RETRY_MS = 100L
+
         fun injectText(text: String) {
             // Run on the shared executor so polling doesn't block the caller.
             shellExecutor.execute {
@@ -86,19 +94,27 @@ class MouseAccessibilityService : AccessibilityService() {
                     return@execute
                 }
 
-                val root = service.rootInActiveWindow
-                if (root == null) {
-                    Log.w("MouseService", "injectText: rootInActiveWindow null, using shell")
-                    injectTextViaShell(text)
-                    return@execute
+                // Retry loop: the focused node might not be ready immediately
+                // (e.g. after a screen transition or when the keyboard is appearing).
+                var focused: AccessibilityNodeInfo? = null
+                for (attempt in 1..FIND_FOCUS_MAX_RETRIES) {
+                    val root = service.rootInActiveWindow
+                    if (root != null) {
+                        focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                        if (focused != null && focused.isEditable) break
+                        focused = null
+                    }
+                    if (attempt < FIND_FOCUS_MAX_RETRIES) {
+                        Log.d("MouseService", "injectText: no focused editable node (attempt $attempt/$FIND_FOCUS_MAX_RETRIES), retrying...")
+                        try { Thread.sleep(FIND_FOCUS_RETRY_MS) } catch (_: InterruptedException) { break }
+                    }
                 }
 
-                val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                if (focused != null && focused.isEditable) {
+                if (focused != null) {
                     Log.d("MouseService", "injectText via clipboard paste for: \"$text\"")
                     injectViaClipboard(service, focused, text)
                 } else {
-                    Log.w("MouseService", "injectText: no focused editable node, using shell")
+                    Log.w("MouseService", "injectText: no focused editable node after $FIND_FOCUS_MAX_RETRIES attempts, using shell")
                     injectTextViaShell(text)
                 }
             }
@@ -119,10 +135,19 @@ class MouseAccessibilityService : AccessibilityService() {
             return instance
         }
 
+        /** Max attempts for the paste action itself. */
+        private const val PASTE_MAX_RETRIES = 3
+        private const val PASTE_RETRY_MS = 50L
+        /** Small delay after setting the clipboard to let the system propagate it. */
+        private const val CLIPBOARD_SETTLE_MS = 30L
+
         /**
          * Set [text] via clipboard paste. Selects all existing content first so the
          * paste fully replaces the field. Bypasses the IME entirely — @, numbers, and
          * all special characters arrive verbatim regardless of what keyboard is active.
+         *
+         * If clipboard paste fails after retries, falls back to ACTION_SET_TEXT
+         * (works on most EditText views). Shell is the absolute last resort.
          */
         private fun injectViaClipboard(
             service: MouseAccessibilityService,
@@ -133,6 +158,9 @@ class MouseAccessibilityService : AccessibilityService() {
                 val cm = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("ts", text))
 
+                // Let the clipboard settle — avoids a race where paste grabs stale content.
+                try { Thread.sleep(CLIPBOARD_SETTLE_MS) } catch (_: InterruptedException) {}
+
                 // Select all existing content (0 → end) so the paste fully replaces it
                 val len = node.text?.length ?: 0
                 val selArgs = Bundle().apply {
@@ -141,12 +169,37 @@ class MouseAccessibilityService : AccessibilityService() {
                 }
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
 
-                val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-                Log.d("MouseService", "injectText via clipboard paste: success=$pasted")
-                if (!pasted) {
-                    Log.w("MouseService", "clipboard paste failed, falling back to shell")
-                    injectTextViaShell(text)
+                // Retry paste a few times — it can fail transiently if the node is
+                // mid-layout or the clipboard manager hasn't finished propagating.
+                var pasted = false
+                for (attempt in 1..PASTE_MAX_RETRIES) {
+                    pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    if (pasted) break
+                    Log.d("MouseService", "clipboard paste attempt $attempt/$PASTE_MAX_RETRIES failed, retrying...")
+                    if (attempt < PASTE_MAX_RETRIES) {
+                        try { Thread.sleep(PASTE_RETRY_MS) } catch (_: InterruptedException) { break }
+                    }
                 }
+
+                if (pasted) {
+                    Log.d("MouseService", "injectText via clipboard paste: success")
+                    return
+                }
+
+                // Fallback: ACTION_SET_TEXT works on standard EditText views and
+                // doesn't require clipboard support. It replaces the entire field.
+                Log.w("MouseService", "clipboard paste failed after $PASTE_MAX_RETRIES attempts, trying ACTION_SET_TEXT")
+                val setTextArgs = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                }
+                val setText = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setTextArgs)
+                if (setText) {
+                    Log.d("MouseService", "injectText via ACTION_SET_TEXT: success")
+                    return
+                }
+
+                Log.w("MouseService", "ACTION_SET_TEXT also failed, falling back to shell")
+                injectTextViaShell(text)
             } catch (t: Throwable) {
                 Log.e("MouseService", "injectViaClipboard failed: ${t.message}")
                 injectTextViaShell(text)

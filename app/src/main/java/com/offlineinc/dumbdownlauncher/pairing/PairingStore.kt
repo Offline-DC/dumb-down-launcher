@@ -25,6 +25,10 @@ class PairingStore(context: Context) {
         get() = prefs.getString("flip_phone_number", null)
         set(v) = prefs.edit().putString("flip_phone_number", v).apply()
 
+    var lastReportedVersion: String?
+        get() = prefs.getString("last_reported_version", null)
+        set(v) = prefs.edit().putString("last_reported_version", v).apply()
+
     fun clear() {
         prefs.edit().clear().apply()
     }

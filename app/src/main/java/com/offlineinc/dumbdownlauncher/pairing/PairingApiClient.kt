@@ -23,11 +23,14 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
      * Confirms a 4-digit pairing code and returns the server response
      * containing sharedSecret and pairingId.
      */
-    fun confirmPairing(pairingCode: String, flipPhoneNumber: String): JSONObject {
-        Log.i(TAG, "confirmPairing: code=$pairingCode, phone=$flipPhoneNumber")
+    fun confirmPairing(pairingCode: String, flipPhoneNumber: String, flipLauncherVersion: String? = null): JSONObject {
+        Log.i(TAG, "confirmPairing: code=$pairingCode, phone=$flipPhoneNumber, version=$flipLauncherVersion")
         val body = JSONObject()
             .put("pairingCode", pairingCode)
             .put("flipPhoneNumber", flipPhoneNumber)
+        if (flipLauncherVersion != null) {
+            body.put("flipLauncherVersion", flipLauncherVersion)
+        }
         val request = Request.Builder()
             .url("$BASE_URL/pairing/confirm")
             .post(body.toString().toRequestBody(JSON_TYPE))
@@ -48,6 +51,34 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
         val result = JSONObject(bodyStr)
         Log.i(TAG, "confirmPairing: success — pairingId=${result.optInt("pairingId")}")
         return result
+    }
+
+    /**
+     * Reports the current launcher version to the server so the smart phone
+     * companion app knows which features are available.
+     * Called once after each launcher update.
+     */
+    fun reportVersion(flipPhoneNumber: String, flipLauncherVersion: String, sharedSecret: String) {
+        Log.i(TAG, "reportVersion: phone=$flipPhoneNumber, version=$flipLauncherVersion")
+        val body = JSONObject()
+            .put("flipPhoneNumber", flipPhoneNumber)
+            .put("flipLauncherVersion", flipLauncherVersion)
+        val hmac = com.offlineinc.dumbdownlauncher.contactsync.sync.CryptoUtil.hmacSha256Hex(
+            body.toString().toByteArray(), sharedSecret
+        )
+        val request = Request.Builder()
+            .url("$BASE_URL/report-version")
+            .post(body.toString().toRequestBody(JSON_TYPE))
+            .header("X-Auth-HMAC", hmac)
+            .build()
+
+        Log.d(TAG, "HTTP ${request.method} ${request.url}")
+        val response = httpClient.newCall(request).execute()
+        if (!response.isSuccessful) {
+            Log.e(TAG, "reportVersion: HTTP ${response.code}")
+            throw IOException("Report version failed: ${response.code}")
+        }
+        Log.i(TAG, "reportVersion: success")
     }
 
     /**

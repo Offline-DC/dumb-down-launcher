@@ -96,11 +96,13 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
 
     companion object {
         private const val PREFS_NAME = "update_prefs"
-        private val APP_KEYS = listOf("dumb-down-launcher", "dumb-contacts-sync")
+        private val APP_KEYS = listOf("dumb-down-launcher", "snake")
         private fun downloadIdKey(appKey: String) = "pending_download_id_$appKey"
 
-        fun notificationIdForKey(appKey: String) =
-            if (appKey == "dumb-down-launcher") UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER
-            else UpdateNotificationManager.NOTIFICATION_ID_CONTACTS
+        fun notificationIdForKey(appKey: String) = when (appKey) {
+            "dumb-down-launcher" -> UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER
+            "snake" -> UpdateNotificationManager.NOTIFICATION_ID_SNAKE
+            else -> UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER
+        }
     }
 }

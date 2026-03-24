@@ -10,7 +10,8 @@ object AppLabelOverrides {
         "com.openbubbles.messaging" to "smart txt",
         "com.ubercab.uberlite" to "uber",
         "com.offline.googlemessageslauncher" to "smart txt",
-        "com.offlineinc.dumbcontactsync" to "contact sync"
+        "com.offlineinc.dumbcontactsync" to "contact sync",
+        "__CONTACT_SYNC__" to "contact sync",
     )
 
     fun getLabel(packageName: String, defaultLabel: String): String {

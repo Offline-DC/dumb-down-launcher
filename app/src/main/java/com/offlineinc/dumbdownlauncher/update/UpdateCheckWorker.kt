@@ -33,21 +33,7 @@ class UpdateCheckWorker(
                 )
             }
 
-            // Check contacts sync update (only if installed)
-            val contactsInfo = latest["dumb-contacts-sync"]
-            if (contactsInfo != null) {
-                val installedCode = getInstalledVersionCode("com.offlineinc.dumbcontactsync")
-                if (installedCode != null && contactsInfo.versionCode > installedCode) {
-                    UpdateNotificationManager.notify(
-                        context = context,
-                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_CONTACTS,
-                        appKey = "dumb-contacts-sync",
-                        appDisplayName = "Dumb Contacts Sync",
-                        versionName = contactsInfo.versionName,
-                        downloadUrl = contactsInfo.downloadUrl,
-                    )
-                }
-            }
+            // Contact sync is now integrated — no separate update check needed
 
             // Check snake update (only if installed)
             val snakeInfo = latest["snake"]
@@ -115,24 +101,7 @@ class UpdateCheckWorker(
                     found = true
                 }
 
-                val contactsInfo = latest["dumb-contacts-sync"]
-                if (contactsInfo != null) {
-                    val installedCode = try {
-                        val info = context.packageManager.getPackageInfo("com.offlineinc.dumbcontactsync", 0)
-                        PackageInfoCompat.getLongVersionCode(info).toInt()
-                    } catch (_: Exception) { null }
-                    if (installedCode != null && contactsInfo.versionCode > installedCode) {
-                        UpdateNotificationManager.notify(
-                            context = context,
-                            notificationId = UpdateNotificationManager.NOTIFICATION_ID_CONTACTS,
-                            appKey = "dumb-contacts-sync",
-                            appDisplayName = "Dumb Contacts Sync",
-                            versionName = contactsInfo.versionName,
-                            downloadUrl = contactsInfo.downloadUrl,
-                        )
-                        found = true
-                    }
-                }
+                // Contact sync is now integrated — no separate update check needed
 
                 val snakeInfo = latest["snake"]
                 if (snakeInfo != null) {
