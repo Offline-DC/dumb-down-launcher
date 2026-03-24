@@ -340,17 +340,9 @@ class MainAppsGridActivity : AppCompatActivity() {
     private fun launchGridApp(item: AppItem) {
         when (item.packageName) {
             GOOGLE_MESSAGES -> openMessagesInChrome()
-            "com.offlineinc.dumbcontactsync" -> {
-                val component = item.launchComponent ?: return
-                val platform = PlatformPreferences.getChoice(this)
-                val intent = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                    setComponent(component)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    if (platform != null && platform != "skipped") {
-                        putExtra("platform", platform)
-                    }
-                }
+            CONTACT_SYNC -> {
+                val intent = Intent(this, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
                 overridePendingTransition(0, 0)
             }

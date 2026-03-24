@@ -2,6 +2,7 @@
     package="com.offlineinc.dumbdownlauncher">
 
     <uses-permission android:name="android.permission.READ_CONTACTS"/>
+    <uses-permission android:name="android.permission.WRITE_CONTACTS"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
@@ -64,6 +65,12 @@
         <activity
             android:name=".notifications.ui.NotificationsActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".contactsync.ContactSyncActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DumbDownLauncher" />
 
         <service
             android:name=".MouseAccessibilityService"
@@ -140,7 +147,6 @@
     <queries>
         <package android:name="com.whatsapp" />
         <package android:name="com.ubercab" />
-        <package android:name="com.offlineinc.dumbcontactsync" />
         <package android:name="com.android.chrome" />
 
         <intent>

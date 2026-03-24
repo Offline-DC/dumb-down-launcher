@@ -14,15 +14,13 @@ object UpdateChecker {
 
     private const val LAUNCHER_API =
         "https://api.github.com/repos/Offline-DC/dumb-down-launcher/releases/latest"
-    private const val CONTACTS_API =
-        "https://api.github.com/repos/Offline-DC/dumb-contacts-sync-android/releases/latest"
     private const val SNAKE_API =
         "https://api.github.com/repos/Offline-DC/snake/releases/latest"
 
     fun fetchLatest(): Map<String, AppUpdateInfo> {
         return buildMap {
             fetchRelease(LAUNCHER_API, "dumb-down-launcher")?.let { put("dumb-down-launcher", it) }
-            fetchRelease(CONTACTS_API, "dumb-contacts-sync")?.let { put("dumb-contacts-sync", it) }
+            // Contact sync is now integrated into the launcher — no separate update check needed
             fetchRelease(SNAKE_API, "snake")?.let { put("snake", it) }
         }
     }

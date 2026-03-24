@@ -36,6 +36,7 @@ const val DEVICE_SETUP = "__DEVICE_SETUP__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
 const val WEB_KEYBOARD = "__WEB_KEYBOARD__"
+const val CONTACT_SYNC = "__CONTACT_SYNC__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
@@ -49,7 +50,6 @@ class MainActivity : AppCompatActivity() {
     // Incremented on every onResume so HomeScreen re-fetches the wallpaper
     // immediately if the user changed it while away.
     private val wallpaperRefreshKey = mutableIntStateOf(0)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -174,6 +174,7 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                 }
+
             }
         }
 

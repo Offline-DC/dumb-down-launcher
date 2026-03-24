@@ -11,7 +11,6 @@ object UpdateNotificationManager {
 
     private const val CHANNEL_ID = "app_updates"
     const val NOTIFICATION_ID_LAUNCHER = 1001
-    const val NOTIFICATION_ID_CONTACTS = 1002
     const val NOTIFICATION_ID_SNAKE = 1003
 
     const val ACTION_DOWNLOAD_APK = "com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK"
@@ -102,13 +101,13 @@ object UpdateNotificationManager {
     private fun notificationIdFor(appKey: String) = when (appKey) {
         "dumb-down-launcher" -> NOTIFICATION_ID_LAUNCHER
         "snake" -> NOTIFICATION_ID_SNAKE
-        else -> NOTIFICATION_ID_CONTACTS
+        else -> NOTIFICATION_ID_LAUNCHER
     }
 
     private fun displayNameFor(appKey: String) = when (appKey) {
         "dumb-down-launcher" -> "Dumb Launcher"
         "snake" -> "Snake"
-        else -> "Dumb Contacts Sync"
+        else -> appKey
     }
 
     fun cancel(context: Context, notificationId: Int) {
