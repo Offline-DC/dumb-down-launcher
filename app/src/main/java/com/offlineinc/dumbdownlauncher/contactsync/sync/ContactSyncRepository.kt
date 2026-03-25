@@ -29,11 +29,18 @@ class ContactSyncRepository(
     private var connectedWs: WebSocket? = null
     private var peerCompleteLatch: CompletableDeferred<Unit>? = null
 
+    /** True if a WebSocket is currently connected and ready for sync. */
+    val isWebSocketConnected: Boolean get() = connectedWs != null
+
     /**
      * Phase 1: Connect WebSocket and wait for both_ready.
      * Call this first, then syncWithConnectedWebSocket() after.
+     *
+     * @param onPeerDisconnectedAfterReady called if the smart phone disconnects
+     *        AFTER both_ready was already received (i.e. while the "Sync now"
+     *        button is showing). The ViewModel should reset to connecting state.
      */
-    suspend fun connectAndWaitForReady() {
+    suspend fun connectAndWaitForReady(onPeerDisconnectedAfterReady: (() -> Unit)? = null) {
         val phoneNumber = store.flipPhoneNumber ?: throw IllegalStateException("Not paired")
         Log.i(TAG, "[ContactSync] connectAndWaitForReady: phone=$phoneNumber, timeout=10min")
 
@@ -55,7 +62,16 @@ class ContactSyncRepository(
                     },
                     onPeerDisconnected = {
                         Log.e(TAG, "[ContactSync] WS callback: peer_disconnected — smart phone left")
-                        if (cont.isActive) cont.resumeWithException(Exception("Smart phone disconnected"))
+                        if (cont.isActive) {
+                            cont.resumeWithException(Exception("Smart phone disconnected"))
+                        } else {
+                            // both_ready already fired — peer left while "Sync now" is showing
+                            Log.w(TAG, "[ContactSync] peer disconnected after both_ready — closing WS")
+                            connectedWs?.close(1000, "peer left")
+                            connectedWs = null
+                            peerCompleteLatch = null
+                            onPeerDisconnectedAfterReady?.invoke()
+                        }
                     },
                     onError = { msg ->
                         Log.e(TAG, "[ContactSync] WS callback: error — $msg")

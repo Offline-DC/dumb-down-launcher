@@ -99,6 +99,7 @@ class ContactSyncApiClient(private val httpClient: OkHttpClient) {
         onBothReady: () -> Unit,
         onPeerComplete: () -> Unit,
         onPeerDisconnected: () -> Unit,
+        onPairingDeactivated: () -> Unit = {},
         onError: (String) -> Unit
     ): WebSocket {
         Log.i(TAG, "[ContactSync] WS: connecting to $WS_URL")
@@ -122,6 +123,7 @@ class ContactSyncApiClient(private val httpClient: OkHttpClient) {
                         "both_ready" -> onBothReady()
                         "peer_sync_complete" -> onPeerComplete()
                         "peer_disconnected" -> onPeerDisconnected()
+                        "pairing_deactivated" -> onPairingDeactivated()
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "[ContactSync] WS: failed to parse message: $text", e)

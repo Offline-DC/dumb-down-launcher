@@ -393,11 +393,31 @@ private fun DeviceLinkedContent(
     onUnpair: () -> Unit,
     onBack: () -> Unit
 ) {
+    val ctx = LocalContext.current
     val mainFocus = remember { FocusRequester() }
     val unpairFocus = remember { FocusRequester() }
     var unpairFocused by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { mainFocus.requestFocus() }
+
+    // Check if pairing is still active on the backend
+    LaunchedEffect(Unit) {
+        if (phoneNumber != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val apiClient = PairingApiClient(OkHttpClient())
+                    val status = apiClient.getPairingStatus(phoneNumber)
+                    val paired = status.optBoolean("paired", true)
+                    if (!paired) {
+                        Log.w(TAG, "[Pairing] Backend says NOT paired — auto-unlinking")
+                        withContext(Dispatchers.Main) { onUnpair() }
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "[Pairing] Status check failed — ${e.message}")
+                }
+            }
+        }
+    }
 
     Box(
         modifier = Modifier

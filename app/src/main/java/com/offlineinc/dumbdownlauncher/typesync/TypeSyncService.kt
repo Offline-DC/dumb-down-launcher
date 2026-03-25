@@ -57,6 +57,11 @@ class TypeSyncService : Service() {
 
         sharedSecret = pairing.sharedSecret
         flipPhoneNumber = pairing.flipPhoneNumber
+
+        // Proactively ensure the accessibility service is bound so text
+        // injection works immediately when the first message arrives.
+        Thread { MouseAccessibilityService.ensureAccessibilityEnabled() }.start()
+
         connect()
 
         // Auto-stop after 10 minutes

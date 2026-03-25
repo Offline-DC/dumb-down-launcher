@@ -120,13 +120,61 @@ class MouseAccessibilityService : AccessibilityService() {
             }
         }
 
+        private const val A11Y_SERVICE_ID = "com.offlineinc.dumbdownlauncher/com.offlineinc.dumbdownlauncher.MouseAccessibilityService"
+
+        /**
+         * Force-enable the accessibility service via root `settings` command.
+         * Android will bind it shortly after the secure setting is updated.
+         * Call this proactively (e.g. when TypeSyncService starts) so the
+         * service is bound before any text injection is needed.
+         */
+        fun ensureAccessibilityEnabled() {
+            try {
+                // Read current enabled services
+                val readProc = ProcessBuilder("su", "-c", "settings get secure enabled_accessibility_services")
+                    .redirectErrorStream(true)
+                    .start()
+                val current = readProc.inputStream.bufferedReader().readText().trim()
+                readProc.waitFor()
+
+                if (current.contains(A11Y_SERVICE_ID)) return // already listed
+
+                // Append our service to the list
+                val newValue = if (current.isBlank() || current == "null") {
+                    A11Y_SERVICE_ID
+                } else {
+                    "$current:$A11Y_SERVICE_ID"
+                }
+                val writeProc = ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
+                    .redirectErrorStream(true)
+                    .start()
+                writeProc.inputStream.bufferedReader().readText()
+                writeProc.waitFor()
+
+                // Make sure accessibility master toggle is on
+                val toggleProc = ProcessBuilder("su", "-c", "settings put secure accessibility_enabled 1")
+                    .redirectErrorStream(true)
+                    .start()
+                toggleProc.inputStream.bufferedReader().readText()
+                toggleProc.waitFor()
+
+                Log.i("MouseService", "ensureAccessibilityEnabled: force-enabled via root (was: '$current')")
+            } catch (t: Throwable) {
+                Log.w("MouseService", "ensureAccessibilityEnabled: failed — ${t.message}")
+            }
+        }
+
         /**
          * Polls for the accessibility service instance, waiting up to
-         * [A11Y_WAIT_TIMEOUT_MS]. Returns the instance or null if it
-         * never connected in time.
+         * [A11Y_WAIT_TIMEOUT_MS]. If instance is null on first check,
+         * force-enables the service via root to kick Android into binding it.
          */
         private fun waitForService(): MouseAccessibilityService? {
             instance?.let { return it }
+
+            // Service not bound — force-enable via root so Android binds it
+            ensureAccessibilityEnabled()
+
             val deadline = System.currentTimeMillis() + A11Y_WAIT_TIMEOUT_MS
             while (System.currentTimeMillis() < deadline) {
                 instance?.let { return it }

@@ -49,6 +49,7 @@ fun AppListScreen(
     val listState = rememberLazyListState()
 
     var selectedIndex by remember { mutableIntStateOf(0) }
+    var didWrap by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(items.size) {
@@ -94,13 +95,17 @@ fun AppListScreen(
                 when (event.key) {
                     Key.DirectionDown -> {
                         if (items.isNotEmpty()) {
-                            selectedIndex = (selectedIndex + 1) % items.size
+                            val next = (selectedIndex + 1) % items.size
+                            didWrap = next == 0
+                            selectedIndex = next
                         }
                         true
                     }
                     Key.DirectionUp -> {
                         if (items.isNotEmpty()) {
-                            selectedIndex = (selectedIndex - 1 + items.size) % items.size
+                            val next = (selectedIndex - 1 + items.size) % items.size
+                            didWrap = next == items.lastIndex
+                            selectedIndex = next
                         }
                         true
                     }
@@ -231,7 +236,14 @@ fun AppListScreen(
 
     LaunchedEffect(selectedIndex) {
         if (items.isNotEmpty()) {
-            listState.animateScrollToItem(selectedIndex)
+            if (didWrap) {
+                // Instant scroll on wrap-around to prevent key-repeat from
+                // stacking up during the long animated scroll through the list
+                listState.scrollToItem(selectedIndex)
+                didWrap = false
+            } else {
+                listState.animateScrollToItem(selectedIndex)
+            }
         }
     }
 }
