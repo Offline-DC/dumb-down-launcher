@@ -47,6 +47,7 @@ private const val TAG = "PairingScreen"
  */
 @Composable
 fun PairingScreen(
+    permissionsReady: Boolean = false,
     onPaired: () -> Unit,
     onSkip: () -> Unit = {}
 ) {
@@ -96,6 +97,15 @@ fun PairingScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Re-read phone number once su permission grant completes
+    LaunchedEffect(permissionsReady) {
+        if (permissionsReady && phoneNumber == null) {
+            val result = readPhoneNumber(ctx)
+            phoneNumber = result.first
+            phoneError = result.second
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -598,10 +608,7 @@ private suspend fun confirmPairing(
         Log.i(TAG, "confirmPairing: success — pairingId=$pairingId platform=$smartPlatform")
 
         val store = PairingStore(ctx)
-        store.flipPhoneNumber = phoneNumber
-        store.sharedSecret = secret
-        store.pairingId = pairingId
-        store.isPaired = true
+        store.savePairing(phoneNumber, secret, pairingId)
 
         // Auto-set platform if the server knows which smartphone OS was used
         if (smartPlatform == "ios" || smartPlatform == "android") {

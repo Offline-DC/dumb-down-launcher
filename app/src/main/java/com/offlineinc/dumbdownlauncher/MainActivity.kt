@@ -52,6 +52,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var controller: LauncherController
     /** Onboarding step: "pairing" → "contactsync" → "platform" → "mousetutorial" → null (done) */
     private val onboardingStep = mutableStateOf<String?>(null)
+    /** Flips to true once su permission grant finishes (or was unnecessary). */
+    private val permissionsReady = mutableStateOf(false)
     // Incremented on every onResume so HomeScreen re-fetches the wallpaper
     // immediately if the user changed it while away.
     private val wallpaperRefreshKey = mutableIntStateOf(0)
@@ -187,6 +189,7 @@ class MainActivity : AppCompatActivity() {
                 when (currentStep) {
                     "pairing" -> {
                         PairingScreen(
+                            permissionsReady = permissionsReady.value,
                             onPaired = {
                                 // Reset mouse tutorial so the full flow replays
                                 getSharedPreferences("launcher_prefs", MODE_PRIVATE)
@@ -249,31 +252,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val permissionsNeeded = mutableListOf<String>()
-        // Phone number permission — needed for device pairing
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED) {
-                permissionsNeeded.add(Manifest.permission.READ_PHONE_NUMBERS)
-            }
-        } else {
-            if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-                @Suppress("DEPRECATION")
-                permissionsNeeded.add(Manifest.permission.READ_PHONE_STATE)
-            }
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                permissionsNeeded.add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                permissionsNeeded.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-        }
-        if (permissionsNeeded.isNotEmpty()) {
-            requestPermissions(permissionsNeeded.toTypedArray(), 0)
-        }
+        grantPermissionsViaSu { permissionsReady.value = true }
     }
 
     override fun onResume() {
@@ -406,6 +385,48 @@ class MainActivity : AppCompatActivity() {
             .edit()
             .putBoolean("mouse_tutorial_done", true)
             .apply()
+    }
+
+    /**
+     * Grant all runtime permissions via a single `su` call.
+     * Only runs the shell command if at least one permission is missing.
+     * Calls [onDone] on the main thread when finished (or immediately if nothing to grant).
+     */
+    private fun grantPermissionsViaSu(onDone: () -> Unit) {
+        val pkg = packageName
+        val allPerms = mutableListOf(
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.WRITE_CONTACTS,
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            allPerms.add(Manifest.permission.READ_PHONE_NUMBERS)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            allPerms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        val missing = allPerms.filter {
+            checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) {
+            onDone()
+            return
+        }
+
+        val cmd = missing.joinToString(" && ") { "pm grant $pkg $it" }
+        Thread {
+            try {
+                ProcessBuilder("su", "-c", cmd)
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor()
+            } catch (e: Throwable) {
+                Log.w("MainActivity", "su grant failed: ${e.message}")
+            }
+            runOnUiThread(onDone)
+        }.start()
     }
 
     /** After platform is chosen/detected, go to mouse tutorial if not done, else finish. */

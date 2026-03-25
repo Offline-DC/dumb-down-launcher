@@ -91,10 +91,6 @@ class ContactSyncRepository(
             uploadFlipContacts(phoneNumber, secret)
             Log.i(TAG, "[ContactSync] sync: upload complete")
 
-            // Contacts are on the server — the rest happens over HTTP,
-            // so the user can safely close the app from this point.
-            onCanClose?.invoke()
-
             // Step 2: Signal peer that we've finished uploading
             Log.i(TAG, "[ContactSync] sync: step 2 — sending sync_complete")
             val completeMsg = org.json.JSONObject().put("type", "sync_complete")
@@ -109,9 +105,10 @@ class ContactSyncRepository(
                 Log.i(TAG, "[ContactSync] sync: peer signal received — proceeding to download")
             }
 
-            // Step 4: Download smart contacts
+            // Step 4: Download smart contacts — onCanClose fires inside once
+            // contacts have been received and are being written to the phone
             Log.i(TAG, "[ContactSync] sync: step 4 — downloading smart phone contacts")
-            downloadAndImportSmartContacts(phoneNumber, secret, onProgress)
+            downloadAndImportSmartContacts(phoneNumber, secret, onProgress, onCanClose)
             Log.i(TAG, "[ContactSync] sync: download complete")
 
             store.lastSyncMillis = System.currentTimeMillis()
@@ -171,13 +168,15 @@ class ContactSyncRepository(
         Log.i(TAG, "[ContactSync] uploadFlipContacts: success — hashChanged=${result.optBoolean("hashChanged")}, count=${contacts.size}")
     }
 
-    private fun downloadAndImportSmartContacts(phoneNumber: String, secret: String, onProgress: (Int) -> Unit) {
+    private fun downloadAndImportSmartContacts(phoneNumber: String, secret: String, onProgress: (Int) -> Unit, onCanClose: (() -> Unit)? = null) {
         val hashToSend = if (store.lastSmartHash == null) null else store.lastSmartHash
         Log.i(TAG, "[ContactSync] downloadSmartContacts: lastSmartHash=${store.lastSmartHash?.take(12) ?: "nil"}, sending=${hashToSend?.take(12) ?: "nil"}")
         val result = apiClient.download(phoneNumber, "flip", hashToSend, secret)
 
         if (!result.optBoolean("hasChanges", false)) {
             Log.i(TAG, "[ContactSync] downloadSmartContacts: no changes from smart phone")
+            // No changes needed — safe to signal canClose since download check is done
+            onCanClose?.invoke()
             return
         }
 
@@ -189,6 +188,7 @@ class ContactSyncRepository(
 
         if (encryptedVcf.isBlank()) {
             Log.w(TAG, "[ContactSync] downloadSmartContacts: encryptedVcf is blank — skipping import")
+            onCanClose?.invoke()
             return
         }
 
@@ -206,8 +206,14 @@ class ContactSyncRepository(
 
         if (contentHash.isNotBlank() && contentHash == store.lastSmartHash) {
             Log.i(TAG, "[ContactSync] downloadSmartContacts: contentHash unchanged client-side — skipping")
+            onCanClose?.invoke()
             return
         }
+
+        // Contacts have been downloaded and decrypted — now writing to phone.
+        // Signal canClose: contacts are physically being added to the flip phone.
+        Log.i(TAG, "[ContactSync] downloadSmartContacts: starting import — signalling canClose")
+        onCanClose?.invoke()
 
         // Build stable source IDs based on name+first-phone rather than random UIDs
         val keepSourceIds = mutableSetOf<String>()

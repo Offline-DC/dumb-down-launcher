@@ -29,6 +29,19 @@ class PairingStore(context: Context) {
         get() = prefs.getString("last_reported_version", null)
         set(v) = prefs.edit().putString("last_reported_version", v).apply()
 
+    /**
+     * Write all pairing credentials in a single atomic commit so downstream
+     * readers never see a partial state (e.g. isPaired=true but secret empty).
+     */
+    fun savePairing(phoneNumber: String, secret: String, pairingId: Int) {
+        prefs.edit()
+            .putString("flip_phone_number", phoneNumber)
+            .putString("shared_secret", secret)
+            .putInt("pairing_id", pairingId)
+            .putBoolean("is_paired", true)
+            .commit()   // synchronous — guarantees data is persisted before returning
+    }
+
     fun clear() {
         prefs.edit().clear().apply()
     }

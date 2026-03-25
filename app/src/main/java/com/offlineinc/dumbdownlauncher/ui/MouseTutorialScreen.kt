@@ -27,6 +27,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -182,7 +186,7 @@ private fun ActivateMouseStep(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             BasicText(
-                text = "Press \u2605 to activate it.",
+                text = "Press \u2605 (above keypad) to activate it.",
                 style = TextStyle(
                     fontFamily = DumbTheme.BioRhyme,
                     fontSize = 14.sp,
@@ -226,9 +230,9 @@ private fun DuckGameSteps(onAllDone: () -> Unit) {
     }
 
     val instruction = when (gameStep) {
-        2 -> "Use the direction pad to move left and right and quack the duck."
-        3 -> "Press the green call button to scroll down and quack the duck."
-        4 -> "Press the top left button to scroll up and quack the duck."
+        2 -> "Try it: use the direction pad to move the cursor and click the duck."
+        3 -> "Try it: press the green call button to scroll down, then click the duck."
+        4 -> "Try it: press the top left button to scroll up, then click the duck."
         else -> ""
     }
 
@@ -253,6 +257,18 @@ private fun DuckGameSteps(onAllDone: () -> Unit) {
                                 .align(Alignment.TopEnd)
                                 .padding(top = 8.dp, end = 8.dp)
                         )
+                        if (!quacked) {
+                            BasicText(
+                                text = "click duck w/ mouse!!!",
+                                style = TextStyle(
+                                    fontFamily = DumbTheme.BioRhyme,
+                                    fontSize = 16.sp,
+                                    color = DumbTheme.Colors.Black,
+                                    textAlign = TextAlign.Center
+                                ),
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        }
                         QuackBurst(visible = quacked)
                     }
                     3 -> ScrollDownContent(
@@ -311,6 +327,33 @@ private fun BoxScope.ScrollDownContent(quacked: Boolean, onQuack: () -> Unit) {
                 modifier = Modifier.padding(end = 8.dp)
             )
             Spacer(modifier = Modifier.height(24.dp))
+        }
+        if (!quacked) {
+            BasicText(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black)) {
+                        append("scroll ")
+                    }
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black, fontWeight = FontWeight.Bold)) {
+                        append("down")
+                    }
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black)) {
+                        append(" with\n")
+                    }
+                    withStyle(SpanStyle(color = Color(0xFF00AA00), fontWeight = FontWeight.Bold)) {
+                        append("green call")
+                    }
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black)) {
+                        append(" button")
+                    }
+                },
+                style = TextStyle(
+                    fontFamily = DumbTheme.BioRhyme,
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center
+                ),
+                modifier = Modifier.align(Alignment.Center)
+            )
         }
         QuackBurst(visible = quacked)
     }
@@ -378,6 +421,33 @@ private fun BoxScope.ScrollUpContent(quacked: Boolean, onQuack: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(280.dp))
         }
+        if (!quacked) {
+            BasicText(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black)) {
+                        append("scroll ")
+                    }
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black, fontWeight = FontWeight.Bold)) {
+                        append("up")
+                    }
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black)) {
+                        append(" with\n")
+                    }
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black, fontWeight = FontWeight.Bold)) {
+                        append("top left")
+                    }
+                    withStyle(SpanStyle(color = DumbTheme.Colors.Black)) {
+                        append(" button")
+                    }
+                },
+                style = TextStyle(
+                    fontFamily = DumbTheme.BioRhyme,
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center
+                ),
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
         QuackBurst(visible = quacked)
     }
 }
@@ -416,7 +486,7 @@ private fun DoneStep(onDismiss: () -> Unit) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             BasicText(
-                text = "nice quacking!",
+                text = "u got it!",
                 style = TextStyle(
                     fontFamily = DumbTheme.BioRhyme,
                     fontSize = 20.sp,

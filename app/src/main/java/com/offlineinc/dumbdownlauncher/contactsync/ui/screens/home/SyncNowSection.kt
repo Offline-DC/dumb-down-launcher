@@ -122,9 +122,9 @@ fun SyncNowSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    if (isOnboarding && ui.canClose) "syncing is happening in background.\npress any key to go to next step"
-                    else if (ui.canClose) "u can close this page while it syncs, it may take several minutes"
-                    else "keep this app open until sync completes",
+                    if (isOnboarding && ui.canClose) "contacts are being added to your phone.\npress any key to go to next step"
+                    else if (ui.canClose) "contacts are being added to your phone.\nu can close this page, it may take several minutes"
+                    else "keep this app open — downloading contacts",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
