@@ -84,15 +84,34 @@ fun PairingScreen(
     var isPaired by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    // Retry-aware phone number reader — SIM may not be ready immediately,
+    // so retry a few times with a short delay before showing an error.
+    suspend fun readPhoneNumberWithRetry() {
+        phoneError = null
+        repeat(5) { attempt ->
+            val result = readPhoneNumber(ctx)
+            if (result.first != null) {
+                phoneNumber = result.first
+                phoneError = null
+                return
+            }
+            // On last attempt, surface the error
+            if (attempt == 4) {
+                phoneError = result.second
+                return
+            }
+            Log.d(TAG, "SIM not ready, retrying (${attempt + 1}/5)...")
+            delay(1000)
+        }
+    }
+
     // Try reading the phone number on every resume — covers the case where
     // the permission dialog was up and the user just granted it.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && phoneNumber == null) {
-                val result = readPhoneNumber(ctx)
-                phoneNumber = result.first
-                phoneError = result.second
+                scope.launch { readPhoneNumberWithRetry() }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -102,9 +121,7 @@ fun PairingScreen(
     // Re-read phone number once su permission grant completes
     LaunchedEffect(permissionsReady) {
         if (permissionsReady && phoneNumber == null) {
-            val result = readPhoneNumber(ctx)
-            phoneNumber = result.first
-            phoneError = result.second
+            readPhoneNumberWithRetry()
         }
     }
 
