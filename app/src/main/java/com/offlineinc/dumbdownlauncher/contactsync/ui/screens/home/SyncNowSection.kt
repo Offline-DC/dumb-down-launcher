@@ -12,13 +12,18 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextAlign
 
 @Composable
 fun SyncNowSection(
     ui: HomeUiState,
+    isOnboarding: Boolean = false,
     onSyncNow: () -> Unit,
-    onClearMessages: () -> Unit
+    onClearMessages: () -> Unit,
+    onFinish: () -> Unit = {}
 ) {
     var focused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
@@ -95,7 +100,14 @@ fun SyncNowSection(
 
             // Syncing in progress
             ui.isSyncing -> {
-                LaunchedEffect(Unit) { trapFocusRequester.requestFocus() }
+                val syncFocusRequester = remember { FocusRequester() }
+                LaunchedEffect(ui.canClose, isOnboarding) {
+                    if (isOnboarding && ui.canClose) {
+                        syncFocusRequester.requestFocus()
+                    } else {
+                        trapFocusRequester.requestFocus()
+                    }
+                }
                 Box(Modifier.size(0.dp).focusRequester(trapFocusRequester).focusable())
 
                 CircularProgressIndicator(
@@ -110,17 +122,33 @@ fun SyncNowSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    if (ui.canClose) "u can close this page while it syncs, it may take several minutes"
+                    if (isOnboarding && ui.canClose) "syncing is happening in background.\npress any key to go to next step"
+                    else if (ui.canClose) "u can close this page while it syncs, it may take several minutes"
                     else "keep this app open until sync completes",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    modifier = if (isOnboarding && ui.canClose) {
+                        Modifier
+                            .focusRequester(syncFocusRequester)
+                            .focusable()
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown) {
+                                    onFinish()
+                                    true
+                                } else false
+                            }
+                    } else Modifier
                 )
             }
 
             // Sync complete
             ui.syncComplete -> {
-                LaunchedEffect(Unit) { trapFocusRequester.requestFocus() }
+                val completeFocusRequester = remember { FocusRequester() }
+                LaunchedEffect(Unit) {
+                    if (isOnboarding) completeFocusRequester.requestFocus()
+                    else trapFocusRequester.requestFocus()
+                }
                 Box(Modifier.size(0.dp).focusRequester(trapFocusRequester).focusable())
 
                 Text(
@@ -131,10 +159,22 @@ fun SyncNowSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "u can close this page",
+                    if (isOnboarding) "press any key to go to next step"
+                    else "u can close this page",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    modifier = if (isOnboarding) {
+                        Modifier
+                            .focusRequester(completeFocusRequester)
+                            .focusable()
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown) {
+                                    onFinish()
+                                    true
+                                } else false
+                            }
+                    } else Modifier
                 )
             }
         }

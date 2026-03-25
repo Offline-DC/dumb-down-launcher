@@ -26,6 +26,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.offlineinc.dumbdownlauncher.AllAppsActivity
+import com.offlineinc.dumbdownlauncher.MainAppsGridActivity
+import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
@@ -48,6 +51,26 @@ fun PairingScreen(
     onSkip: () -> Unit = {}
 ) {
     val ctx = LocalContext.current
+    val pairingStore = remember { PairingStore(ctx) }
+    var showLinkedState by remember { mutableStateOf(pairingStore.isPaired) }
+
+    // If already paired, show the linked screen with next/unpair options
+    if (showLinkedState) {
+        DeviceLinkedContent(
+            phoneNumber = pairingStore.flipPhoneNumber,
+            onNext = onPaired,
+            onUnpair = {
+                pairingStore.clear()
+                PlatformPreferences.saveChoice(ctx, "")
+                AllAppsActivity.invalidateCache()
+                MainAppsGridActivity.invalidateItemCache()
+                showLinkedState = false
+            },
+            onBack = onSkip
+        )
+        return
+    }
+
     val focusRequester = remember { FocusRequester() }
     val skipFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -322,6 +345,162 @@ fun PairingScreen(
                     fontFamily = DumbTheme.BioRhyme,
                     fontSize = 11.sp,
                     color = if (skipFocused) DumbTheme.Colors.Black else DumbTheme.Colors.Gray
+                )
+            )
+        }
+    }
+}
+
+// ─── "Device linked" screen ──────────────────────────────────────────────
+
+/**
+ * Shown when the user opens device setup while already paired.
+ * "next" button in center to continue through onboarding again.
+ * "unpair" in the top-left corner (red highlight), mirror of the skip button style.
+ * D-pad Up moves to unpair, Down returns to next. Enter activates.
+ */
+@Composable
+private fun DeviceLinkedContent(
+    phoneNumber: String?,
+    onNext: () -> Unit,
+    onUnpair: () -> Unit,
+    onBack: () -> Unit
+) {
+    val mainFocus = remember { FocusRequester() }
+    val unpairFocus = remember { FocusRequester() }
+    var unpairFocused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { mainFocus.requestFocus() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DumbTheme.Colors.Black)
+            .focusRequester(mainFocus)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (unpairFocused) {
+                    when (event.key) {
+                        Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+                            onUnpair(); true
+                        }
+                        Key.DirectionDown, Key.Back -> {
+                            mainFocus.requestFocus(); true
+                        }
+                        else -> false
+                    }
+                } else {
+                    when (event.key) {
+                        Key.DirectionUp -> { unpairFocus.requestFocus(); true }
+                        Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+                            onNext(); true
+                        }
+                        Key.Back -> { onBack(); true }
+                        else -> false
+                    }
+                }
+            }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            BasicText(
+                text = "link ur smart phone",
+                style = TextStyle(
+                    fontFamily = DumbTheme.BioRhyme,
+                    fontSize = 20.sp,
+                    color = DumbTheme.Colors.White
+                ),
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            BasicText(
+                text = "ur device is linked",
+                style = TextStyle(
+                    fontFamily = DumbTheme.BioRhyme,
+                    fontSize = 14.sp,
+                    color = DumbTheme.Colors.Yellow
+                ),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            if (phoneNumber != null) {
+                Row(modifier = Modifier.padding(bottom = 24.dp)) {
+                    BasicText(
+                        text = "dumb #: ",
+                        style = TextStyle(
+                            fontFamily = DumbTheme.BioRhyme,
+                            fontSize = 13.sp,
+                            color = DumbTheme.Colors.Gray
+                        )
+                    )
+                    BasicText(
+                        text = formatDisplay(phoneNumber),
+                        style = TextStyle(
+                            fontFamily = DumbTheme.BioRhyme,
+                            fontSize = 13.sp,
+                            color = DumbTheme.Colors.Yellow
+                        )
+                    )
+                }
+            } else {
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+
+            // ── "next" button — yellow highlight when focused ────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .background(
+                        if (!unpairFocused) DumbTheme.Colors.Yellow
+                        else DumbTheme.Colors.White.copy(alpha = 0.08f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                BasicText(
+                    text = "next",
+                    style = TextStyle(
+                        fontFamily = DumbTheme.BioRhyme,
+                        fontSize = 16.sp,
+                        color = if (!unpairFocused) DumbTheme.Colors.Black
+                        else DumbTheme.Colors.White
+                    )
+                )
+            }
+        }
+
+        // ── "unpair" — top-left corner, red highlight ────────────
+        val unpairRed = androidx.compose.ui.graphics.Color(0xFFE53935)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 6.dp, start = 8.dp)
+                .focusRequester(unpairFocus)
+                .onFocusChanged { unpairFocused = it.isFocused }
+                .focusable()
+                .then(
+                    if (unpairFocused) Modifier
+                        .background(unpairRed, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                    else Modifier
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+        ) {
+            BasicText(
+                text = "unpair",
+                style = TextStyle(
+                    fontFamily = DumbTheme.BioRhyme,
+                    fontSize = 11.sp,
+                    color = if (unpairFocused) DumbTheme.Colors.White
+                    else DumbTheme.Colors.Gray
                 )
             )
         }

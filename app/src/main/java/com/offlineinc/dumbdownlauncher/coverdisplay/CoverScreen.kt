@@ -11,9 +11,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import com.offlineinc.dumbdownlauncher.notifications.NotificationStore
@@ -27,23 +31,39 @@ import kotlinx.coroutines.delay
 fun CoverScreen() {
     val context = LocalContext.current
 
-    // Clock
-    var timeText by remember { mutableStateOf("") }
-    var dateText by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) {
-        val locale = java.util.Locale.getDefault()
-        val dateFmt = java.text.SimpleDateFormat("EEE, MMM d", locale)
-        val is24 = android.text.format.DateFormat.is24HourFormat(context)
-        val timeFmt = java.text.SimpleDateFormat(if (is24) "HH:mm" else "h:mm", locale)
-        while (true) {
-            val now = java.util.Date()
-            timeText = timeFmt.format(now)
-            dateText = dateFmt.format(now).lowercase()
-            // Clock only shows HH:mm — sync to the next minute boundary
-            val delayMs = 60_000L - (System.currentTimeMillis() % 60_000L)
-            delay(delayMs)
+    // Clock — driven by system broadcasts so it never drifts when the
+    // process is suspended. ACTION_TIME_TICK fires every minute while the
+    // screen is on; TIME_CHANGED / TIMEZONE_CHANGED cover manual adjustments.
+    var tick by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) { tick++ }
         }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_TICK)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        context.registerReceiver(receiver, filter)
+        onDispose { try { context.unregisterReceiver(receiver) } catch (_: Exception) {} }
     }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) tick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val locale = remember { java.util.Locale.getDefault() }
+    val is24   = remember { android.text.format.DateFormat.is24HourFormat(context) }
+    val dateFmt = remember { java.text.SimpleDateFormat("EEE, MMM d", locale) }
+    val timeFmt = remember { java.text.SimpleDateFormat(if (is24) "HH:mm" else "h:mm", locale) }
+    val timeText = remember(tick) { timeFmt.format(java.util.Date()) }
+    val dateText = remember(tick) { dateFmt.format(java.util.Date()).lowercase() }
 
     // Battery
     var batteryPct by remember { mutableStateOf<Int?>(null) }

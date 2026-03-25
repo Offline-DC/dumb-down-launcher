@@ -13,12 +13,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -40,7 +49,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -72,22 +80,41 @@ fun HomeScreen(
     val focusRequester = remember { FocusRequester() }
 
     // ── Clock state ──────────────────────────────────────────────────────
-    var timeText by remember { mutableStateOf("") }
-    var dateText by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) {
-        val locale = java.util.Locale.getDefault()
-        val dateFmt = java.text.SimpleDateFormat("EEE, MMM d", locale)
-        val is24 = android.text.format.DateFormat.is24HourFormat(context)
-        val timeFmt = java.text.SimpleDateFormat(if (is24) "HH:mm" else "h:mm", locale)
-        while (true) {
-            val now = java.util.Date()
-            timeText = timeFmt.format(now)
-            dateText = dateFmt.format(now).lowercase()
-            // Clock only shows HH:mm — sync to the next minute boundary
-            val delayMs = 60_000L - (System.currentTimeMillis() % 60_000L)
-            delay(delayMs)
+    // Instead of a coroutine delay loop (which drifts when the process is
+    // suspended), we listen to the system ACTION_TIME_TICK broadcast that
+    // Android delivers reliably every minute while the screen is on.
+    // We also listen for manual time/timezone changes and refresh on
+    // lifecycle resume so the display is never stale.
+    var tick by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) { tick++ }
         }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_TICK)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        context.registerReceiver(receiver, filter)
+        onDispose { try { context.unregisterReceiver(receiver) } catch (_: Exception) {} }
     }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) tick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val locale = remember { java.util.Locale.getDefault() }
+    val is24   = remember { android.text.format.DateFormat.is24HourFormat(context) }
+    val dateFmt = remember { java.text.SimpleDateFormat("EEE, MMM d", locale) }
+    val timeFmt = remember { java.text.SimpleDateFormat(if (is24) "HH:mm" else "h:mm", locale) }
+    val timeText = remember(tick) { timeFmt.format(java.util.Date()) }
+    val dateText = remember(tick) { dateFmt.format(java.util.Date()).lowercase() }
 
     // ── Wallpaper ────────────────────────────────────────────────────────
     // Re-keyed on wallpaperRefreshKey so a new bitmap is fetched whenever

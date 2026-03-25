@@ -10,6 +10,7 @@ import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
@@ -17,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.lifecycleScope
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
@@ -28,6 +30,7 @@ import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import android.net.Uri
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
+import com.offlineinc.dumbdownlauncher.ui.MouseTutorialScreen
 import com.offlineinc.dumbdownlauncher.ui.PairingScreen
 import com.offlineinc.dumbdownlauncher.ui.PlatformChoiceDialog
 
@@ -47,7 +50,7 @@ val WEB_APP_URLS = mapOf(
 class MainActivity : AppCompatActivity() {
     private lateinit var dndMuteManager: DndMuteManager
     private lateinit var controller: LauncherController
-    /** Onboarding step: "pairing" → "platform" → null (done) */
+    /** Onboarding step: "pairing" → "contactsync" → "platform" → "mousetutorial" → null (done) */
     private val onboardingStep = mutableStateOf<String?>(null)
     // Incremented on every onResume so HomeScreen re-fetches the wallpaper
     // immediately if the user changed it while away.
@@ -79,9 +82,17 @@ class MainActivity : AppCompatActivity() {
         val needsPairing = !pairingStore.isPaired
         val needsPlatform = platformChoice != "ios" && platformChoice != "android"
 
+        // Backwards-compat: existing users who already completed pairing + platform
+        // before the mouse tutorial was added should not be forced through it on update.
+        if (!needsPairing && !needsPlatform && !isMouseTutorialDone()) {
+            Log.d("ONBOARDING", "Existing user detected (paired + platform set) — auto-marking mouse tutorial done")
+            markMouseTutorialDone()
+        }
+
         onboardingStep.value = when {
             needsPairing -> "pairing"
             needsPlatform -> "platform"
+            !isMouseTutorialDone() -> "mousetutorial"
             else -> null
         }
         Log.d("ONBOARDING", "onCreate: isPaired=${pairingStore.isPaired} platform=$platformChoice step=${onboardingStep.value}")
@@ -100,7 +111,7 @@ class MainActivity : AppCompatActivity() {
                             Log.d("ONBOARDING", "Auto-detected platform from server: $serverPlatform")
                             runOnUiThread {
                                 if (!isDestroyed && onboardingStep.value == "platform") {
-                                    onboardingStep.value = null
+                                    onboardingStep.value = nextStepAfterPlatform()
                                 }
                             }
                         }
@@ -177,6 +188,9 @@ class MainActivity : AppCompatActivity() {
                     "pairing" -> {
                         PairingScreen(
                             onPaired = {
+                                // Reset mouse tutorial so the full flow replays
+                                getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+                                    .edit().putBoolean("mouse_tutorial_done", false).apply()
                                 Log.d("ONBOARDING", "Pairing complete — launching contact sync")
                                 AllAppsActivity.invalidateCache()
                                 MainAppsGridActivity.invalidateItemCache()
@@ -185,6 +199,7 @@ class MainActivity : AppCompatActivity() {
                                 startActivity(
                                     Intent(this@MainActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
                                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        .putExtra(com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity.EXTRA_ONBOARDING, true)
                                 )
                                 overridePendingTransition(0, 0)
                             },
@@ -194,9 +209,11 @@ class MainActivity : AppCompatActivity() {
                             }
                         )
                     }
-                    // ContactSyncActivity is running on top — nothing to render here.
-                    // When the user presses back, onResume advances to "platform" or done.
-                    "contactsync" -> { }
+                    // ContactSyncActivity is running on top — show a black overlay
+                    // so the home screen doesn't flash through while launching.
+                    "contactsync" -> {
+                        Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+                    }
                     "platform" -> {
                         PlatformChoiceDialog(
                             onChoose = { choice ->
@@ -206,8 +223,24 @@ class MainActivity : AppCompatActivity() {
                                 } else {
                                     Log.d("ONBOARDING", "Platform choice skipped")
                                 }
-                                onboardingStep.value = null
+                                onboardingStep.value = nextStepAfterPlatform()
                                 MainAppsGridActivity.invalidateItemCache()
+                            }
+                        )
+                    }
+                    "mousetutorial" -> {
+                        MouseTutorialScreen(
+                            onComplete = {
+                                Log.d("ONBOARDING", "Mouse tutorial complete")
+                                markMouseTutorialDone()
+                                MouseAccessibilityService.forceDisable(this@MainActivity)
+                                onboardingStep.value = null
+                            },
+                            onSkip = {
+                                Log.d("ONBOARDING", "Mouse tutorial skipped")
+                                markMouseTutorialDone()
+                                MouseAccessibilityService.forceDisable(this@MainActivity)
+                                onboardingStep.value = null
                             }
                         )
                     }
@@ -245,18 +278,21 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        MouseAccessibilityService.forceDisable(this)
+        // Don't disable mouse during the tutorial — the user needs it active
+        if (onboardingStep.value != "mousetutorial") {
+            MouseAccessibilityService.forceDisable(this)
+        }
         overridePendingTransition(0, 0)
         if (PlatformPreferences.consumeShowDialog(this)) {
             // "device setup" from AllAppsActivity re-runs both steps from the beginning
             onboardingStep.value = "pairing"
         }
-        // User returned from ContactSyncActivity — advance to platform picker or done
+        // User returned from ContactSyncActivity — advance to platform picker, tutorial, or done
         if (onboardingStep.value == "contactsync") {
             val platform = PlatformPreferences.getChoice(this)
             if (platform == "ios" || platform == "android") {
                 Log.d("ONBOARDING", "Contact sync done, platform auto-detected: $platform")
-                onboardingStep.value = null
+                onboardingStep.value = nextStepAfterPlatform()
             } else {
                 Log.d("ONBOARDING", "Contact sync done, platform unknown — showing picker")
                 onboardingStep.value = "platform"
@@ -358,6 +394,23 @@ class MainActivity : AppCompatActivity() {
             else -> super.dispatchKeyEvent(event)
         }
     }
+
+    // ─── Mouse tutorial persistence ────────────────────────────────────────
+
+    private fun isMouseTutorialDone(): Boolean =
+        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+            .getBoolean("mouse_tutorial_done", false)
+
+    private fun markMouseTutorialDone() {
+        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+            .edit()
+            .putBoolean("mouse_tutorial_done", true)
+            .apply()
+    }
+
+    /** After platform is chosen/detected, go to mouse tutorial if not done, else finish. */
+    private fun nextStepAfterPlatform(): String? =
+        if (isMouseTutorialDone()) null else "mousetutorial"
 
     /**
      * One-time migration: pull pairing data from the old contact-sync app's

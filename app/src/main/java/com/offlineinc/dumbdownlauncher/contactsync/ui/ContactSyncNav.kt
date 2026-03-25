@@ -17,7 +17,10 @@ import kotlinx.coroutines.withContext
 private const val TAG = "ContactSyncNav"
 
 @Composable
-fun ContactSyncNav() {
+fun ContactSyncNav(
+    isOnboarding: Boolean = false,
+    onFinish: () -> Unit = {}
+) {
     val ctx = LocalContext.current.applicationContext
     val store = remember { ServiceLocator.contactSyncStore(ctx) }
 
@@ -47,7 +50,7 @@ fun ContactSyncNav() {
     if (!ready) return
 
     if (isPaired) {
-        HomeRoute()
+        HomeRoute(isOnboarding = isOnboarding, onFinish = onFinish)
     } else {
         // Not paired — show a message directing user to the launcher
         NoPairingMessage()

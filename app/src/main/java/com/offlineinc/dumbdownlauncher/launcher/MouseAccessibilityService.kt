@@ -223,6 +223,24 @@ class MouseAccessibilityService : AccessibilityService() {
             }
         }
 
+        /**
+         * Queries the FlipMouse daemon for current mouse state.
+         * Returns true if the physical mouse cursor is enabled.
+         * Runs a shell command — call from a background thread / IO dispatcher.
+         */
+        fun queryMouseEnabled(): Boolean {
+            return try {
+                val proc = ProcessBuilder("su", "-c", "/data/adb/modules/DumbMouse/mouse status")
+                    .redirectErrorStream(true)
+                    .start()
+                val output = proc.inputStream.bufferedReader().readText()
+                proc.waitFor()
+                output.contains("enabled=1")
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
         private fun runMouseCmdStatic(cmd: String) {
             shellExecutor.execute {
                 try {

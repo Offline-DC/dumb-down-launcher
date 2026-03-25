@@ -18,6 +18,8 @@ import com.offlineinc.dumbdownlauncher.contactsync.ui.screens.home.HomeViewModel
 
 @Composable
 fun HomeRoute(
+    isOnboarding: Boolean = false,
+    onFinish: () -> Unit = {},
     vm: HomeViewModel = viewModel()
 ) {
     val ctx = LocalContext.current
@@ -55,6 +57,7 @@ fun HomeRoute(
 
     HomeScreen(
         ui = ui,
+        isOnboarding = isOnboarding,
         onGrantContactsPermission = {
             permLauncher.launch(
                 arrayOf(
@@ -64,6 +67,7 @@ fun HomeRoute(
             )
         },
         onSyncNow = { vm.syncNow(ctx) },
-        onClearMessages = { vm.clearMessages() }
+        onClearMessages = { vm.clearMessages() },
+        onFinish = onFinish
     )
 }

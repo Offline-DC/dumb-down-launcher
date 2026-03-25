@@ -23,9 +23,11 @@ private fun formatPhoneNumber(raw: String): String {
 @Composable
 fun HomeScreen(
     ui: HomeUiState,
+    isOnboarding: Boolean = false,
     onGrantContactsPermission: () -> Unit,
     onSyncNow: () -> Unit,
-    onClearMessages: () -> Unit
+    onClearMessages: () -> Unit,
+    onFinish: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -95,8 +97,10 @@ fun HomeScreen(
         // Connection + sync state
         SyncNowSection(
             ui = ui,
+            isOnboarding = isOnboarding,
             onSyncNow = onSyncNow,
-            onClearMessages = onClearMessages
+            onClearMessages = onClearMessages,
+            onFinish = onFinish
         )
     }
 }

@@ -198,7 +198,7 @@ class AllAppsActivity : AppCompatActivity() {
             // activity is recreated while the service is already running.
             var typeSyncEnabled by remember { mutableStateOf(WebKeyboardService.isRunning) }
             var showTypeSyncModal by remember { mutableStateOf(false) }
-            var showUnpairDialog by remember { mutableStateOf(false) }
+            // showUnpairDialog removed — unpairing handled in PairingScreen
             val coroutineScope = rememberCoroutineScope()
 
             // Flip toggle off when the 10-min timer fires from the service
@@ -221,15 +221,10 @@ class AllAppsActivity : AppCompatActivity() {
                 onActivate = { item ->
                     when (item.packageName) {
                     DEVICE_SETUP -> {
-                        val pairingStore = com.offlineinc.dumbdownlauncher.pairing.PairingStore(this@AllAppsActivity)
-                        if (pairingStore.isPaired) {
-                            // Already paired — show unpair confirmation
-                            showUnpairDialog = true
-                        } else {
-                            // Not paired — go straight to pairing
-                            PlatformPreferences.requestShowDialog(this)
-                            finish()
-                        }
+                        // Always go to the pairing screen — it shows
+                        // a "linked" state with next/unpair when already paired.
+                        PlatformPreferences.requestShowDialog(this@AllAppsActivity)
+                        finish()
                     }
                     CHECK_UPDATES -> {
                         Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
@@ -311,45 +306,8 @@ class AllAppsActivity : AppCompatActivity() {
                 )
             }
 
-            if (showUnpairDialog) {
-                val pairingStore = remember {
-                    com.offlineinc.dumbdownlauncher.pairing.PairingStore(this@AllAppsActivity)
-                }
-                val phoneNum = pairingStore.flipPhoneNumber ?: "dumb phone"
-                AlertDialog(
-                    onDismissRequest = { showUnpairDialog = false },
-                    title = { Text("unpair device?") },
-                    text = { Text("this will disconnect from $phoneNum. u can pair again after.") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showUnpairDialog = false
-                            pairingStore.clear()
-                            // Clear platform so it gets re-detected on next pairing
-                            PlatformPreferences.saveChoice(this@AllAppsActivity, "")
-                            invalidateCache()
-                            // Rebuild list to hide contact sync and type sync
-                            Thread {
-                                val loaded = buildAppList(applicationContext)
-                                cachedApps = loaded
-                                runOnUiThread {
-                                    if (!isDestroyed) {
-                                        items.clear()
-                                        items.addAll(loaded)
-                                    }
-                                }
-                            }.start()
-                            Toast.makeText(this@AllAppsActivity, "unpaired", Toast.LENGTH_SHORT).show()
-                        }) {
-                            Text("unpair")
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showUnpairDialog = false }) {
-                            Text("cancel")
-                        }
-                    }
-                )
-            }
+            // Unpair dialog removed — unpairing is now handled in
+            // the PairingScreen's "device linked" state.
         }
 
         if (cached == null) {
