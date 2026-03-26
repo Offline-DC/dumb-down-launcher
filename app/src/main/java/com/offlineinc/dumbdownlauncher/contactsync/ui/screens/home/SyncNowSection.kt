@@ -113,7 +113,7 @@ fun SyncNowSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 BasicText(
-                    text = if (isOnboarding && ui.canClose) "contacts are being added to your phone.\npress any key to go to next step"
+                    text = if (isOnboarding && ui.canClose) "contacts are being added to your phone.\npress OK to go to next step"
                     else if (ui.canClose) "contacts are being added to your phone.\nu can close this page, it may take several minutes"
                     else "keep this app open — downloading contacts",
                     style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
@@ -122,7 +122,9 @@ fun SyncNowSection(
                             .focusRequester(syncFocusRequester)
                             .focusable()
                             .onPreviewKeyEvent { event ->
-                                if (event.type == KeyEventType.KeyDown) {
+                                if (event.type == KeyEventType.KeyDown &&
+                                    event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER
+                                ) {
                                     onFinish()
                                     true
                                 } else false
@@ -146,7 +148,7 @@ fun SyncNowSection(
                 )
                 Spacer(Modifier.height(4.dp))
                 BasicText(
-                    text = if (isOnboarding) "press any key to go to next step"
+                    text = if (isOnboarding) "press OK to go to next step"
                     else "u can close this page",
                     style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
                     modifier = if (isOnboarding) {
@@ -154,7 +156,9 @@ fun SyncNowSection(
                             .focusRequester(completeFocusRequester)
                             .focusable()
                             .onPreviewKeyEvent { event ->
-                                if (event.type == KeyEventType.KeyDown) {
+                                if (event.type == KeyEventType.KeyDown &&
+                                    event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER
+                                ) {
                                     onFinish()
                                     true
                                 } else false

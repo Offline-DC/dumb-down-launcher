@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
@@ -80,8 +81,7 @@ private const val TAG = "MouseTutorial"
  */
 @Composable
 fun MouseTutorialScreen(
-    onComplete: () -> Unit,
-    onSkip: () -> Unit
+    onComplete: () -> Unit
 ) {
     var step by remember { mutableIntStateOf(1) }
 
@@ -96,7 +96,10 @@ fun MouseTutorialScreen(
                     Log.d(TAG, "Mouse activated — advancing to click step")
                     step = 2
                 },
-                onSkip = onSkip
+                onSkip = {
+                    Log.d(TAG, "Mouse tutorial skipped — advancing to done screen")
+                    step = 5
+                }
             )
             2 -> DuckGameSteps(onAllDone = {
                 Log.d(TAG, "All duck steps done — advancing to done screen")
@@ -465,7 +468,9 @@ private fun DoneStep(onDismiss: () -> Unit) {
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown) {
+                if (event.type == KeyEventType.KeyDown &&
+                    event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER
+                ) {
                     onDismiss()
                     true
                 } else false
@@ -476,7 +481,7 @@ private fun DoneStep(onDismiss: () -> Unit) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             BasicText(
-                text = "u got it!",
+                text = "u got it!\ntime 4 smart txt",
                 style = DumbTheme.Text.PageTitle.copy(
                     color = DumbTheme.Colors.Yellow,
                     textAlign = TextAlign.Center
@@ -484,7 +489,7 @@ private fun DoneStep(onDismiss: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(16.dp))
             BasicText(
-                text = "press any key to continue",
+                text = "press OK to start smart txt setup.\nUse Dumb Down app for help!",
                 style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center)
             )
         }

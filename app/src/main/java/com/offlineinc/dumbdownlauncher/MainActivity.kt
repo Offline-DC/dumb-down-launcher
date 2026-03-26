@@ -13,12 +13,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.lifecycleScope
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
@@ -231,21 +234,46 @@ class MainActivity : AppCompatActivity() {
                             }
                         )
                     }
+                    "platform_for_smarttxt" -> {
+                        PlatformChoiceDialog(
+                            onChoose = { choice ->
+                                if (choice != "skipped" && choice != "skip") {
+                                    PlatformPreferences.saveChoice(this@MainActivity, choice)
+                                    Log.d("ONBOARDING", "Platform choice saved (for smart txt): $choice")
+                                    onboardingStep.value = "launching_smarttxt"
+                                    MainAppsGridActivity.invalidateItemCache()
+                                    launchSmartTxtForPlatform(choice)
+                                } else {
+                                    Log.d("ONBOARDING", "Platform choice skipped — going to home")
+                                    onboardingStep.value = null
+                                    MainAppsGridActivity.invalidateItemCache()
+                                }
+                            }
+                        )
+                    }
                     "mousetutorial" -> {
                         MouseTutorialScreen(
                             onComplete = {
-                                Log.d("ONBOARDING", "Mouse tutorial complete")
+                                Log.d("ONBOARDING", "Mouse tutorial complete — launching smart txt")
                                 markMouseTutorialDone()
                                 MouseAccessibilityService.forceDisable(this@MainActivity)
-                                onboardingStep.value = null
-                            },
-                            onSkip = {
-                                Log.d("ONBOARDING", "Mouse tutorial skipped")
-                                markMouseTutorialDone()
-                                MouseAccessibilityService.forceDisable(this@MainActivity)
-                                onboardingStep.value = null
+                                onboardingStep.value = "launching_smarttxt"
+                                launchSmartTxt()
                             }
                         )
+                    }
+                    "launching_smarttxt" -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize().background(Color.Black),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            BasicText(
+                                text = "launching smart txt...",
+                                style = com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme.Text.Hint.copy(
+                                    textAlign = TextAlign.Center
+                                )
+                            )
+                        }
                     }
                 }
 
@@ -265,6 +293,10 @@ class MainActivity : AppCompatActivity() {
         if (PlatformPreferences.consumeShowDialog(this)) {
             // "device setup" from AllAppsActivity re-runs both steps from the beginning
             onboardingStep.value = "pairing"
+        }
+        // User returned from smart txt — clear the launching overlay
+        if (onboardingStep.value == "launching_smarttxt") {
+            onboardingStep.value = null
         }
         // User returned from ContactSyncActivity — advance to platform picker, tutorial, or done
         if (onboardingStep.value == "contactsync") {
@@ -371,6 +403,71 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             else -> super.dispatchKeyEvent(event)
+        }
+    }
+
+    // ─── Smart txt launch ─────────────────────────────────────────────────
+
+    /**
+     * Launch the appropriate smart txt (messaging) app based on the
+     * stored platform choice.
+     *
+     * - "android" → Google Messages web via Chrome
+     * - "ios"     → OpenBubbles native app (fallback: Google Messages web)
+     *
+     * If the platform isn't set yet, show the platform picker first.
+     */
+    private fun launchSmartTxt() {
+        val platform = PlatformPreferences.getChoice(this)
+        if (platform != "ios" && platform != "android") {
+            Log.d("ONBOARDING", "Platform not set — showing picker before smart txt launch")
+            onboardingStep.value = "platform_for_smarttxt"
+            return
+        }
+        launchSmartTxtForPlatform(platform)
+    }
+
+    private fun launchSmartTxtForPlatform(platform: String) {
+        MouseAccessibilityService.setMouseEnabled(this, true)
+        when (platform) {
+            "android" -> {
+                Log.d("ONBOARDING", "Launching Google Messages web for Android")
+                openUrlInChrome("https://messages.google.com/web")
+            }
+            "ios" -> {
+                Log.d("ONBOARDING", "Launching OpenBubbles for iOS")
+                val intent = packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    overridePendingTransition(0, 0)
+                } else {
+                    Log.w("ONBOARDING", "OpenBubbles not installed — falling back to Google Messages web")
+                    openUrlInChrome("https://messages.google.com/web")
+                }
+            }
+        }
+    }
+
+    /** Open a URL directly in Chrome, bypassing the browser chooser dialog. */
+    private fun openUrlInChrome(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                setPackage("com.android.chrome")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            overridePendingTransition(0, 0)
+        } catch (e: Exception) {
+            Log.w("ONBOARDING", "Chrome not available, falling back to default browser: ${e.message}")
+            try {
+                val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(fallback)
+                overridePendingTransition(0, 0)
+            } catch (e2: Exception) {
+                Log.e("ONBOARDING", "No browser available: ${e2.message}")
+            }
         }
     }
 
