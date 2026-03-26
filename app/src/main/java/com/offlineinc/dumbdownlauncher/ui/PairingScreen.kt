@@ -31,6 +31,8 @@ import com.offlineinc.dumbdownlauncher.MainAppsGridActivity
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
+import com.offlineinc.dumbdownlauncher.ui.components.DumbButton
+import com.offlineinc.dumbdownlauncher.ui.components.DumbChipButton
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -215,61 +217,37 @@ fun PairingScreen(
         ) {
             BasicText(
                 text = "link ur smart phone",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 20.sp,
-                    color = DumbTheme.Colors.White
-                ),
+                style = DumbTheme.Text.PageTitle,
                 modifier = Modifier.padding(bottom = 4.dp)
             )
 
             BasicText(
                 text = "download Dumb Down on the App Store or Google Play on ur smart phone to link",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 11.sp,
-                    color = DumbTheme.Colors.Gray
-                ),
+                style = DumbTheme.Text.Label,
                 modifier = Modifier.padding(bottom = 10.dp)
             )
 
             if (phoneError != null) {
                 BasicText(
                     text = phoneError!!,
-                    style = TextStyle(
-                        fontFamily = DumbTheme.BioRhyme,
-                        fontSize = 14.sp,
-                        color = DumbTheme.Colors.Yellow
-                    ),
+                    style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                     modifier = Modifier.padding(vertical = 16.dp)
                 )
             } else if (phoneNumber != null) {
                 Row(modifier = Modifier.padding(bottom = 10.dp)) {
                         BasicText(
                             text = "ur dumb #: ",
-                            style = TextStyle(
-                                fontFamily = DumbTheme.BioRhyme,
-                                fontSize = 13.sp,
-                                color = DumbTheme.Colors.Gray
-                            )
+                            style = DumbTheme.Text.Subtitle
                         )
                         BasicText(
                             text = formatDisplay(phoneNumber!!),
-                            style = TextStyle(
-                                fontFamily = DumbTheme.BioRhyme,
-                                fontSize = 13.sp,
-                                color = DumbTheme.Colors.Yellow
-                            )
+                            style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
                         )
                     }
 
                 BasicText(
                     text = "enter code from Dumb Down app:",
-                    style = TextStyle(
-                        fontFamily = DumbTheme.BioRhyme,
-                        fontSize = 13.sp,
-                        color = DumbTheme.Colors.White
-                    ),
+                    style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.White),
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
@@ -308,11 +286,7 @@ fun PairingScreen(
                 if (error != null) {
                     BasicText(
                         text = error!!,
-                        style = TextStyle(
-                            fontFamily = DumbTheme.BioRhyme,
-                            fontSize = 13.sp,
-                            color = DumbTheme.Colors.Yellow
-                        ),
+                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow),
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
@@ -328,9 +302,7 @@ fun PairingScreen(
                     val statusColor = if (isPairing) DumbTheme.Colors.Gray else DumbTheme.Colors.Yellow
                     BasicText(
                         text = statusText,
-                        style = TextStyle(
-                            fontFamily = DumbTheme.BioRhyme,
-                            fontSize = 13.sp,
+                        style = DumbTheme.Text.Subtitle.copy(
                             color = statusColor,
                             textAlign = TextAlign.Center
                         )
@@ -339,42 +311,20 @@ fun PairingScreen(
             } else if (phoneNumber == null && phoneError == null) {
                 BasicText(
                     text = "reading phone number...",
-                    style = TextStyle(
-                        fontFamily = DumbTheme.BioRhyme,
-                        fontSize = 14.sp,
-                        color = DumbTheme.Colors.Gray
-                    ),
+                    style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
                     modifier = Modifier.padding(top = 16.dp)
                 )
             }
         }
 
-        // Skip button — top right, not focused by default.
-        // User presses Up arrow to reach it; it highlights when focused.
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 6.dp, end = 8.dp)
-                .focusRequester(skipFocusRequester)
-                .onFocusChanged { skipFocused = it.isFocused }
-                .focusable()
-                .then(
-                    if (skipFocused) Modifier
-                        .background(DumbTheme.Colors.Yellow, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                    else Modifier
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                )
-        ) {
-            BasicText(
-                text = "skip",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 11.sp,
-                    color = if (skipFocused) DumbTheme.Colors.Black else DumbTheme.Colors.Gray
-                )
-            )
-        }
+        // Skip button — top right (shared component)
+        DumbChipButton(
+            text = "skip",
+            focusRequester = skipFocusRequester,
+            isFocused = skipFocused,
+            onFocusChanged = { skipFocused = it },
+            modifier = Modifier.align(Alignment.TopEnd)
+        )
     }
 }
 
@@ -458,21 +408,13 @@ private fun DeviceLinkedContent(
         ) {
             BasicText(
                 text = "link ur smart phone",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 20.sp,
-                    color = DumbTheme.Colors.White
-                ),
+                style = DumbTheme.Text.PageTitle,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
             BasicText(
                 text = "ur device is linked",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 14.sp,
-                    color = DumbTheme.Colors.Yellow
-                ),
+                style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
@@ -480,19 +422,11 @@ private fun DeviceLinkedContent(
                 Row(modifier = Modifier.padding(bottom = 24.dp)) {
                     BasicText(
                         text = "dumb #: ",
-                        style = TextStyle(
-                            fontFamily = DumbTheme.BioRhyme,
-                            fontSize = 13.sp,
-                            color = DumbTheme.Colors.Gray
-                        )
+                        style = DumbTheme.Text.Subtitle
                     )
                     BasicText(
                         text = formatDisplay(phoneNumber),
-                        style = TextStyle(
-                            fontFamily = DumbTheme.BioRhyme,
-                            fontSize = 13.sp,
-                            color = DumbTheme.Colors.Yellow
-                        )
+                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
                     )
                 }
             } else {
@@ -500,57 +434,19 @@ private fun DeviceLinkedContent(
             }
 
             // ── "next" button — yellow highlight when focused ────────
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .background(
-                        if (!unpairFocused) DumbTheme.Colors.Yellow
-                        else DumbTheme.Colors.White.copy(alpha = 0.08f),
-                        RoundedCornerShape(8.dp)
-                    )
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                BasicText(
-                    text = "next",
-                    style = TextStyle(
-                        fontFamily = DumbTheme.BioRhyme,
-                        fontSize = 16.sp,
-                        color = if (!unpairFocused) DumbTheme.Colors.Black
-                        else DumbTheme.Colors.White
-                    )
-                )
-            }
+            DumbButton(text = "next", focused = !unpairFocused)
         }
 
         // ── "unpair" — top-left corner, red highlight ────────────
-        val unpairRed = androidx.compose.ui.graphics.Color(0xFFE53935)
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(top = 6.dp, start = 8.dp)
-                .focusRequester(unpairFocus)
-                .onFocusChanged { unpairFocused = it.isFocused }
-                .focusable()
-                .then(
-                    if (unpairFocused) Modifier
-                        .background(unpairRed, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                    else Modifier
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                )
-        ) {
-            BasicText(
-                text = "unpair",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 11.sp,
-                    color = if (unpairFocused) DumbTheme.Colors.White
-                    else DumbTheme.Colors.Gray
-                )
-            )
-        }
+        DumbChipButton(
+            text = "unpair",
+            focusRequester = unpairFocus,
+            focusedBg = DumbTheme.Colors.Red,
+            focusedTextColor = DumbTheme.Colors.White,
+            isFocused = unpairFocused,
+            onFocusChanged = { unpairFocused = it },
+            modifier = Modifier.align(Alignment.TopStart)
+        )
     }
 }
 

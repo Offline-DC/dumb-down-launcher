@@ -1,18 +1,25 @@
 package com.offlineinc.dumbdownlauncher.contactsync.ui.screens.home
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.offlineinc.dumbdownlauncher.ui.components.DumbButton
+import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 @Composable
 fun PermissionsCard(
@@ -20,43 +27,44 @@ fun PermissionsCard(
     onGrantContactsPermission: () -> Unit
 ) {
     var buttonFocused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
 
-    Card {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text("Permissions", style = MaterialTheme.typography.titleMedium)
-
-            Text(
-                "Needs Contacts permission to read/write contacts",
-                style = MaterialTheme.typography.bodyMedium
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                DumbTheme.Colors.White.copy(alpha = 0.06f),
+                RoundedCornerShape(DumbTheme.Corner.Medium)
+            )
+            .padding(DumbTheme.Spacing.CardPadding)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            BasicText(
+                text = "permissions",
+                style = DumbTheme.Text.Title
             )
 
-            Button(
-                onClick = onGrantContactsPermission,
-                enabled = !hasContactsPerm,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (buttonFocused) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.secondary,
-                    contentColor = if (buttonFocused) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSecondary
-                ),
-                border = if (buttonFocused) {
-                    BorderStroke(3.dp, MaterialTheme.colorScheme.onPrimary)
-                } else {
-                    BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                },
-                elevation = ButtonDefaults.buttonElevation(
-                    defaultElevation = if (buttonFocused) 10.dp else 2.dp
-                ),
+            BasicText(
+                text = "needs Contacts permission to read/write contacts",
+                style = DumbTheme.Text.Subtitle
+            )
+
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 54.dp)
-                    .scale(if (buttonFocused) 1.03f else 1.0f)
+                    .focusRequester(focusRequester)
                     .onFocusChanged { buttonFocused = it.isFocused }
+                    .focusable()
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && !hasContactsPerm) {
+                            onGrantContactsPermission()
+                            true
+                        } else false
+                    }
             ) {
-                Text("Grant contacts permission", fontSize = 13.sp)
+                DumbButton(
+                    text = "grant contacts permission",
+                    focused = buttonFocused
+                )
             }
         }
     }

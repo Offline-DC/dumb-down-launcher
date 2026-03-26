@@ -9,9 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 @Composable
@@ -63,11 +61,7 @@ fun PlatformChoiceDialog(
         ) {
             BasicText(
                 text = "what is ur smart phone?",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 20.sp,
-                    color = DumbTheme.Colors.White
-                ),
+                style = DumbTheme.Text.PageTitle,
                 modifier = Modifier.padding(bottom = 24.dp)
             )
 
@@ -79,15 +73,11 @@ fun PlatformChoiceDialog(
                     isSkip -> DumbTheme.Colors.Gray
                     else -> DumbTheme.Colors.White
                 }
-                val fontSize = if (isSkip) 13.sp else 24.sp
+                val style = if (isSkip) DumbTheme.Text.Subtitle else DumbTheme.Text.AppLabel
 
                 BasicText(
                     text = if (isSelected) "> $option" else "  $option",
-                    style = TextStyle(
-                        fontFamily = DumbTheme.BioRhyme,
-                        fontSize = fontSize,
-                        color = textColor
-                    ),
+                    style = style.copy(color = textColor),
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
             }

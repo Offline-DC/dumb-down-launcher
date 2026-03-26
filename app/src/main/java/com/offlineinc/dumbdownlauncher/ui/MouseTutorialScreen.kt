@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.MouseAccessibilityService
 import com.offlineinc.dumbdownlauncher.R
+import com.offlineinc.dumbdownlauncher.ui.components.DumbChipButton
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -169,38 +170,27 @@ private fun ActivateMouseStep(
         ) {
             BasicText(
                 text = "Getting around ur phone.",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 18.sp,
-                    color = DumbTheme.Colors.White
-                ),
+                style = DumbTheme.Text.Title,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             BasicText(
                 text = "The dumb mouse helps u navigate advanced apps.",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 12.sp,
-                    color = DumbTheme.Colors.Gray
-                ),
+                style = DumbTheme.Text.Hint,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             BasicText(
                 text = "Press \u2605 (above keypad) to activate it.",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 14.sp,
-                    color = DumbTheme.Colors.White
-                )
+                style = DumbTheme.Text.BodySmall
             )
         }
 
-        // Skip — top right (same pattern as PairingScreen)
-        SkipButton(
-            modifier = Modifier.align(Alignment.TopEnd),
+        // Skip — top right (shared component)
+        DumbChipButton(
+            text = "skip",
             focusRequester = skipFocusRequester,
             isFocused = skipFocused,
-            onFocusChanged = { skipFocused = it }
+            onFocusChanged = { skipFocused = it },
+            modifier = Modifier.align(Alignment.TopEnd)
         )
     }
 }
@@ -230,9 +220,9 @@ private fun DuckGameSteps(onAllDone: () -> Unit) {
     }
 
     val instruction = when (gameStep) {
-        2 -> "Try it: use the direction pad to move the cursor and click the duck."
-        3 -> "Try it: press the green call button to scroll down, then click the duck."
-        4 -> "Try it: press the top left button to scroll up, then click the duck."
+        2 -> "use the direction pad to move the cursor and click the duck."
+        3 -> "press the green call button to scroll down, then click the duck."
+        4 -> "press the top left button to scroll up, then click the duck."
         else -> ""
     }
 
@@ -487,9 +477,7 @@ private fun DoneStep(onDismiss: () -> Unit) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             BasicText(
                 text = "u got it!",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 20.sp,
+                style = DumbTheme.Text.PageTitle.copy(
                     color = DumbTheme.Colors.Yellow,
                     textAlign = TextAlign.Center
                 )
@@ -497,12 +485,7 @@ private fun DoneStep(onDismiss: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             BasicText(
                 text = "press any key to continue",
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 12.sp,
-                    color = DumbTheme.Colors.Gray,
-                    textAlign = TextAlign.Center
-                )
+                style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center)
             )
         }
     }
@@ -518,20 +501,12 @@ private fun TutorialHeader(instruction: String) {
     Column(modifier = Modifier.heightIn(min = 70.dp)) {
         BasicText(
             text = "Getting around ur phone.",
-            style = TextStyle(
-                fontFamily = DumbTheme.BioRhyme,
-                fontSize = 18.sp,
-                color = DumbTheme.Colors.White
-            ),
+            style = DumbTheme.Text.Title,
             modifier = Modifier.padding(bottom = 8.dp)
         )
         BasicText(
             text = instruction,
-            style = TextStyle(
-                fontFamily = DumbTheme.BioRhyme,
-                fontSize = 12.sp,
-                color = DumbTheme.Colors.Gray
-            )
+            style = DumbTheme.Text.Hint
         )
     }
 }
@@ -593,39 +568,6 @@ private fun QuackBurst(visible: Boolean) {
                 )
             )
         }
-    }
-}
-
-/** Skip button — top-right corner, same pattern as PairingScreen. */
-@Composable
-private fun SkipButton(
-    modifier: Modifier = Modifier,
-    focusRequester: FocusRequester,
-    isFocused: Boolean,
-    onFocusChanged: (Boolean) -> Unit
-) {
-    Box(
-        modifier = modifier
-            .padding(top = 6.dp, end = 8.dp)
-            .focusRequester(focusRequester)
-            .onFocusChanged { onFocusChanged(it.isFocused) }
-            .focusable()
-            .then(
-                if (isFocused) Modifier
-                    .background(DumbTheme.Colors.Yellow, RoundedCornerShape(4.dp))
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                else Modifier
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
-            )
-    ) {
-        BasicText(
-            text = "skip",
-            style = TextStyle(
-                fontFamily = DumbTheme.BioRhyme,
-                fontSize = 11.sp,
-                color = if (isFocused) DumbTheme.Colors.Black else DumbTheme.Colors.Gray
-            )
-        )
     }
 }
 

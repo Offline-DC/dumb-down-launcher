@@ -33,14 +33,13 @@ class ContactSyncRepository(
     val isWebSocketConnected: Boolean get() = connectedWs != null
 
     /**
-     * Phase 1: Connect WebSocket and wait for both_ready.
+     * Phase 1: Connect WebSocket and wait for both_ready (or peer_sync_complete).
      * Call this first, then syncWithConnectedWebSocket() after.
      *
-     * @param onPeerDisconnectedAfterReady called if the smart phone disconnects
-     *        AFTER both_ready was already received (i.e. while the "Sync now"
-     *        button is showing). The ViewModel should reset to connecting state.
+     * If the peer disconnects after ready, the connection is kept alive because
+     * upload/download are HTTP — sync can proceed without a live peer WebSocket.
      */
-    suspend fun connectAndWaitForReady(onPeerDisconnectedAfterReady: (() -> Unit)? = null) {
+    suspend fun connectAndWaitForReady() {
         val phoneNumber = store.flipPhoneNumber ?: throw IllegalStateException("Not paired")
         Log.i(TAG, "[ContactSync] connectAndWaitForReady: phone=$phoneNumber, timeout=10min")
 
@@ -59,18 +58,26 @@ class ContactSyncRepository(
                     onPeerComplete = {
                         Log.i(TAG, "[ContactSync] WS callback: peer_sync_complete received — unblocking download")
                         latch.complete(Unit)
+                        // If we haven't received both_ready yet, peer_sync_complete
+                        // implies both were connected (peer can't sync without connecting).
+                        // Resume the coroutine so we don't wait forever for a both_ready
+                        // that the server won't re-send on a reconnection.
+                        if (cont.isActive) {
+                            Log.i(TAG, "[ContactSync] WS callback: peer_sync_complete arrived before both_ready — treating as implicit ready")
+                            cont.resume(wsRef!!)
+                        }
                     },
                     onPeerDisconnected = {
                         Log.e(TAG, "[ContactSync] WS callback: peer_disconnected — smart phone left")
                         if (cont.isActive) {
                             cont.resumeWithException(Exception("Smart phone disconnected"))
                         } else {
-                            // both_ready already fired — peer left while "Sync now" is showing
-                            Log.w(TAG, "[ContactSync] peer disconnected after both_ready — closing WS")
-                            connectedWs?.close(1000, "peer left")
-                            connectedWs = null
-                            peerCompleteLatch = null
-                            onPeerDisconnectedAfterReady?.invoke()
+                            // both_ready already fired — peer left after connection was established.
+                            // DON'T reset to connecting: the peer's data is on the server and
+                            // upload/download are HTTP calls, so sync can still proceed.
+                            // Just complete the peer latch so step 3 doesn't wait 30s.
+                            Log.w(TAG, "[ContactSync] peer disconnected after both_ready — keeping connection (sync still possible)")
+                            peerCompleteLatch?.complete(Unit)
                         }
                     },
                     onError = { msg ->

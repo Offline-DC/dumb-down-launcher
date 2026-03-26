@@ -201,7 +201,7 @@ class MainActivity : AppCompatActivity() {
                                 onboardingStep.value = "contactsync"
                                 startActivity(
                                     Intent(this@MainActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                                         .putExtra(com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity.EXTRA_ONBOARDING, true)
                                 )
                                 overridePendingTransition(0, 0)

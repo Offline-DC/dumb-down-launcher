@@ -1,21 +1,26 @@
 package com.offlineinc.dumbdownlauncher.contactsync.ui.screens.home
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import com.offlineinc.dumbdownlauncher.ui.components.DumbButton
+import com.offlineinc.dumbdownlauncher.ui.components.DumbSpinner
+import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 @Composable
 fun SyncNowSection(
@@ -44,32 +49,24 @@ fun SyncNowSection(
                 LaunchedEffect(Unit) { trapFocusRequester.requestFocus() }
                 Box(Modifier.size(0.dp).focusRequester(trapFocusRequester).focusable())
 
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(24.dp)
-                )
+                DumbSpinner()
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "connecting...",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center
+                BasicText(
+                    text = "connecting...",
+                    style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.White, textAlign = TextAlign.Center)
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    "make sure Dumb Down app is open on Contact Sync",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
+                BasicText(
+                    text = "make sure Dumb Down app is open on Contact Sync",
+                    style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center)
                 )
             }
 
             // Connected — show Sync now button
             ui.isConnected && !ui.isSyncing -> {
-                Text(
-                    "connected!",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
+                BasicText(
+                    text = "connected!",
+                    style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow, textAlign = TextAlign.Center)
                 )
                 Spacer(Modifier.height(8.dp))
 
@@ -78,23 +75,21 @@ fun SyncNowSection(
                     focusRequester.requestFocus()
                 }
 
-                Button(
-                    onClick = onSyncNow,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
-                        contentColor = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondary
-                    ),
-                    border = if (focused) BorderStroke(3.dp, MaterialTheme.colorScheme.onPrimary)
-                    else BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = if (focused) 10.dp else 2.dp),
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 54.dp)
-                        .scale(if (focused) 1.03f else 1.0f)
                         .focusRequester(focusRequester)
                         .onFocusChanged { focused = it.isFocused }
+                        .focusable()
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown &&
+                                event.key.nativeKeyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER
+                            ) {
+                                onSyncNow()
+                                true
+                            } else false
+                        }
                 ) {
-                    Text("Sync now")
+                    DumbButton(text = "sync now", focused = focused)
                 }
             }
 
@@ -110,24 +105,18 @@ fun SyncNowSection(
                 }
                 Box(Modifier.size(0.dp).focusRequester(trapFocusRequester).focusable())
 
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(24.dp)
-                )
+                DumbSpinner()
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "syncing...",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center
+                BasicText(
+                    text = "syncing...",
+                    style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.White, textAlign = TextAlign.Center)
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    if (isOnboarding && ui.canClose) "contacts are being added to your phone.\npress any key to go to next step"
+                BasicText(
+                    text = if (isOnboarding && ui.canClose) "contacts are being added to your phone.\npress any key to go to next step"
                     else if (ui.canClose) "contacts are being added to your phone.\nu can close this page, it may take several minutes"
                     else "keep this app open — downloading contacts",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
+                    style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
                     modifier = if (isOnboarding && ui.canClose) {
                         Modifier
                             .focusRequester(syncFocusRequester)
@@ -151,19 +140,15 @@ fun SyncNowSection(
                 }
                 Box(Modifier.size(0.dp).focusRequester(trapFocusRequester).focusable())
 
-                Text(
-                    "transfer complete!",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center
+                BasicText(
+                    text = "transfer complete!",
+                    style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow, textAlign = TextAlign.Center)
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    if (isOnboarding) "press any key to go to next step"
+                BasicText(
+                    text = if (isOnboarding) "press any key to go to next step"
                     else "u can close this page",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
+                    style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
                     modifier = if (isOnboarding) {
                         Modifier
                             .focusRequester(completeFocusRequester)
@@ -182,10 +167,12 @@ fun SyncNowSection(
         // Error display
         ui.error?.let {
             Spacer(Modifier.height(8.dp))
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center
+            BasicText(
+                text = it,
+                style = DumbTheme.Text.Subtitle.copy(
+                    color = DumbTheme.Colors.Yellow,
+                    textAlign = TextAlign.Center
+                )
             )
         }
     }

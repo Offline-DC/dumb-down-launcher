@@ -1,13 +1,16 @@
 package com.offlineinc.dumbdownlauncher.contactsync.ui.screens.home
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 private fun formatPhoneNumber(raw: String): String {
     val digits = raw.filter { it.isDigit() }
@@ -32,22 +35,21 @@ fun HomeScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .background(DumbTheme.Colors.Black)
+            .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text(
-            "Contact Sync",
-            style = MaterialTheme.typography.titleLarge,
-            textAlign = TextAlign.Center,
+        BasicText(
+            text = "contact sync",
+            style = DumbTheme.Text.PageTitle.copy(textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth()
         )
 
-        Text(
-            if (ui.flipPhoneNumber != null) "Paired with ${formatPhoneNumber(ui.flipPhoneNumber)}"
-            else "Paired with smart phone",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.primary
+        BasicText(
+            text = if (ui.flipPhoneNumber != null) "paired with ${formatPhoneNumber(ui.flipPhoneNumber)}"
+            else "paired with smart phone",
+            style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
         )
 
         when (ui.hasContactsPerm) {
@@ -65,34 +67,48 @@ fun HomeScreen(
             true -> {}
         }
 
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(4.dp))
 
         // Contact counts
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(12.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    DumbTheme.Colors.White.copy(alpha = 0.06f),
+                    RoundedCornerShape(DumbTheme.Corner.Medium)
+                )
+                .padding(DumbTheme.Spacing.CardPadding)
+        ) {
+            Column {
                 if (ui.contactCountLoaded) {
-                    Text("${ui.totalContactCount} contacts on ur dumb phone", style = MaterialTheme.typography.bodyMedium)
+                    BasicText(
+                        text = "${ui.totalContactCount} contacts on ur dumb phone",
+                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.White)
+                    )
                 }
                 val lastText = remember(ui.lastSyncMillis) {
-                    if (ui.lastSyncMillis <= 0L) "Last sync: never"
+                    if (ui.lastSyncMillis <= 0L) "last sync: never"
                     else {
                         val diff = System.currentTimeMillis() - ui.lastSyncMillis
                         val min = diff / 60000
                         val hr = min / 60
                         val d = hr / 24
                         when {
-                            min < 1 -> "Last sync: just now"
-                            min < 60 -> "Last sync: ${min}m ago"
-                            hr < 24 -> "Last sync: ${hr}h ago"
-                            else -> "Last sync: ${d}d ago"
+                            min < 1 -> "last sync: just now"
+                            min < 60 -> "last sync: ${min}m ago"
+                            hr < 24 -> "last sync: ${hr}h ago"
+                            else -> "last sync: ${d}d ago"
                         }
                     }
                 }
-                Text(lastText, style = MaterialTheme.typography.bodySmall)
+                BasicText(
+                    text = lastText,
+                    style = DumbTheme.Text.Hint
+                )
             }
         }
 
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(4.dp))
 
         // Connection + sync state
         SyncNowSection(

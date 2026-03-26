@@ -144,20 +144,7 @@ class HomeViewModel : ViewModel() {
         connectJob = viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    ServiceLocator.syncRepository(ctx).connectAndWaitForReady(
-                        onPeerDisconnectedAfterReady = {
-                            if (_ui.value.isSyncing) {
-                                Log.i(TAG, "[ContactSync] peer disconnected after ready — sync in progress, ignoring")
-                            } else {
-                                Log.w(TAG, "[ContactSync] peer disconnected after ready — resetting to connecting")
-                                _ui.update {
-                                    it.copy(isConnecting = true, isConnected = false, status = null)
-                                }
-                                connectJob = null
-                                connectWebSocket(ctx)
-                            }
-                        }
-                    )
+                    ServiceLocator.syncRepository(ctx).connectAndWaitForReady()
                 }
                 Log.i(TAG, "[ContactSync] connectWebSocket: both_ready — connected!")
                 _ui.update {
