@@ -38,6 +38,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import okhttp3.OkHttpClient
 
 private const val TAG = "PairingScreen"
@@ -87,10 +89,13 @@ fun PairingScreen(
     var error by remember { mutableStateOf<String?>(null) }
 
     // Retry-aware phone number reader — SIM may not be ready immediately,
-    // so retry a few times with a short delay before showing an error.
+    // so retry with increasing delays before showing an error.
+    // Uses 8 attempts with back-off (1s, 1s, 2s, 2s, 3s, 3s, 4s) ≈ 16s total,
+    // giving the SIM and root fallback plenty of time.
     suspend fun readPhoneNumberWithRetry() {
         phoneError = null
-        repeat(5) { attempt ->
+        val maxAttempts = 8
+        repeat(maxAttempts) { attempt ->
             val result = readPhoneNumber(ctx)
             if (result.first != null) {
                 phoneNumber = result.first
@@ -98,12 +103,13 @@ fun PairingScreen(
                 return
             }
             // On last attempt, surface the error
-            if (attempt == 4) {
+            if (attempt == maxAttempts - 1) {
                 phoneError = result.second
                 return
             }
-            Log.d(TAG, "SIM not ready, retrying (${attempt + 1}/5)...")
-            delay(1000)
+            val delayMs = ((attempt / 2) + 1) * 1000L
+            Log.d(TAG, "SIM not ready, retrying (${attempt + 1}/$maxAttempts) in ${delayMs}ms...")
+            delay(delayMs)
         }
     }
 
@@ -470,6 +476,12 @@ private fun keyToDigit(key: Key): String? = when (key) {
 /**
  * Reads the phone number from SIM.
  * Returns (phoneNumber, errorMessage) — one will be null.
+ *
+ * Tries, in order:
+ * 1. SubscriptionManager (Android 13+)
+ * 2. TelephonyManager.getLine1Number (deprecated but still works on older builds)
+ * 3. Root fallback: content://telephony/siminfo (works on TCL/MediaTek even when
+ *    the normal APIs return null because the SIM isn't "ready" yet)
  */
 private fun readPhoneNumber(ctx: Context): Pair<String?, String?> {
     return try {
@@ -487,7 +499,19 @@ private fun readPhoneNumber(ctx: Context): Pair<String?, String?> {
         if (!line.isNullOrBlank()) {
             return formatE164(line) to null
         }
-        Log.e(TAG, "SIM did not provide phone number")
+
+        // Root fallback — query the telephony content provider directly.
+        // This bypasses the SubscriptionManager/TelephonyManager APIs which
+        // can return null on TCL/MediaTek devices or when the SIM is still
+        // initializing. Same technique used in dumb-phone-configuration's
+        // device_registration.sh.
+        val rootNumber = readPhoneNumberViaSu()
+        if (rootNumber != null) {
+            Log.i(TAG, "Got phone number via root fallback")
+            return formatE164(rootNumber) to null
+        }
+
+        Log.e(TAG, "SIM did not provide phone number (all methods exhausted)")
         null to "unable to read phone number from SIM"
     } catch (e: SecurityException) {
         Log.w(TAG, "Need phone permission", e)
@@ -495,6 +519,68 @@ private fun readPhoneNumber(ctx: Context): Pair<String?, String?> {
     } catch (e: Exception) {
         Log.e(TAG, "Unexpected error reading phone number", e)
         null to "unable to read phone number from SIM"
+    }
+}
+
+/**
+ * Root fallback for reading the phone number.
+ * Tries two shell approaches (same as device_registration.sh):
+ *   1. content://telephony/siminfo — works on TCL/MediaTek
+ *   2. service call iphonesubinfo 15 — works on Qualcomm/AOSP
+ * Returns the raw number string or null.
+ */
+private fun readPhoneNumberViaSu(): String? {
+    // Method 1: telephony content provider (most reliable on TCL Flip 2)
+    try {
+        val cp = runSuCommand("content query --uri content://telephony/siminfo --projection number")
+        if (cp != null) {
+            // Output looks like: Row: 0 number=+15551234567, ...
+            val match = Regex("""number=([^,}\s]+)""").find(cp)
+            val num = match?.groupValues?.get(1)?.trim()
+            if (!num.isNullOrBlank() && num != "NULL" && num.any { it.isDigit() }) {
+                Log.d(TAG, "Root fallback (content provider) got number")
+                return num
+            }
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Root fallback (content provider) failed", e)
+    }
+
+    // Method 2: service call iphonesubinfo 15
+    try {
+        val sc = runSuCommand("service call iphonesubinfo 15")
+        if (sc != null) {
+            // Output is hex-in-quotes like: Result: Parcel( 0x00000000 '...' ...)
+            // Extract the characters between single quotes and strip dots/spaces
+            val chars = Regex("'([^']*)'").findAll(sc)
+                .map { it.groupValues[1] }
+                .joinToString("")
+                .replace(".", "")
+                .trim()
+            if (chars.any { it.isDigit() }) {
+                Log.d(TAG, "Root fallback (iphonesubinfo) got number")
+                return chars
+            }
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Root fallback (iphonesubinfo) failed", e)
+    }
+
+    return null
+}
+
+/** Runs a command via su and returns stdout, or null on failure. */
+private fun runSuCommand(cmd: String): String? {
+    return try {
+        val proc = ProcessBuilder("su", "-c", cmd)
+            .redirectErrorStream(true)
+            .start()
+        val output = BufferedReader(InputStreamReader(proc.inputStream)).use { it.readText() }
+        val exitCode = proc.waitFor()
+        if (exitCode == 0 && output.isNotBlank()) output else null
+    } catch (e: Exception) {
+        Log.w(TAG, "runSuCommand($cmd) failed: ${e.message}")
+        null
     }
 }
 
