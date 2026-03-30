@@ -252,8 +252,8 @@ fun PairingScreen(
                     }
 
                 BasicText(
-                    text = "enter code from Dumb Down app:",
-                    style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.White),
+                    text = "enter code from app",
+                    style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 

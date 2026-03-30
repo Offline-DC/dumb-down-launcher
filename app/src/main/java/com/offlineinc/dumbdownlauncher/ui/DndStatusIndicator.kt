@@ -45,18 +45,25 @@ fun DndStatusIndicator(
     ) {
         androidx.compose.foundation.Image(
             painter = rememberVectorPainter(Icons.Filled.VolumeOff),
-            contentDescription = "Muted",
+            contentDescription = null,
             modifier = Modifier.size(14.dp),
             colorFilter = ColorFilter.tint(DumbTheme.Colors.Black),
         )
         Spacer(Modifier.width(3.dp))
         BasicText(
-            text = "MUTE",
+            text = "txt",
             style = TextStyle(
                 fontFamily = DumbTheme.BioRhyme,
                 fontSize = 10.sp,
                 color = DumbTheme.Colors.Black,
             ),
+        )
+        Spacer(Modifier.width(3.dp))
+        androidx.compose.foundation.Image(
+            painter = rememberVectorPainter(Icons.Filled.VolumeOff),
+            contentDescription = "Muted",
+            modifier = Modifier.size(14.dp),
+            colorFilter = ColorFilter.tint(DumbTheme.Colors.Black),
         )
     }
 }

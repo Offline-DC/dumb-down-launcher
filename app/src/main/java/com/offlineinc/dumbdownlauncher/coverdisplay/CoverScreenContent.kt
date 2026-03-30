@@ -1,5 +1,6 @@
 package com.offlineinc.dumbdownlauncher.coverdisplay
 
+import android.media.AudioManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,6 +10,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.offlineinc.dumbdownlauncher.ui.RingerModeIndicator
 
 /**
  * Pure stateless layout. Positions each cover display component and delegates
@@ -24,6 +26,7 @@ internal fun CoverScreenContent(
     badgeCount: Int,
     hasNew:     Boolean,
     overlay:    OverlayState?,
+    ringerMode: Int = AudioManager.RINGER_MODE_NORMAL,
 ) {
     Box(
         modifier = Modifier
@@ -52,6 +55,14 @@ internal fun CoverScreenContent(
                 hasNew     = hasNew,
                 modifier   = Modifier
                     .align(Alignment.TopStart)
+                    .padding(3.dp),
+            )
+
+            RingerModeIndicator(
+                ringerMode = ringerMode,
+                iconSize   = 10.dp,
+                modifier   = Modifier
+                    .align(Alignment.BottomEnd)
                     .padding(3.dp),
             )
         }

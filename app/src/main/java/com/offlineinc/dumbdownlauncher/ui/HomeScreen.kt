@@ -2,17 +2,14 @@ package com.offlineinc.dumbdownlauncher.ui
 
 import android.app.WallpaperManager
 import android.graphics.Bitmap
+import android.media.AudioManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.BasicText
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -41,11 +38,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +128,19 @@ fun HomeScreen(
         }
     }
 
+    // ── Ringer mode ────────────────────────────────────────────────────
+    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    var ringerMode by remember { mutableIntStateOf(audioManager.ringerMode) }
+    DisposableEffect(Unit) {
+        val ringerReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                ringerMode = audioManager.ringerMode
+            }
+        }
+        context.registerReceiver(ringerReceiver, IntentFilter(AudioManager.RINGER_MODE_CHANGED_ACTION))
+        onDispose { try { context.unregisterReceiver(ringerReceiver) } catch (_: Exception) {} }
+    }
+
     // ── Focus ────────────────────────────────────────────────────────────
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
@@ -208,6 +215,15 @@ fun HomeScreen(
             )
         }
 
+        // ── Ringer mode — top-left, always visible ────────────────────────
+        RingerModeIndicator(
+            ringerMode = ringerMode,
+            iconSize = 22.dp,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 6.dp, start = 6.dp),
+        )
+
         // ── Mute badge — top-right corner, only visible when muted ───────
         DndStatusIndicator(
             enabled = messagesMuted,
@@ -216,47 +232,13 @@ fun HomeScreen(
                 .padding(top = 6.dp, end = 6.dp),
         )
 
-        // ── Bottom bar: notifications | all apps ─────────────────────
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BasicText(
-                text = "notifs",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.Start,
-                ),
-            )
-            BasicText(
-                text = "apps",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.Center,
-                ),
-            )
-            BasicText(
-                text = "all",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.End,
-                ),
-            )
-        }
+        // ── Bottom bar: notifications | apps | all ─────────────────────
+        SoftKeyBar(
+            leftLabel = "notifs",
+            centerLabel = "apps",
+            rightLabel = "all",
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
 }
 
@@ -290,46 +272,12 @@ private fun PreviewHomeScreen() {
             DndStatusIndicator(enabled = false)
         }
 
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BasicText(
-                text = "notifs",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.Start,
-                ),
-            )
-            BasicText(
-                text = "apps",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.Center,
-                ),
-            )
-            BasicText(
-                text = "all",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.End,
-                ),
-            )
-        }
+        SoftKeyBar(
+            leftLabel = "notifs",
+            centerLabel = "apps",
+            rightLabel = "all",
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
 }
 
@@ -356,45 +304,11 @@ private fun PreviewHomeScreenDndOn() {
             DndStatusIndicator(enabled = true, modifier = Modifier.padding(top = 6.dp))
         }
 
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BasicText(
-                text = "notifs",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.Start,
-                ),
-            )
-            BasicText(
-                text = "apps",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.Center,
-                ),
-            )
-            BasicText(
-                text = "all",
-                modifier = Modifier.weight(1f),
-                style = TextStyle(
-                    color = DumbTheme.Colors.Yellow.copy(alpha = 0.65f),
-                    fontSize = 12.sp,
-                    fontFamily = DumbTheme.BioRhyme,
-                    textAlign = TextAlign.End,
-                ),
-            )
-        }
+        SoftKeyBar(
+            leftLabel = "notifs",
+            centerLabel = "apps",
+            rightLabel = "all",
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
 }

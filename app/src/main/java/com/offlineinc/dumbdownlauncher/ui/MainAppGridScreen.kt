@@ -52,6 +52,8 @@ fun MainAppGridScreen(
     items: List<AppItem>,
     onActivate: (AppItem) -> Unit,
     onBack: () -> Unit,
+    onOpenNotifications: () -> Unit = {},
+    onOpenAllApps: () -> Unit = {},
     /** Home screen wallpaper bitmap — displayed behind the grid with a dark overlay. */
     wallpaperBitmap: Bitmap? = null,
 ) {
@@ -89,7 +91,7 @@ fun MainAppGridScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 2.dp, vertical = 6.dp)
+                .padding(start = 2.dp, end = 2.dp, top = 6.dp, bottom = 24.dp)
                 .focusRequester(focusRequester)
                 .focusable()
                 .onPreviewKeyEvent { event ->
@@ -129,6 +131,14 @@ fun MainAppGridScreen(
                             onBack()
                             true
                         }
+                        Key.Menu -> {
+                            onOpenNotifications()
+                            true
+                        }
+                        Key.B -> {
+                            onOpenAllApps()
+                            true
+                        }
                         else -> false
                     }
                 },
@@ -161,6 +171,14 @@ fun MainAppGridScreen(
                 }
             }
         }
+
+        // ── Bottom bar: notifs | select | all ────────────────────────────
+        SoftKeyBar(
+            leftLabel = "notifs",
+            centerLabel = "select",
+            rightLabel = "all",
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
 }
 

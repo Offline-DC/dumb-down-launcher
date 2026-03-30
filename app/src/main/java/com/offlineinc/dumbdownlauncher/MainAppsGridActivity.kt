@@ -195,6 +195,18 @@ class MainAppsGridActivity : AppCompatActivity() {
                 wallpaperBitmap = wallpaperState.value,
                 onActivate = { item -> launchGridApp(item) },
                 onBack = { finish() },
+                onOpenNotifications = {
+                    startActivity(Intent(this@MainAppsGridActivity, com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                    })
+                    overridePendingTransition(0, 0)
+                },
+                onOpenAllApps = {
+                    startActivity(Intent(this@MainAppsGridActivity, AllAppsActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                    })
+                    overridePendingTransition(0, 0)
+                },
             )
         }
 
@@ -410,13 +422,27 @@ class MainAppsGridActivity : AppCompatActivity() {
         overridePendingTransition(0, 0)
     }
 
-    // ── Key dispatch for dialer ──────────────────────────────────────────
+    // ── Key dispatch for dialer + soft keys ────────────────────────────────
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val result = KeyDispatcher.handle(event)
         if (!result.consumed) return super.dispatchKeyEvent(event)
 
         return when {
+            result.openNotifications -> {
+                startActivity(Intent(this, com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                })
+                overridePendingTransition(0, 0)
+                true
+            }
+            result.openAllApps -> {
+                startActivity(Intent(this, AllAppsActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                })
+                overridePendingTransition(0, 0)
+                true
+            }
             result.resetDialSession -> true
             result.openDialerBlank -> {
                 controller.openDialerBlank()

@@ -32,6 +32,12 @@ class MouseAccessibilityService : AccessibilityService() {
         /** Shared single-thread executor for all shell commands — avoids raw Thread{} churn. */
         private val shellExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
+        /**
+         * Dedicated executor for text injection so it is never blocked behind
+         * slow mouse-enable / density-change shell commands on [shellExecutor].
+         */
+        private val textInjectorExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
         fun forceDisable(context: Context) {
             instance?.forceDisable() ?: runMouseCmdStatic("disable")
         }
@@ -81,12 +87,13 @@ class MouseAccessibilityService : AccessibilityService() {
          * falling back. Covers the common case where the text field hasn't
          * received focus yet right after a screen transition.
          */
-        private const val FIND_FOCUS_MAX_RETRIES = 5
-        private const val FIND_FOCUS_RETRY_MS = 100L
+        private const val FIND_FOCUS_MAX_RETRIES = 8
+        private const val FIND_FOCUS_RETRY_MS = 150L
 
         fun injectText(text: String) {
-            // Run on the shared executor so polling doesn't block the caller.
-            shellExecutor.execute {
+            // Run on a dedicated executor so text injection is never queued
+            // behind slow mouse-enable / density-change shell commands.
+            textInjectorExecutor.execute {
                 val service = waitForService()
                 if (service == null) {
                     Log.e("MouseService", "injectText: accessibility service never connected after ${A11Y_WAIT_TIMEOUT_MS}ms — falling back to shell")
@@ -184,10 +191,10 @@ class MouseAccessibilityService : AccessibilityService() {
         }
 
         /** Max attempts for the paste action itself. */
-        private const val PASTE_MAX_RETRIES = 3
-        private const val PASTE_RETRY_MS = 50L
+        private const val PASTE_MAX_RETRIES = 5
+        private const val PASTE_RETRY_MS = 80L
         /** Small delay after setting the clipboard to let the system propagate it. */
-        private const val CLIPBOARD_SETTLE_MS = 30L
+        private const val CLIPBOARD_SETTLE_MS = 120L
 
         /**
          * Set [text] via clipboard paste. Selects all existing content first so the

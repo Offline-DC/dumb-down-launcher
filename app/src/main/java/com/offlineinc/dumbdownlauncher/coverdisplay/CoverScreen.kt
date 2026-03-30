@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
 import androidx.compose.runtime.Composable
@@ -88,6 +89,20 @@ fun CoverScreen() {
         onDispose { try { context.unregisterReceiver(receiver) } catch (_: Exception) {} }
     }
 
+    // Ringer mode (silent / vibrate / normal)
+    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    var ringerMode by remember { mutableIntStateOf(audioManager.ringerMode) }
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                ringerMode = audioManager.ringerMode
+            }
+        }
+        val filter = IntentFilter(AudioManager.RINGER_MODE_CHANGED_ACTION)
+        context.registerReceiver(receiver, filter)
+        onDispose { try { context.unregisterReceiver(receiver) } catch (_: Exception) {} }
+    }
+
     // Notifications
     val allNotifs by NotificationStore.items().observeAsState(emptyList())
     val sessionStart  = remember { System.currentTimeMillis() }
@@ -150,6 +165,7 @@ fun CoverScreen() {
         badgeCount = allNotifs.size,
         hasNew     = hasNewNotifs,
         overlay    = overlay,
+        ringerMode = ringerMode,
     )
 }
 
