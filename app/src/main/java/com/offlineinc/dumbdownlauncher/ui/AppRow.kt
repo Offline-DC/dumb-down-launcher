@@ -37,9 +37,16 @@ fun AppRow(
     ) {
 
         // ---- App Icon ----
+        val drawableRes = appDrawableResIcons[item.packageName]
         val vectorIcon = appVectorIcons[item.packageName]
 
-        if (vectorIcon != null) {
+        if (drawableRes != null) {
+            Image(
+                painter = painterResource(drawableRes),
+                contentDescription = item.label,
+                modifier = Modifier.size(36.dp),
+            )
+        } else if (vectorIcon != null) {
             Image(
                 painter = rememberVectorPainter(vectorIcon),
                 contentDescription = item.label,

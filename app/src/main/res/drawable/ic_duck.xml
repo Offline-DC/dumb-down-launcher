@@ -1,34 +1,40 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="48dp"
     android:height="48dp"
-    android:viewportWidth="48"
-    android:viewportHeight="48">
-    <!-- Body -->
-    <path
-        android:fillColor="#FFD400"
-        android:pathData="M4,16 L36,16 L36,36 L4,36Z" />
-    <!-- Head -->
-    <path
-        android:fillColor="#FFD400"
-        android:pathData="M24,4 L40,4 L40,16 L24,16Z" />
-    <!-- Beak -->
-    <path
-        android:fillColor="#FF8C00"
-        android:pathData="M40,6 L48,10 L40,14Z" />
-    <!-- Eye -->
-    <path
-        android:fillColor="#000000"
-        android:pathData="M32,7 L36,7 L36,11 L32,11Z" />
-    <!-- Wing -->
-    <path
-        android:fillColor="#E6BE00"
-        android:pathData="M8,20 L8,32 L18,32 L18,20Z" />
-    <!-- Left foot -->
-    <path
-        android:fillColor="#FF8C00"
-        android:pathData="M10,36 L10,44 L18,44 L18,36Z" />
-    <!-- Right foot -->
-    <path
-        android:fillColor="#FF8C00"
-        android:pathData="M26,36 L26,44 L34,44 L34,36Z" />
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Pixel art duck — each "pixel" is a 1×1 unit on a 24×24 grid -->
+
+    <!-- ── Head ── -->
+    <path android:fillColor="#FFD400"
+        android:pathData="M14,1h2v1h-2z M13,2h4v1h-4z M12,3h5v1h-5z M12,4h5v1h-5z M13,5h4v1h-4z" />
+
+    <!-- ── Eye ── -->
+    <path android:fillColor="#000000"
+        android:pathData="M15,3h1v1h-1z" />
+
+    <!-- ── Beak ── -->
+    <path android:fillColor="#FF8C00"
+        android:pathData="M17,4h2v1h-2z M17,5h3v1h-3z" />
+
+    <!-- ── Neck ── -->
+    <path android:fillColor="#FFD400"
+        android:pathData="M12,6h3v1h-3z M11,7h3v1h-3z" />
+
+    <!-- ── Body ── -->
+    <path android:fillColor="#FFD400"
+        android:pathData="M6,8h8v1h-8z M4,9h11v1h-11z M3,10h13v1h-13z M3,11h14v1h-14z M3,12h14v1h-14z M3,13h14v1h-14z M4,14h13v1h-13z M5,15h11v1h-11z M6,16h9v1h-9z" />
+
+    <!-- ── Wing detail ── -->
+    <path android:fillColor="#E6BE00"
+        android:pathData="M5,10h4v1h-4z M5,11h5v1h-5z M5,12h5v1h-5z M6,13h4v1h-4z" />
+
+    <!-- ── Tail ── -->
+    <path android:fillColor="#FFD400"
+        android:pathData="M3,8h2v1h-2z M2,7h2v1h-2z M1,6h2v1h-2z" />
+
+    <!-- ── Legs + Feet ── -->
+    <path android:fillColor="#FF8C00"
+        android:pathData="M8,17h2v2h-2z M13,17h2v2h-2z M7,19h3v1h-3z M12,19h3v1h-3z M6,20h4v1h-4z M11,20h4v1h-4z" />
 </vector>

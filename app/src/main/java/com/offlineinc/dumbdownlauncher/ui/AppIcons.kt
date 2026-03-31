@@ -17,6 +17,8 @@ import com.offlineinc.dumbdownlauncher.CONTACT_SYNC
 import com.offlineinc.dumbdownlauncher.DEVICE_SETUP
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
+import com.offlineinc.dumbdownlauncher.QUACK
+import com.offlineinc.dumbdownlauncher.R
 import com.offlineinc.dumbdownlauncher.WEB_KEYBOARD
 
 /**
@@ -48,4 +50,13 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     DEVICE_SETUP                      to Icons.Filled.Link,
     CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
     WEB_KEYBOARD                      to Icons.Filled.Keyboard,
+)
+
+/**
+ * Drawable-resource icon overrides for apps that need a custom bitmap/vector
+ * drawable instead of a tintable Material icon (e.g. the pixel-art duck).
+ * Checked in AppRow before [appVectorIcons].
+ */
+val appDrawableResIcons: Map<String, Int> = mapOf(
+    QUACK to R.drawable.ic_duck,
 )

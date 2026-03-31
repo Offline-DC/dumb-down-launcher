@@ -116,7 +116,10 @@ fun SyncNowSection(
                     text = if (isOnboarding && ui.canClose) "contacts are being added to your phone.\npress OK to go to next step"
                     else if (ui.canClose) "contacts are being added to your phone.\nu can close this page, it may take several minutes"
                     else "keep this app open — downloading contacts",
-                    style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
+                    style = DumbTheme.Text.Hint.copy(
+                        color = if (isOnboarding && ui.canClose) DumbTheme.Colors.Yellow else DumbTheme.Text.Hint.color,
+                        textAlign = TextAlign.Center
+                    ),
                     modifier = if (isOnboarding && ui.canClose) {
                         Modifier
                             .focusRequester(syncFocusRequester)
@@ -150,7 +153,10 @@ fun SyncNowSection(
                 BasicText(
                     text = if (isOnboarding) "press OK to go to next step"
                     else "u can close this page",
-                    style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
+                    style = DumbTheme.Text.Hint.copy(
+                        color = if (isOnboarding) DumbTheme.Colors.Yellow else DumbTheme.Text.Hint.color,
+                        textAlign = TextAlign.Center
+                    ),
                     modifier = if (isOnboarding) {
                         Modifier
                             .focusRequester(completeFocusRequester)

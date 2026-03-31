@@ -141,6 +141,16 @@ class AllAppsActivity : AppCompatActivity() {
                 ))
             }
 
+            // Show quack (built-in) when paired
+            if (pairingStore.isPaired) {
+                appItems.add(AppItem(
+                    packageName = QUACK,
+                    label = "quack",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                ))
+            }
+
             appItems.add(AppItem(
                 packageName = DEVICE_SETUP,
                 label = "device setup",
@@ -278,6 +288,13 @@ class AllAppsActivity : AppCompatActivity() {
                             )
                         }
                     }
+                    QUACK -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.quack.QuackActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
                     CONTACT_SYNC -> {
                         startActivity(
                             Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
@@ -412,6 +429,18 @@ class AllAppsActivity : AppCompatActivity() {
                         items.add(contactSyncItem)
                         cachedApps = (cachedApps ?: emptyList()) + contactSyncItem
                     }
+                    // Add "quack" if it isn't already in the list
+                    val hasQuack = items.any { it.packageName == QUACK }
+                    if (!hasQuack) {
+                        val quackItem = AppItem(
+                            packageName = QUACK,
+                            label = "quack",
+                            icon = packageManager.defaultActivityIcon,
+                            launchComponent = null,
+                        )
+                        items.add(quackItem)
+                        cachedApps = (cachedApps ?: emptyList()) + quackItem
+                    }
                 } else {
                     // Remove "type sync" if present when not paired
                     val typeSyncIdx = items.indexOfFirst { it.packageName == WEB_KEYBOARD }
@@ -424,6 +453,12 @@ class AllAppsActivity : AppCompatActivity() {
                     if (contactSyncIdx >= 0) {
                         items.removeAt(contactSyncIdx)
                         cachedApps = cachedApps?.filter { it.packageName != CONTACT_SYNC }
+                    }
+                    // Remove "quack" if present when not paired
+                    val quackIdx = items.indexOfFirst { it.packageName == QUACK }
+                    if (quackIdx >= 0) {
+                        items.removeAt(quackIdx)
+                        cachedApps = cachedApps?.filter { it.packageName != QUACK }
                     }
                 }
             }
