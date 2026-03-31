@@ -524,46 +524,36 @@ private fun readPhoneNumber(ctx: Context): Pair<String?, String?> {
 
 /**
  * Root fallback for reading the phone number.
- * Tries two shell approaches (same as device_registration.sh):
- *   1. content://telephony/siminfo — works on TCL/MediaTek
- *   2. service call iphonesubinfo 15 — works on Qualcomm/AOSP
- * Returns the raw number string or null.
+ * Reads from Settings.Secure where the setup script (automated_configuration.sh)
+ * stored it after querying the carrier via USSD #686#.
+ * Falls back to content://telephony/siminfo which the setup script also populates.
  */
 private fun readPhoneNumberViaSu(): String? {
-    // Method 1: telephony content provider (most reliable on TCL Flip 2)
+    // Method 1: Settings.Secure (written by setup script via #686# USSD query)
+    try {
+        val setting = runSuCommand("settings get secure device_phone_number")
+        val num = setting?.trim()
+        if (!num.isNullOrBlank() && num != "null" && num.any { it.isDigit() }) {
+            Log.d(TAG, "Root fallback (Settings.Secure) got number")
+            return num.replace("-", "")
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Root fallback (Settings.Secure) failed", e)
+    }
+
+    // Method 2: telephony siminfo (also written by setup script)
     try {
         val cp = runSuCommand("content query --uri content://telephony/siminfo --projection number")
         if (cp != null) {
-            // Output looks like: Row: 0 number=+15551234567, ...
             val match = Regex("""number=([^,}\s]+)""").find(cp)
             val num = match?.groupValues?.get(1)?.trim()
             if (!num.isNullOrBlank() && num != "NULL" && num.any { it.isDigit() }) {
-                Log.d(TAG, "Root fallback (content provider) got number")
-                return num
+                Log.d(TAG, "Root fallback (siminfo) got number")
+                return num.replace("-", "")
             }
         }
     } catch (e: Exception) {
-        Log.w(TAG, "Root fallback (content provider) failed", e)
-    }
-
-    // Method 2: service call iphonesubinfo 15
-    try {
-        val sc = runSuCommand("service call iphonesubinfo 15")
-        if (sc != null) {
-            // Output is hex-in-quotes like: Result: Parcel( 0x00000000 '...' ...)
-            // Extract the characters between single quotes and strip dots/spaces
-            val chars = Regex("'([^']*)'").findAll(sc)
-                .map { it.groupValues[1] }
-                .joinToString("")
-                .replace(".", "")
-                .trim()
-            if (chars.any { it.isDigit() }) {
-                Log.d(TAG, "Root fallback (iphonesubinfo) got number")
-                return chars
-            }
-        }
-    } catch (e: Exception) {
-        Log.w(TAG, "Root fallback (iphonesubinfo) failed", e)
+        Log.w(TAG, "Root fallback (siminfo) failed", e)
     }
 
     return null
