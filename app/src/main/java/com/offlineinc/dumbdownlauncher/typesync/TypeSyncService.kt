@@ -44,6 +44,7 @@ class TypeSyncService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        MouseAccessibilityService.appContext = applicationContext
         Log.i(TAG, "Service created")
     }
 

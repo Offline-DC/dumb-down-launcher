@@ -93,9 +93,10 @@ class WebKeyboardService : Service() {
                 }
 
                 Log.i(TAG, "Starting encrypted relay for $phone")
-                // Wait for the accessibility service to be ready before
-                // opening the WebSocket.  Text arriving before the service
-                // is bound would fall back to the broken shell injection.
+                // Make app context available immediately so clipboard paste
+                // works even before the accessibility service binds.
+                MouseAccessibilityService.appContext = applicationContext
+                MouseAccessibilityService.ensureAccessibilityEnabled()
                 waitForAccessibilityThenRelay(phone)
             }
             ACTION_STOP -> shutDown()

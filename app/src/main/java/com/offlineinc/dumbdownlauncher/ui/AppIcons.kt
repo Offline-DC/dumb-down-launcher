@@ -1,6 +1,7 @@
 package com.offlineinc.dumbdownlauncher.ui
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.DirectionsCar
@@ -43,6 +44,9 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     "com.android.dialer"              to Icons.Filled.History,
     // Camera
     "com.tcl.camera"                  to Icons.Filled.CameraAlt,
+    // Clock
+    "com.tcl.deskclock"               to Icons.Filled.AccessTime,
+    "com.android.deskclock"           to Icons.Filled.AccessTime,
     // Settings
     "com.android.settings"            to Icons.Filled.Settings,
     // Special all-apps items

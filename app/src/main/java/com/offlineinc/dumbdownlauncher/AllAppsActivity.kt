@@ -50,6 +50,9 @@ class AllAppsActivity : AppCompatActivity() {
             "com.android.launcher3",
             // Contact sync is now integrated into the launcher — hide standalone APK
             "com.offlineinc.dumbcontactsync",
+            // Smart txt apps — handled via the virtual "smart txt" row instead
+            "com.openbubbles.messaging",
+            "com.offline.googlemessageslauncher",
             // apps to hide
             "com.topjohnwu.magisk",           // Magisk
             "com.android.chrome",             // Chrome
@@ -141,11 +144,27 @@ class AllAppsActivity : AppCompatActivity() {
                 ))
             }
 
-            // Show quack (built-in) when paired
-            if (pairingStore.isPaired) {
+            // Show quack (built-in) when we can read the device's own phone number
+            if (com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader.isAvailable(context)) {
                 appItems.add(AppItem(
                     packageName = QUACK,
                     label = "quack",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                ))
+            }
+
+            // Show smart txt when platform is chosen (iOS → OpenBubbles, Android → Google Messages)
+            val platform = PlatformPreferences.getChoice(context)
+            val smartTxtPkg = when (platform) {
+                "ios"     -> "com.openbubbles.messaging"
+                "android" -> GOOGLE_MESSAGES
+                else      -> null
+            }
+            if (smartTxtPkg != null) {
+                appItems.add(AppItem(
+                    packageName = smartTxtPkg,
+                    label = "smart txt",
                     icon = pm.defaultActivityIcon,
                     launchComponent = null,
                 ))
@@ -231,10 +250,15 @@ class AllAppsActivity : AppCompatActivity() {
                 onActivate = { item ->
                     when (item.packageName) {
                     DEVICE_SETUP -> {
-                        // Always go to the pairing screen — it shows
-                        // a "linked" state with next/unpair when already paired.
+                        // Set the flag then bring MainActivity to the front, clearing
+                        // the back stack (AllApps + Grid) so onResume fires immediately.
                         PlatformPreferences.requestShowDialog(this@AllAppsActivity)
-                        finish()
+                        startActivity(
+                            Intent(this@AllAppsActivity, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            }
+                        )
+                        overridePendingTransition(0, 0)
                     }
                     CHECK_UPDATES -> {
                         Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
@@ -286,6 +310,20 @@ class AllAppsActivity : AppCompatActivity() {
                                     action = WebKeyboardService.ACTION_STOP
                                 }
                             )
+                        }
+                    }
+                    GOOGLE_MESSAGES -> {
+                        MainAppsGridActivity.openMessagesInChrome(this@AllAppsActivity)
+                    }
+                    "com.openbubbles.messaging" -> {
+                        MouseAccessibilityService.setMouseEnabled(this@AllAppsActivity, true)
+                        val launchIntent = packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(launchIntent)
+                            overridePendingTransition(0, 0)
+                        } else {
+                            Toast.makeText(this@AllAppsActivity, "OpenBubbles not installed", Toast.LENGTH_SHORT).show()
                         }
                     }
                     QUACK -> {
@@ -391,6 +429,7 @@ class AllAppsActivity : AppCompatActivity() {
 
     /**
      * Refresh pairing-dependent rows (type sync, contact sync) on resume.
+     * Quack is shown independently whenever the device phone number is available.
      * "device setup" is always visible — it doubles as the unpair entry point.
      */
     private fun refreshDevicePairingRow() {
@@ -399,6 +438,9 @@ class AllAppsActivity : AppCompatActivity() {
                 com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
                     .readPairing(applicationContext) != null
             } catch (_: Exception) { false }
+
+            val hasPhoneNumber = com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
+                .isAvailable(applicationContext)
 
             withContext(Dispatchers.Main) {
                 if (isDestroyed) return@withContext
@@ -429,18 +471,6 @@ class AllAppsActivity : AppCompatActivity() {
                         items.add(contactSyncItem)
                         cachedApps = (cachedApps ?: emptyList()) + contactSyncItem
                     }
-                    // Add "quack" if it isn't already in the list
-                    val hasQuack = items.any { it.packageName == QUACK }
-                    if (!hasQuack) {
-                        val quackItem = AppItem(
-                            packageName = QUACK,
-                            label = "quack",
-                            icon = packageManager.defaultActivityIcon,
-                            launchComponent = null,
-                        )
-                        items.add(quackItem)
-                        cachedApps = (cachedApps ?: emptyList()) + quackItem
-                    }
                 } else {
                     // Remove "type sync" if present when not paired
                     val typeSyncIdx = items.indexOfFirst { it.packageName == WEB_KEYBOARD }
@@ -454,7 +484,21 @@ class AllAppsActivity : AppCompatActivity() {
                         items.removeAt(contactSyncIdx)
                         cachedApps = cachedApps?.filter { it.packageName != CONTACT_SYNC }
                     }
-                    // Remove "quack" if present when not paired
+                }
+
+                // Quack visibility is independent of pairing — show whenever we can
+                // read the device's own phone number (SIM is present and readable).
+                val hasQuack = items.any { it.packageName == QUACK }
+                if (hasPhoneNumber && !hasQuack) {
+                    val quackItem = AppItem(
+                        packageName = QUACK,
+                        label = "quack",
+                        icon = packageManager.defaultActivityIcon,
+                        launchComponent = null,
+                    )
+                    items.add(quackItem)
+                    cachedApps = (cachedApps ?: emptyList()) + quackItem
+                } else if (!hasPhoneNumber && hasQuack) {
                     val quackIdx = items.indexOfFirst { it.packageName == QUACK }
                     if (quackIdx >= 0) {
                         items.removeAt(quackIdx)

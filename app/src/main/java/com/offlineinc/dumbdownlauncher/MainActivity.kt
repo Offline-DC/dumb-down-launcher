@@ -33,6 +33,8 @@ import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import android.net.Uri
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
+import com.offlineinc.dumbdownlauncher.ui.IntentChoiceScreen
+import com.offlineinc.dumbdownlauncher.ui.LinkingChoiceScreen
 import com.offlineinc.dumbdownlauncher.ui.MouseTutorialScreen
 import com.offlineinc.dumbdownlauncher.ui.PairingScreen
 import com.offlineinc.dumbdownlauncher.ui.PlatformChoiceDialog
@@ -54,7 +56,7 @@ val WEB_APP_URLS = mapOf(
 class MainActivity : AppCompatActivity() {
     private lateinit var dndMuteManager: DndMuteManager
     private lateinit var controller: LauncherController
-    /** Onboarding step: "pairing" → "contactsync" → "platform" → "mousetutorial" → null (done) */
+    /** Onboarding step: "linking" → "intent" → ["pairing" → "contactsync" →] "mousetutorial" → null */
     private val onboardingStep = mutableStateOf<String?>(null)
     /** Flips to true once su permission grant finishes (or was unnecessary). */
     private val permissionsReady = mutableStateOf(false)
@@ -85,26 +87,39 @@ class MainActivity : AppCompatActivity() {
         }
 
         val platformChoice = PlatformPreferences.getChoice(this)
-        val needsPairing = !pairingStore.isPaired
-        val needsPlatform = platformChoice != "ios" && platformChoice != "android"
+        val linkingChoice  = PlatformPreferences.getLinkingChoice(this)
+        // "none" (super dumb) is a valid choice — no smart text, no pairing needed.
+        // "skipped" is the legacy value for users who tapped skip on the old pairing screen.
+        val validPlatforms = setOf("ios", "android", "skipped", "none")
+        // New users: neither linking nor platform chosen yet
+        val needsLinking  = linkingChoice == null && platformChoice == null && !pairingStore.isPaired
+        // Linking chosen but still picking platform
+        val needsIntent   = linkingChoice != null && platformChoice == null && !pairingStore.isPaired
+        // Chose to link — always pair, even if platform is "none" (super dumb users
+        // who still want their contacts synced etc.)
+        val needsPairing  = !pairingStore.isPaired && platformChoice != null && linkingChoice == true
+        // Backwards-compat: paired users from before intent screen, platform still unknown
+        val needsPlatform = platformChoice !in validPlatforms && !needsLinking && !needsIntent
 
         // Backwards-compat: existing users who already completed pairing + platform
         // before the mouse tutorial was added should not be forced through it on update.
-        if (!needsPairing && !needsPlatform && !isMouseTutorialDone()) {
-            Log.d("ONBOARDING", "Existing user detected (paired + platform set) — auto-marking mouse tutorial done")
+        if (!needsLinking && !needsIntent && !needsPairing && !needsPlatform && !isMouseTutorialDone()) {
+            Log.d("ONBOARDING", "Existing user detected — auto-marking mouse tutorial done")
             markMouseTutorialDone()
         }
 
         onboardingStep.value = when {
-            needsPairing -> "pairing"
-            needsPlatform -> "platform"
+            needsLinking  -> "linking"   // brand-new users: are you linking?
+            needsIntent   -> "intent"    // linking chosen: pick imessage / google messages / none
+            needsPairing  -> "pairing"   // linking=yes: pair the phone
+            needsPlatform -> "platform"  // backwards-compat: paired but platform unknown
             !isMouseTutorialDone() -> "mousetutorial"
             else -> null
         }
-        Log.d("ONBOARDING", "onCreate: isPaired=${pairingStore.isPaired} platform=$platformChoice step=${onboardingStep.value}")
+        Log.d("ONBOARDING", "onCreate: isPaired=${pairingStore.isPaired} platform=$platformChoice linking=$linkingChoice step=${onboardingStep.value}")
 
         // If paired but platform unknown, fetch it from the server in the background
-        if (!needsPairing && needsPlatform) {
+        if (!needsPairing && needsPlatform && platformChoice != "none") {
             val phone = pairingStore.flipPhoneNumber
             if (phone != null) {
                 Thread {
@@ -191,6 +206,42 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 when (currentStep) {
+                    "linking" -> {
+                        LinkingChoiceScreen(
+                            onChoose = { willLink ->
+                                PlatformPreferences.saveLinkingChoice(this@MainActivity, willLink)
+                                Log.d("ONBOARDING", "Linking choice: $willLink")
+                                onboardingStep.value = "intent"
+                            }
+                        )
+                    }
+                    "intent" -> {
+                        IntentChoiceScreen(
+                            onChoose = { choice ->
+                                // choice: "ios" | "android" | "none"
+                                PlatformPreferences.saveChoice(this@MainActivity, choice)
+                                AllAppsActivity.invalidateCache()
+                                MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
+                                Log.d("ONBOARDING", "Intent choice: $choice linking=${PlatformPreferences.getLinkingChoice(this@MainActivity)}")
+                                when {
+                                    PlatformPreferences.getLinkingChoice(this@MainActivity) == true -> {
+                                        // Linking=yes → always go through pairing, regardless of platform
+                                        onboardingStep.value = "pairing"
+                                    }
+                                    choice == "none" -> {
+                                        // Not linking + super dumb — skip everything, go home
+                                        markMouseTutorialDone()
+                                        onboardingStep.value = null
+                                    }
+                                    else -> {
+                                        // Not linking + has smart platform — skip pairing/sync,
+                                        // go straight to mouse tutorial
+                                        onboardingStep.value = if (isMouseTutorialDone()) null else "mousetutorial"
+                                    }
+                                }
+                            }
+                        )
+                    }
                     "pairing" -> {
                         PairingScreen(
                             permissionsReady = permissionsReady.value,
@@ -211,7 +262,15 @@ class MainActivity : AppCompatActivity() {
                                 overridePendingTransition(0, 0)
                             },
                             onSkip = {
-                                Log.d("ONBOARDING", "User skipped onboarding")
+                                Log.d("ONBOARDING", "User skipped pairing — marking setup complete")
+                                PairingStore(this@MainActivity).isPaired = true
+                                // Keep the platform the user already chose on the intent screen;
+                                // only fall back to "skipped" if no platform was set yet.
+                                val existingPlatform = PlatformPreferences.getChoice(this@MainActivity)
+                                if (existingPlatform.isNullOrEmpty()) {
+                                    PlatformPreferences.saveChoice(this@MainActivity, "skipped")
+                                }
+                                markMouseTutorialDone()
                                 onboardingStep.value = null
                             }
                         )
@@ -231,7 +290,7 @@ class MainActivity : AppCompatActivity() {
                                     Log.d("ONBOARDING", "Platform choice skipped")
                                 }
                                 onboardingStep.value = nextStepAfterPlatform()
-                                MainAppsGridActivity.invalidateItemCache()
+                                MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                             }
                         )
                     }
@@ -242,12 +301,12 @@ class MainActivity : AppCompatActivity() {
                                     PlatformPreferences.saveChoice(this@MainActivity, choice)
                                     Log.d("ONBOARDING", "Platform choice saved (for smart txt): $choice")
                                     onboardingStep.value = "launching_smarttxt"
-                                    MainAppsGridActivity.invalidateItemCache()
+                                    MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                     launchSmartTxtForPlatform(choice)
                                 } else {
                                     Log.d("ONBOARDING", "Platform choice skipped — going to home")
                                     onboardingStep.value = null
-                                    MainAppsGridActivity.invalidateItemCache()
+                                    MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                 }
                             }
                         )
@@ -255,12 +314,24 @@ class MainActivity : AppCompatActivity() {
                     "mousetutorial" -> {
                         MouseTutorialScreen(
                             onComplete = {
-                                Log.d("ONBOARDING", "Mouse tutorial complete — launching smart txt")
                                 markMouseTutorialDone()
                                 MouseAccessibilityService.forceDisable(this@MainActivity)
-                                onboardingStep.value = "launching_smarttxt"
-                                launchSmartTxt()
+                                val platform = PlatformPreferences.getChoice(this@MainActivity)
+                                if (platform == "none") {
+                                    // Super dumb users don't need smart txt — show simple done screen
+                                    Log.d("ONBOARDING", "Mouse tutorial complete (none platform) — showing done screen")
+                                    onboardingStep.value = "onboarding_complete"
+                                } else {
+                                    Log.d("ONBOARDING", "Mouse tutorial complete — launching smart txt")
+                                    onboardingStep.value = "launching_smarttxt"
+                                    launchSmartTxt()
+                                }
                             }
+                        )
+                    }
+                    "onboarding_complete" -> {
+                        com.offlineinc.dumbdownlauncher.ui.OnboardingDoneScreen(
+                            onOk = { onboardingStep.value = null }
                         )
                     }
                     "launching_smarttxt" -> {
@@ -292,21 +363,24 @@ class MainActivity : AppCompatActivity() {
         }
         overridePendingTransition(0, 0)
         if (PlatformPreferences.consumeShowDialog(this)) {
-            // "device setup" from AllAppsActivity re-runs both steps from the beginning
-            onboardingStep.value = "pairing"
+            // "device setup" from AllAppsActivity re-runs the full flow from the very beginning
+            // so the user can change any of their choices (linking preference, messaging app, etc.).
+            onboardingStep.value = "linking"
         }
         // User returned from smart txt — clear the launching overlay
         if (onboardingStep.value == "launching_smarttxt") {
             onboardingStep.value = null
         }
-        // User returned from ContactSyncActivity — advance to platform picker, tutorial, or done
+        // User returned from ContactSyncActivity — advance to tutorial or done.
+        // Platform is already known (set on the intent screen before pairing), so
+        // we skip the old platform picker step.
         if (onboardingStep.value == "contactsync") {
             val platform = PlatformPreferences.getChoice(this)
-            if (platform == "ios" || platform == "android") {
-                Log.d("ONBOARDING", "Contact sync done, platform auto-detected: $platform")
+            if (platform == "ios" || platform == "android" || platform == "none" || platform == "skipped") {
+                Log.d("ONBOARDING", "Contact sync done, platform=$platform")
                 onboardingStep.value = nextStepAfterPlatform()
             } else {
-                Log.d("ONBOARDING", "Contact sync done, platform unknown — showing picker")
+                Log.d("ONBOARDING", "Contact sync done, platform unknown — showing picker (backwards compat)")
                 onboardingStep.value = "platform"
             }
         }

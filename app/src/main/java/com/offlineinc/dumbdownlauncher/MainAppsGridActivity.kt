@@ -56,6 +56,56 @@ class MainAppsGridActivity : AppCompatActivity() {
         fun invalidateItemCache() { cachedGridItems = null }
         fun invalidateWallpaperCache() { cachedWallpaper = null }
 
+        /**
+         * Invalidate the cache and unconditionally queue a fresh rebuild on the
+         * background executor — bypassing the double-check guard in [warmCacheAsync].
+         *
+         * Use this after a platform choice change so a racing in-flight warm task
+         * can't overwrite the cache with a stale layout (e.g. smart txt / no clock).
+         * Since [bgExecutor] is single-threaded, the rebuild task always runs after
+         * any previously queued work and reads the platform from prefs at that time.
+         */
+        fun invalidateAndRebuildAsync(context: android.content.Context) {
+            cachedGridItems = null
+            bgExecutor.execute {
+                cachedGridItems = buildGridAppListStatic(context)
+                val platform = PlatformPreferences.getChoice(context)
+                context.getSharedPreferences("launcher_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit().putString("grid_cache_platform", platform).apply()
+            }
+        }
+
+        /**
+         * Open Google Messages web in Chrome — shared by the 3×3 grid and All Apps.
+         * Uses Custom Tabs for a cold session; brings Chrome to front for a warm one.
+         * A session is considered warm if opened within the last 6 hours.
+         */
+        fun openMessagesInChrome(activity: AppCompatActivity) {
+            MouseAccessibilityService.setMouseEnabled(activity, true)
+            val prefs = activity.getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+            val lastMs = prefs.getLong("messages_last_opened_ms", 0L)
+            val warm = System.currentTimeMillis() - lastMs < 6 * 60 * 60 * 1000L
+
+            if (warm) {
+                Log.d("MESSAGES", "Warm session — bringing Chrome to front (no reload)")
+                Intent(Intent.ACTION_MAIN).apply {
+                    setPackage("com.android.chrome")
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }.let { activity.startActivity(it) }
+            } else {
+                Log.d("MESSAGES", "Cold session — opening messages URL via Custom Tabs")
+                val url = WEB_APP_URLS.getValue(GOOGLE_MESSAGES)
+                CustomTabsIntent.Builder()
+                    .setUrlBarHidingEnabled(true)
+                    .build()
+                    .apply { intent.setPackage("com.android.chrome") }
+                    .launchUrl(activity, Uri.parse(url))
+            }
+            prefs.edit().putLong("messages_last_opened_ms", System.currentTimeMillis()).apply()
+            activity.overridePendingTransition(0, 0)
+        }
+
         private val bgExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
         /**
@@ -106,16 +156,20 @@ class MainAppsGridActivity : AppCompatActivity() {
                 else      -> null
             }
 
+            // With smart txt:    smart txt | dumb txt | whatsapp | contacts | … | no clock
+            // Without smart txt: dumb txt  | whatsapp | contacts | …          | clock
+            val clockPkg = if (messagingPkg == null) "com.tcl.deskclock" else null
             val allowedPackages = listOfNotNull(
                 messagingPkg,
-                "com.whatsapp",
                 "com.android.mms",
+                "com.whatsapp",
                 "com.android.contacts",
                 "com.android.dialer",
                 "com.android.settings",
                 "com.google.android.apps.mapslite",
                 "com.tcl.camera",
                 "com.ubercab.uberlite",
+                clockPkg,
             )
 
             for (pkg in allowedPackages) {
@@ -135,6 +189,21 @@ class MainAppsGridActivity : AppCompatActivity() {
                             result.add(AppItem(pkg, label, icon, launchComponent, isMuted = false))
                         } catch (_: Exception) {
                             result.add(AppItem(GOOGLE_MESSAGES, "smart txt", pm.defaultActivityIcon, null, false))
+                        }
+                        continue
+                    }
+                    "com.tcl.deskclock" -> {
+                        // Try TCL clock first, fall back to stock Android clock
+                        val clockPkgs = listOf("com.tcl.deskclock", "com.android.deskclock")
+                        for (clockPkg in clockPkgs) {
+                            try {
+                                val appInfo = pm.getApplicationInfo(clockPkg, 0)
+                                val defaultIcon = pm.getApplicationIcon(appInfo)
+                                val icon = com.offlineinc.dumbdownlauncher.launcher.AppIconOverrides.getIcon(context, clockPkg, defaultIcon)
+                                val launchComponent = com.offlineinc.dumbdownlauncher.launcher.LaunchResolver.resolveLaunchComponent(pm, clockPkg)
+                                result.add(AppItem(clockPkg, "clock", icon, launchComponent, isMuted = false))
+                                break
+                            } catch (_: Exception) { }
                         }
                         continue
                     }
@@ -285,19 +354,20 @@ class MainAppsGridActivity : AppCompatActivity() {
         val result = mutableListOf<AppItem>()
 
         val platform = PlatformPreferences.getChoice(this)
-        // Only include smart txt when the user has actually chosen a platform.
-        // null / "skipped" means the picker was dismissed — omit the slot entirely
-        // rather than guessing.
+        // Only include smart txt for ios/android. "none" (super dumb), "skipped",
+        // or null all mean no smart txt — clock fills the 9th slot instead.
         val messagingPkg = when (platform) {
             "ios"     -> "com.openbubbles.messaging"
             "android" -> GOOGLE_MESSAGES
             else      -> null   // not chosen yet — leave slot empty
         }
 
+        // With smart txt:    smart txt | dumb txt | whatsapp | contacts | …
+        // Without smart txt: dumb txt  | whatsapp | contacts | …
         val allowedPackages = listOfNotNull(
             messagingPkg,
-            "com.whatsapp",
             "com.android.mms",
+            "com.whatsapp",
             "com.android.contacts",
             "com.android.dialer",
             "com.android.settings",
@@ -327,6 +397,21 @@ class MainAppsGridActivity : AppCompatActivity() {
                     } catch (_: Exception) {
                         // OpenBubbles not installed — fall back to web Google Messages
                         result.add(AppItem(GOOGLE_MESSAGES, "smart txt", packageManager.defaultActivityIcon, null, false))
+                    }
+                    continue
+                }
+                "com.tcl.deskclock" -> {
+                    // Try TCL clock first, fall back to stock Android clock
+                    val clockPkgs = listOf("com.tcl.deskclock", "com.android.deskclock")
+                    for (cp in clockPkgs) {
+                        try {
+                            val appInfo = packageManager.getApplicationInfo(cp, 0)
+                            val defaultIcon = packageManager.getApplicationIcon(appInfo)
+                            val icon = AppIconOverrides.getIcon(this, cp, defaultIcon)
+                            val launchComponent = LaunchResolver.resolveLaunchComponent(packageManager, cp)
+                            result.add(AppItem(cp, "clock", icon, launchComponent, isMuted = false))
+                            break
+                        } catch (_: Exception) { }
                     }
                     continue
                 }
@@ -389,20 +474,7 @@ class MainAppsGridActivity : AppCompatActivity() {
             .edit().putLong("messages_last_opened_ms", System.currentTimeMillis()).apply()
 
     private fun openMessagesInChrome() {
-        MouseAccessibilityService.setMouseEnabled(this, true)
-        if (chromeSessionIsWarm()) {
-            Log.d("MESSAGES", "Warm session — bringing Chrome to front (no reload)")
-            Intent(Intent.ACTION_MAIN).apply {
-                setPackage("com.android.chrome")
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            }.let { startActivity(it) }
-        } else {
-            Log.d("MESSAGES", "Cold session — opening messages URL via Custom Tabs")
-            openCustomTab(WEB_APP_URLS.getValue(GOOGLE_MESSAGES))
-        }
-        markMessagesOpened()
-        overridePendingTransition(0, 0)
+        openMessagesInChrome(this)
     }
 
     private fun bindChromeWarmup() {

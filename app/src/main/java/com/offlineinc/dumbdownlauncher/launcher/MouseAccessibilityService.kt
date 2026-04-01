@@ -6,9 +6,11 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
+import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -44,6 +46,10 @@ class MouseAccessibilityService : AccessibilityService() {
 
         @Volatile var instance: MouseAccessibilityService? = null
             private set
+
+        /** App-level context — set once from TypeSyncService or any Activity so
+         *  clipboard + toast always work, even before the a11y service binds. */
+        @Volatile var appContext: Context? = null
         private var webViewActivityActive = false
 
         fun notifyWebViewActive(active: Boolean) {
@@ -73,57 +79,12 @@ class MouseAccessibilityService : AccessibilityService() {
             }
         }
 
-        /**
-         * Maximum time (ms) to wait for the accessibility service to connect
-         * before giving up. After a fresh boot, Android can take a few seconds
-         * to bind the service — we poll in short intervals rather than
-         * immediately falling back to the broken shell path.
-         */
-        private const val A11Y_WAIT_TIMEOUT_MS = 3000L
-        private const val A11Y_POLL_INTERVAL_MS = 150L
-
-        /**
-         * Maximum number of attempts to find a focused editable node before
-         * falling back. Covers the common case where the text field hasn't
-         * received focus yet right after a screen transition.
-         */
-        private const val FIND_FOCUS_MAX_RETRIES = 8
-        private const val FIND_FOCUS_RETRY_MS = 150L
-
         fun injectText(text: String) {
             // Run on a dedicated executor so text injection is never queued
             // behind slow mouse-enable / density-change shell commands.
             textInjectorExecutor.execute {
-                val service = waitForService()
-                if (service == null) {
-                    Log.e("MouseService", "injectText: accessibility service never connected after ${A11Y_WAIT_TIMEOUT_MS}ms — falling back to shell")
-                    injectTextViaShell(text)
-                    return@execute
-                }
-
-                // Retry loop: the focused node might not be ready immediately
-                // (e.g. after a screen transition or when the keyboard is appearing).
-                var focused: AccessibilityNodeInfo? = null
-                for (attempt in 1..FIND_FOCUS_MAX_RETRIES) {
-                    val root = service.rootInActiveWindow
-                    if (root != null) {
-                        focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                        if (focused != null && focused.isEditable) break
-                        focused = null
-                    }
-                    if (attempt < FIND_FOCUS_MAX_RETRIES) {
-                        Log.d("MouseService", "injectText: no focused editable node (attempt $attempt/$FIND_FOCUS_MAX_RETRIES), retrying...")
-                        try { Thread.sleep(FIND_FOCUS_RETRY_MS) } catch (_: InterruptedException) { break }
-                    }
-                }
-
-                if (focused != null) {
-                    Log.d("MouseService", "injectText via clipboard paste for: \"$text\"")
-                    injectViaClipboard(service, focused, text)
-                } else {
-                    Log.w("MouseService", "injectText: no focused editable node after $FIND_FOCUS_MAX_RETRIES attempts, using shell")
-                    injectTextViaShell(text)
-                }
+                Log.d("MouseService", "injectText via blind clipboard paste for ${text.length} chars")
+                injectViaClipboardBlind(instance, text)
             }
         }
 
@@ -171,111 +132,62 @@ class MouseAccessibilityService : AccessibilityService() {
             }
         }
 
-        /**
-         * Polls for the accessibility service instance, waiting up to
-         * [A11Y_WAIT_TIMEOUT_MS]. If instance is null on first check,
-         * force-enables the service via root to kick Android into binding it.
-         */
-        private fun waitForService(): MouseAccessibilityService? {
-            instance?.let { return it }
-
-            // Service not bound — force-enable via root so Android binds it
-            ensureAccessibilityEnabled()
-
-            val deadline = System.currentTimeMillis() + A11Y_WAIT_TIMEOUT_MS
-            while (System.currentTimeMillis() < deadline) {
-                instance?.let { return it }
-                try { Thread.sleep(A11Y_POLL_INTERVAL_MS) } catch (_: InterruptedException) { break }
-            }
-            return instance
-        }
-
-        /** Max attempts for the paste action itself. */
-        private const val PASTE_MAX_RETRIES = 5
-        private const val PASTE_RETRY_MS = 80L
         /** Small delay after setting the clipboard to let the system propagate it. */
         private const val CLIPBOARD_SETTLE_MS = 120L
 
         /**
-         * Set [text] via clipboard paste. Selects all existing content first so the
-         * paste fully replaces the field. Bypasses the IME entirely — @, numbers, and
-         * all special characters arrive verbatim regardless of what keyboard is active.
-         *
-         * If clipboard paste fails after retries, falls back to ACTION_SET_TEXT
-         * (works on most EditText views). Shell is the absolute last resort.
+         * "Blind" clipboard paste — sets the clipboard and dispatches a paste
+         * key-event via shell. Works even when no focused editable node is
+         * found by the accessibility service (e.g. the field exists but isn't
+         * exposing itself via the a11y tree). If the paste key-event also
+         * fails, logs an error — never falls back to `input text` which
+         * produces gibberish on non-AOSP keyboards.
          */
-        private fun injectViaClipboard(
-            service: MouseAccessibilityService,
-            node: AccessibilityNodeInfo,
-            text: String
-        ) {
+        private fun injectViaClipboardBlind(service: MouseAccessibilityService?, text: String) {
             try {
-                val cm = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("ts", text))
+                // 1. Set the clipboard — try ClipboardManager first (needs a Context),
+                //    fall back to shell `am broadcast` if no context is available.
+                val ctx: Context? = service ?: instance ?: appContext
+                if (ctx != null) {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("ts", text))
+                } else {
+                    // No context at all — set clipboard via shell (requires root).
+                    Log.w("MouseService", "injectViaClipboardBlind: no context, setting clipboard via shell")
+                    val escaped = text.replace("'", "'\\''")
+                    val clipProc = ProcessBuilder("su", "-c", "am broadcast -a clipper.set -e text '$escaped'")
+                        .redirectErrorStream(true)
+                        .start()
+                    clipProc.inputStream.bufferedReader().readText()
+                    clipProc.waitFor()
+                }
 
-                // Let the clipboard settle — avoids a race where paste grabs stale content.
+                // Let the clipboard settle
                 try { Thread.sleep(CLIPBOARD_SETTLE_MS) } catch (_: InterruptedException) {}
 
-                // Select all existing content (0 → end) so the paste fully replaces it
-                val len = node.text?.length ?: 0
-                val selArgs = Bundle().apply {
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+                // 2. Dispatch KEYCODE_PASTE (279) via shell — this tells the focused
+                //    window to paste from the clipboard, even if we can't see the node.
+                val proc = ProcessBuilder("su", "-c", "input keyevent 279")
+                    .redirectErrorStream(true)
+                    .start()
+                val exitCode = proc.waitFor()
+                if (exitCode != 0) {
+                    Log.e("MouseService", "injectViaClipboardBlind: paste keyevent failed with exit code $exitCode")
+                    showToast(ctx, "TypeSync: paste failed")
+                } else {
+                    Log.i("MouseService", "injectViaClipboardBlind: clipboard set + paste keyevent dispatched for ${text.length} chars")
                 }
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
-
-                // Retry paste a few times — it can fail transiently if the node is
-                // mid-layout or the clipboard manager hasn't finished propagating.
-                var pasted = false
-                for (attempt in 1..PASTE_MAX_RETRIES) {
-                    pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-                    if (pasted) break
-                    Log.d("MouseService", "clipboard paste attempt $attempt/$PASTE_MAX_RETRIES failed, retrying...")
-                    if (attempt < PASTE_MAX_RETRIES) {
-                        try { Thread.sleep(PASTE_RETRY_MS) } catch (_: InterruptedException) { break }
-                    }
-                }
-
-                if (pasted) {
-                    Log.d("MouseService", "injectText via clipboard paste: success")
-                    return
-                }
-
-                // Fallback: ACTION_SET_TEXT works on standard EditText views and
-                // doesn't require clipboard support. It replaces the entire field.
-                Log.w("MouseService", "clipboard paste failed after $PASTE_MAX_RETRIES attempts, trying ACTION_SET_TEXT")
-                val setTextArgs = Bundle().apply {
-                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-                }
-                val setText = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setTextArgs)
-                if (setText) {
-                    Log.d("MouseService", "injectText via ACTION_SET_TEXT: success")
-                    return
-                }
-
-                Log.w("MouseService", "ACTION_SET_TEXT also failed, falling back to shell")
-                injectTextViaShell(text)
             } catch (t: Throwable) {
-                Log.e("MouseService", "injectViaClipboard failed: ${t.message}")
-                injectTextViaShell(text)
+                Log.e("MouseService", "injectViaClipboardBlind failed: ${t.message} — text not injected")
+                showToast(service ?: instance ?: appContext, "TypeSync: paste failed")
             }
         }
 
-        /**
-         * Last-resort shell injection. Handles only simple ASCII reliably.
-         * Runs the command inline — callers are already on a background thread/executor.
-         */
-        private fun injectTextViaShell(text: String) {
-            val escaped = text.replace("'", "'\\''")
-            try {
-                ProcessBuilder("su", "-c", "input text '$escaped'")
-                    .redirectErrorStream(true)
-                    .start()
-                    .waitFor()
-                Log.i("MouseService", "shell injectText finished")
-            } catch (t: Throwable) {
-                Log.e("MouseService", "shell injectText failed: ${t.message}")
-            }
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        private fun showToast(ctx: Context?, message: String) {
+            val c = ctx ?: instance ?: appContext ?: return
+            mainHandler.post { Toast.makeText(c, message, Toast.LENGTH_SHORT).show() }
         }
 
         /**
