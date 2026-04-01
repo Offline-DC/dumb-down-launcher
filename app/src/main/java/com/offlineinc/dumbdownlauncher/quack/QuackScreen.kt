@@ -241,6 +241,14 @@ private fun FeedScreen(
         focusRequester.requestFocus()
     }
 
+    // Poll for new posts every 10 seconds
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(10_000)
+            viewModel.refreshFeed()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -315,21 +323,20 @@ private fun PostRow(post: QuackPost, selected: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .background(bgColor)
-            .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH, vertical = DumbTheme.Spacing.CardPadding),
+            .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH, vertical = 10.dp),
         verticalAlignment = Alignment.Top,
     ) {
         BasicText(
             text = post.body,
-            style = DumbTheme.Text.Body.copy(color = textColor),
-            maxLines = 3,
+            style = DumbTheme.Text.BodySmall.copy(color = textColor),
             modifier = Modifier.weight(1f),
         )
         val age = formatAge(post.createdAt)
         if (age.isNotEmpty()) {
             BasicText(
                 text = age,
-                style = DumbTheme.Text.Subtitle.copy(color = metaColor),
-                modifier = Modifier.padding(start = 8.dp),
+                style = DumbTheme.Text.Hint.copy(color = metaColor),
+                modifier = Modifier.padding(start = 6.dp),
             )
         }
     }

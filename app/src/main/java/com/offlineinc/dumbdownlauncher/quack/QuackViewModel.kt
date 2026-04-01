@@ -161,6 +161,28 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Silent refresh — updates posts without showing loading state or resetting scroll. */
+    fun refreshFeed() {
+        val s = _state.value
+        if (s.mode != QuackMode.FEED) return
+        if (s.lat == 0.0 && s.lng == 0.0) return
+        viewModelScope.launch {
+            try {
+                val posts = withContext(Dispatchers.IO) {
+                    val arr = QuackApiClient.fetchPosts(s.lat, s.lng)
+                    parsePosts(arr)
+                }
+                // Only update if still on feed
+                if (_state.value.mode == QuackMode.FEED) {
+                    _state.value = _state.value.copy(posts = posts)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshFeed: silent fail", e)
+                // Silent — don't disrupt the user
+            }
+        }
+    }
+
     fun moveSelection(delta: Int) {
         val s = _state.value
         val newIdx = (s.selectedIndex + delta).coerceIn(0, (s.posts.size - 1).coerceAtLeast(0))

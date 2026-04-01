@@ -39,6 +39,9 @@ object UpdateChecker {
         conn.connectTimeout = 10_000
         conn.readTimeout = 10_000
         conn.setRequestProperty("Accept", "application/vnd.github+json")
+        // Bypass GitHub CDN cache so we always see the freshest release list
+        conn.setRequestProperty("Cache-Control", "no-cache")
+        conn.setRequestProperty("If-None-Match", "")
         return try {
             if (conn.responseCode != HttpURLConnection.HTTP_OK) return null
             val releases = JSONArray(conn.inputStream.bufferedReader().readText())
@@ -76,7 +79,10 @@ object UpdateChecker {
         val assets = json.getJSONArray("assets")
         val downloadUrl = (0 until assets.length())
             .map { assets.getJSONObject(it) }
-            .firstOrNull { it.getString("name").endsWith(".apk") }
+            .firstOrNull {
+                it.getString("name").endsWith(".apk") &&
+                it.optString("state", "uploaded") == "uploaded"
+            }
             ?.getString("browser_download_url") ?: return null
 
         return AppUpdateInfo(versionCode, versionName, downloadUrl)
