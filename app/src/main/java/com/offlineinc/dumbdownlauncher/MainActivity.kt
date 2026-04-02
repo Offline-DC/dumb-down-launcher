@@ -45,7 +45,6 @@ const val NOTIFICATIONS = "__NOTIFICATIONS__"
 const val DEVICE_SETUP = "__DEVICE_SETUP__"
 const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
-const val WEB_KEYBOARD = "__WEB_KEYBOARD__"
 const val CONTACT_SYNC = "__CONTACT_SYNC__"
 const val QUACK = "__QUACK__"
 

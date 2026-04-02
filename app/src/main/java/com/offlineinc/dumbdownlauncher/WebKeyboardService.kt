@@ -222,8 +222,13 @@ class WebKeyboardService : Service() {
         mainHandler.postDelayed({
             Log.i(TAG, "⏱ 5-minute timer expired — stopping Type Sync for $phoneNumber")
             shutDown()
-            // Broadcast to AllAppsActivity so it can flip the toggle off
             sendBroadcast(Intent(ACTION_STOP_BROADCAST))
+            // Toast on the main thread to notify the user
+            android.widget.Toast.makeText(
+                applicationContext,
+                "type sync off (timed out)",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         }, FIVE_MINUTES)
     }
 

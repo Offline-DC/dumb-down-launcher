@@ -14,6 +14,8 @@ class DumbDownApp : Application() {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
         ensureNetworkLocationEnabled()
+        // Update FlipMouse (DumbMouse) binary if a newer version is bundled
+        Thread { FlipMouseUpdater.checkAndUpdate(this) }.start()
         // Start the cover display service. As the HOME launcher we are always alive,
         // so no foreground notification is required. The service is START_STICKY and
         // re-attaches automatically when the cover display is connected.

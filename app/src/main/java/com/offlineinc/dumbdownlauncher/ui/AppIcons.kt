@@ -6,7 +6,6 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Message
@@ -20,7 +19,6 @@ import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
 import com.offlineinc.dumbdownlauncher.QUACK
 import com.offlineinc.dumbdownlauncher.R
-import com.offlineinc.dumbdownlauncher.WEB_KEYBOARD
 
 /**
  * Single source of truth for app icon overrides.
@@ -53,7 +51,6 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     CONTACT_SYNC                      to Icons.Filled.Settings,
     DEVICE_SETUP                      to Icons.Filled.Link,
     CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
-    WEB_KEYBOARD                      to Icons.Filled.Keyboard,
 )
 
 /**

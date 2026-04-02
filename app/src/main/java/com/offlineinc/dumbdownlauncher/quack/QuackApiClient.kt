@@ -17,13 +17,14 @@ object QuackApiClient {
 
     class ApiException(val statusCode: Int, message: String) : Exception(message)
 
-    /** Fetch nearby posts. Returns a JSONArray of post objects. */
-    fun fetchPosts(lat: Double, lng: Double, radiusKm: Int = 5): JSONArray {
-        val url = URL("$BASE/posts?lat=$lat&lng=$lng&radius=$radiusKm")
+    /** Fetch nearby posts. Returns a JSONArray of post objects.
+     *  Radius is determined server-side (25 miles); only lat/lng are sent. */
+    fun fetchPosts(lat: Double, lng: Double): JSONArray {
+        val url = URL("$BASE/posts?lat=$lat&lng=$lng")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
-        conn.connectTimeout = 10_000
-        conn.readTimeout = 10_000
+        conn.connectTimeout = 15_000
+        conn.readTimeout  = 30_000
         try {
             val code = conn.responseCode
             if (code !in 200..299) {
@@ -41,14 +42,16 @@ object QuackApiClient {
         }
     }
 
-    /** Create a new post. Returns the created post as a JSONObject. */
-    fun createPost(body: String, lat: Double, lng: Double, deviceId: String, phoneNumber: String?): JSONObject {
+    /** Create a new post. Returns the created post as a JSONObject.
+     *  utcOffsetMinutes: device's total UTC offset in minutes (including DST),
+     *  used by the backend to find when 6am was in the user's local timezone. */
+    fun createPost(body: String, lat: Double, lng: Double, deviceId: String, phoneNumber: String?, utcOffsetMinutes: Int): JSONObject {
         val url = URL("$BASE/posts")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
-        conn.connectTimeout = 10_000
-        conn.readTimeout = 10_000
+        conn.connectTimeout = 15_000
+        conn.readTimeout  = 30_000
         conn.setRequestProperty("Content-Type", "application/json")
 
         val payload = JSONObject().apply {
@@ -56,6 +59,7 @@ object QuackApiClient {
             put("body", body)
             put("lat", lat)
             put("lng", lng)
+            put("utc_offset_minutes", utcOffsetMinutes)
             if (!phoneNumber.isNullOrBlank()) put("phone_number", phoneNumber)
         }
         conn.outputStream.use { it.write(payload.toString().toByteArray()) }

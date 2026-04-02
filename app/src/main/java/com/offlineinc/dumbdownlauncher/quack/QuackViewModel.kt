@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
+import java.util.TimeZone
 
 private const val TAG = "QuackViewModel"
 
@@ -156,13 +157,24 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadFeed() {
-        val s = _state.value
-        _state.value = s.copy(mode = QuackMode.LOADING)
+        _state.value = _state.value.copy(mode = QuackMode.LOADING)
         viewModelScope.launch {
+            // Read lat/lng inside the coroutine — AFTER the LOADING transition —
+            // so we never capture a stale (0.0, 0.0) snapshot from before location resolved.
+            val lat = _state.value.lat
+            val lng = _state.value.lng
+            if (lat == 0.0 && lng == 0.0) {
+                Log.w(TAG, "loadFeed: location not yet available, aborting")
+                _state.value = _state.value.copy(
+                    mode = QuackMode.ERROR,
+                    errorMessage = "waiting for location…",
+                )
+                return@launch
+            }
             try {
-                Log.d(TAG, "loadFeed: fetching posts at ${s.lat},${s.lng}")
+                Log.d(TAG, "loadFeed: fetching posts at $lat,$lng")
                 val posts = withContext(Dispatchers.IO) {
-                    val arr = QuackApiClient.fetchPosts(s.lat, s.lng)
+                    val arr = QuackApiClient.fetchPosts(lat, lng)
                     Log.d(TAG, "loadFeed: got ${arr.length()} posts")
                     parsePosts(arr)
                 }
@@ -186,13 +198,14 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Silent refresh — updates posts without showing loading state or resetting scroll. */
     fun refreshFeed() {
-        val s = _state.value
-        if (s.mode != QuackMode.FEED) return
-        if (s.lat == 0.0 && s.lng == 0.0) return
+        if (_state.value.mode != QuackMode.FEED) return
+        val lat = _state.value.lat
+        val lng = _state.value.lng
+        if (lat == 0.0 && lng == 0.0) return
         viewModelScope.launch {
             try {
                 val posts = withContext(Dispatchers.IO) {
-                    val arr = QuackApiClient.fetchPosts(s.lat, s.lng)
+                    val arr = QuackApiClient.fetchPosts(lat, lng)
                     parsePosts(arr)
                 }
                 // Only update if still on feed
@@ -297,12 +310,15 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = s.copy(isSubmitting = true, submitError = null)
         val deviceId = QuackDeviceId.get(getApplication())
         val phoneNumber = PairingStore(getApplication()).flipPhoneNumber
-        Log.d(TAG, "submitPost: deviceId=$deviceId phoneNumber=$phoneNumber lat=${s.lat} lng=${s.lng}")
+        // Total UTC offset in minutes (includes DST). Backend uses this to find
+        // when 6am was in the user's local timezone for the daily reset.
+        val utcOffsetMinutes = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000
+        Log.d(TAG, "submitPost: deviceId=$deviceId phoneNumber=$phoneNumber lat=${s.lat} lng=${s.lng} utcOffset=${utcOffsetMinutes}min")
 
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    QuackApiClient.createPost(text, s.lat, s.lng, deviceId, phoneNumber)
+                    QuackApiClient.createPost(text, s.lat, s.lng, deviceId, phoneNumber, utcOffsetMinutes)
                 }
                 Log.d(TAG, "submitPost: SUCCESS — $result")
                 incrementPostsToday()
@@ -311,10 +327,17 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                 loadFeed()
             } catch (e: Exception) {
                 Log.e(TAG, "submitPost: FAILED", e)
-                val friendly = friendlyError(e)
+                // Map API errors to inline compose-screen messages rather than full-screen errors
+                val msg = when {
+                    e is QuackApiClient.ApiException && e.statusCode == 429 ->
+                        "3 quacks used. try again in 24 hours. quack."
+                    e is QuackApiClient.ApiException && e.statusCode == 422 ->
+                        "no links. quacks only."
+                    else -> friendlyError(e)
+                }
                 _state.value = _state.value.copy(
                     isSubmitting = false,
-                    submitError = friendly,
+                    submitError = msg,
                 )
             }
         }
@@ -333,6 +356,8 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     private fun friendlyError(e: Exception): String = when {
         e is QuackApiClient.ApiException -> when (e.statusCode) {
             404 -> "quack service not found"
+            422 -> "no links. quacks only."
+            429 -> "3 quacks used. try again in 24 hours. quack."
             500 -> "server error — try again"
             else -> "server error (${e.statusCode})"
         }

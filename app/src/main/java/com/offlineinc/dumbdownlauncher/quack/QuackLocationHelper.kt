@@ -12,16 +12,19 @@ import android.os.Looper
 import android.util.Log
 
 /**
- * Gets a single location fix using GPS, falling back to network provider.
- * Designed for flip phones: requests one fix then immediately removes updates
- * to preserve battery. Calls back on the main thread.
+ * Gets a single location fix, with a layered fallback strategy designed for
+ * MediaTek flip phones where getLastKnownLocation() frequently returns null.
  *
- * Two-stage timeout strategy:
- *  1. QUICK_TIMEOUT_MS — if a stale cached location exists, deliver it early
- *     so the UI isn't blocked, but keep listening for a fresh fix.
- *  2. HARD_TIMEOUT_MS — stop listening entirely and fall back to whatever
- *     cached location is available (any age). Only errors if there is truly
- *     no cached location at all.
+ * Priority order:
+ *  1. Our own persisted location (< 6 hours old) — instant, no GPS needed
+ *  2. System cached location (< 30 min old) — instant
+ *  3. Live GPS/Network fix — wait up to HARD_TIMEOUT_MS
+ *  4. Our persisted location (up to 7 days old) — stale fallback at hard timeout
+ *  5. Any system cached location regardless of age
+ *  6. Error
+ *
+ * On every successful delivery the location is saved to QuackLocationStore so
+ * that step 1 succeeds on every subsequent open after first use.
  */
 class QuackLocationHelper(context: Context, private val callback: Callback) {
 
@@ -33,13 +36,13 @@ class QuackLocationHelper(context: Context, private val callback: Callback) {
     companion object {
         private const val TAG = "QuackLocation"
         private const val MIN_TIME_MS = 0L
-        private const val MIN_DIST_M = 0f
-        // For a 25-mile feed radius, a 30-min-old location is plenty accurate
-        private const val CACHE_MAX_AGE_MS = 30 * 60 * 1000L
-        /** First stage: deliver a stale cached location quickly so the UI isn't stuck waiting. */
-        private const val QUICK_TIMEOUT_MS = 5_000L           // 5 seconds
-        /** Second stage: give up on a fresh fix entirely. */
-        private const val HARD_TIMEOUT_MS = 30_000L           // 30 seconds
+        private const val MIN_DIST_M  = 0f
+        // For a 25-mile feed radius, 30-min system cache is accurate enough
+        private const val SYSTEM_CACHE_MAX_AGE_MS = 30 * 60 * 1000L
+        /** Deliver a stale system cache early so the UI isn't stuck waiting. */
+        private const val QUICK_TIMEOUT_MS = 5_000L
+        /** Give up on live providers; use any fallback available. */
+        private const val HARD_TIMEOUT_MS  = 30_000L
     }
 
     private val appContext: Context = context.applicationContext
@@ -47,132 +50,153 @@ class QuackLocationHelper(context: Context, private val callback: Callback) {
     private val handler = Handler(Looper.getMainLooper())
     private var delivered = false
 
-    private val gpsListener = object : LocationListener {
+    private fun makeListener(label: String) = object : LocationListener {
         override fun onLocationChanged(loc: Location) {
-            Log.d(TAG, "GPS fix received: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
-            deliver(loc)
-        }
-        override fun onStatusChanged(p: String?, s: Int, b: Bundle?) {
-            Log.d(TAG, "GPS status changed: provider=$p status=$s")
-        }
-        override fun onProviderEnabled(p: String) { Log.d(TAG, "Provider enabled: $p") }
-        override fun onProviderDisabled(p: String) { Log.w(TAG, "Provider disabled: $p") }
-    }
-
-    private val netListener = object : LocationListener {
-        override fun onLocationChanged(loc: Location) {
-            Log.d(TAG, "Network fix received: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
-            deliver(loc)
-        }
-        override fun onStatusChanged(p: String?, s: Int, b: Bundle?) {
-            Log.d(TAG, "Network status changed: provider=$p status=$s")
-        }
-        override fun onProviderEnabled(p: String) { Log.d(TAG, "Provider enabled: $p") }
-        override fun onProviderDisabled(p: String) { Log.w(TAG, "Provider disabled: $p") }
-    }
-
-    private val passiveListener = object : LocationListener {
-        override fun onLocationChanged(loc: Location) {
-            Log.d(TAG, "Passive fix received: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s provider=${loc.provider}")
+            Log.d(TAG, "$label fix: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
             deliver(loc)
         }
         override fun onStatusChanged(p: String?, s: Int, b: Bundle?) {}
-        override fun onProviderEnabled(p: String) {}
-        override fun onProviderDisabled(p: String) {}
+        override fun onProviderEnabled(p: String)  { Log.d(TAG, "Provider enabled: $p") }
+        override fun onProviderDisabled(p: String) { Log.w(TAG, "Provider disabled: $p") }
     }
+
+    private val gpsListener     = makeListener("GPS")
+    private val netListener     = makeListener("Network")
+    private val passiveListener = makeListener("Passive")
 
     @SuppressLint("MissingPermission")
     fun request() {
         Log.d(TAG, "request() called")
 
-        // Accept any cached location under 30 min — 25-mile radius doesn't need fresh GPS
-        val last = bestLastKnown()
-        if (last != null) {
-            val ageMin = (System.currentTimeMillis() - last.time) / 60_000
-            Log.d(TAG, "Best cached location: acc=${last.accuracy}m age=${ageMin}min provider=${last.provider}")
+        // ── 1. Our own persisted location (< 6 hours) ─────────────────────────
+        // On MediaTek flip phones getLastKnownLocation() is often null because
+        // no other app has recently requested location. We persist our own copy
+        // so that after the first successful use this step is always instant.
+        val persisted = QuackLocationStore.load(appContext)
+        if (persisted != null) {
+            Log.d(TAG, "Persisted location: age=${persisted.ageMinutes}min lat=${persisted.lat} lng=${persisted.lng}")
+            if (persisted.ageMs < QuackLocationStore.FRESH_MAX_AGE_MS) {
+                Log.d(TAG, "Persisted location is fresh (< 6h) — delivering immediately")
+                delivered = true
+                handler.post { callback.onLocation(persisted.lat, persisted.lng) }
+                // Kick off providers quietly so the next open gets an even fresher fix
+                startProviders(quickFallback = null, staleFallback = null)
+                return
+            }
+        }
+
+        // ── 2. System cached location (< 30 min) ──────────────────────────────
+        val systemLast = bestLastKnown()
+        if (systemLast != null) {
+            val ageMin = (System.currentTimeMillis() - systemLast.time) / 60_000
+            Log.d(TAG, "System cached: acc=${systemLast.accuracy}m age=${ageMin}min provider=${systemLast.provider}")
+            if (systemLast.time > System.currentTimeMillis() - SYSTEM_CACHE_MAX_AGE_MS) {
+                Log.d(TAG, "System cache is fresh (< 30min) — delivering immediately")
+                deliver(systemLast)
+                return
+            }
         } else {
             Log.w(TAG, "No cached location available at all")
         }
 
-        if (last != null && last.time > System.currentTimeMillis() - CACHE_MAX_AGE_MS) {
-            Log.d(TAG, "Using fresh cached location (age < 30min)")
-            deliver(last)
-            return
-        }
-
-        val netAvail = lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-        val gpsAvail = lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+        val netAvail = try { lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) } catch (_: Exception) { false }
+        val gpsAvail = try { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) } catch (_: Exception) { false }
         Log.d(TAG, "Providers — GPS=$gpsAvail Network=$netAvail")
 
         if (!netAvail && !gpsAvail) {
-            Log.w(TAG, "No providers enabled")
-            // No providers at all — still try any cached location regardless of age
-            if (last != null) {
-                Log.d(TAG, "Falling back to stale cached location (no providers)")
-                deliver(last)
-            } else {
-                callback.onError("No location providers enabled")
-            }
+            Log.w(TAG, "No providers enabled — using best available fallback")
+            deliverBestFallback(persisted, systemLast, "no providers enabled")
             return
         }
 
-        // Request network first — it responds in <1s vs 5+ for GPS.
-        // Both race; first deliver() wins, so network usually takes it.
-        if (netAvail) {
-            Log.d(TAG, "Requesting network location updates")
-            lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, netListener)
-        }
-        if (gpsAvail) {
-            Log.d(TAG, "Requesting GPS location updates")
-            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, MIN_TIME_MS, MIN_DIST_M, gpsListener)
-        }
+        // ── 3. Request a live fix with timed fallbacks ─────────────────────────
+        startProviders(
+            quickFallback = systemLast,  // deliver stale system cache after 5s if still waiting
+            staleFallback = persisted,   // deliver persisted (up to 7 days) at hard timeout
+        )
+    }
 
-        // Passive provider — piggybacks on location requests from other apps (zero battery cost)
-        try {
-            Log.d(TAG, "Requesting passive location updates")
-            lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, MIN_TIME_MS, MIN_DIST_M, passiveListener)
-        } catch (_: Exception) {}
+    @SuppressLint("MissingPermission")
+    private fun startProviders(
+        quickFallback: Location?,
+        staleFallback: QuackLocationStore.StoredLocation?,
+    ) {
+        val netAvail = try { lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) } catch (_: Exception) { false }
+        val gpsAvail = try { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) } catch (_: Exception) { false }
 
-        // On API 30+, getCurrentLocation is optimized for single fixes and can be faster
+        // Request network first — responds in <1s vs 5+ for GPS; both race, first wins
+        if (netAvail) lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, netListener)
+        if (gpsAvail) lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,     MIN_TIME_MS, MIN_DIST_M, gpsListener)
+        // Passive provider piggybacks on other apps' requests at zero battery cost
+        try { lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, MIN_TIME_MS, MIN_DIST_M, passiveListener) } catch (_: Exception) {}
+
+        // API 30+: optimised single-fix API
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bestProvider = if (netAvail) LocationManager.NETWORK_PROVIDER else LocationManager.GPS_PROVIDER
-            Log.d(TAG, "Using getCurrentLocation($bestProvider) on API ${Build.VERSION.SDK_INT}")
-            lm.getCurrentLocation(bestProvider, null, appContext.mainExecutor) { loc ->
+            val best = if (netAvail) LocationManager.NETWORK_PROVIDER else LocationManager.GPS_PROVIDER
+            Log.d(TAG, "Using getCurrentLocation($best) on API ${Build.VERSION.SDK_INT}")
+            lm.getCurrentLocation(best, null, appContext.mainExecutor) { loc ->
                 if (loc != null) {
-                    Log.d(TAG, "getCurrentLocation result: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
+                    Log.d(TAG, "getCurrentLocation: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
                     deliver(loc)
-                } else {
-                    Log.d(TAG, "getCurrentLocation returned null")
                 }
             }
         }
 
-        // Stage 1: Quick timeout — deliver a stale cached location so the UI
-        // isn't blocked, but keep listening for a fresh fix in the background.
-        if (last != null) {
+        // Stage 1: quick timeout — deliver stale system cache so UI isn't blocked
+        if (quickFallback != null) {
             handler.postDelayed({
                 if (!delivered) {
-                    Log.d(TAG, "Stage 1 timeout (${QUICK_TIMEOUT_MS}ms) — delivering stale cached location")
-                    deliver(last)
+                    Log.d(TAG, "Stage 1 (${QUICK_TIMEOUT_MS}ms): delivering stale system cache")
+                    deliver(quickFallback)
                 }
             }, QUICK_TIMEOUT_MS)
         }
 
-        // Stage 2: Hard timeout — stop listening and use whatever we have.
+        // Stage 2: hard timeout — take whatever fallback is available
         handler.postDelayed({
             if (!delivered) {
-                Log.w(TAG, "Stage 2 hard timeout (${HARD_TIMEOUT_MS}ms) — no fix received")
+                Log.w(TAG, "Stage 2 hard timeout (${HARD_TIMEOUT_MS}ms) — no fresh fix received")
                 cleanup()
-                val stale = bestLastKnown()
-                if (stale != null) {
-                    Log.d(TAG, "Delivering stale location at hard timeout: acc=${stale.accuracy}m age=${(System.currentTimeMillis() - stale.time) / 60_000}min")
-                    deliver(stale)
-                } else {
-                    Log.e(TAG, "No location available at all — giving up")
-                    callback.onError("Location timed out — please check that location services are enabled")
+                val systemStale = bestLastKnown()
+                when {
+                    systemStale != null -> {
+                        val ageMin = (System.currentTimeMillis() - systemStale.time) / 60_000
+                        Log.d(TAG, "Hard timeout: using stale system cache age=${ageMin}min")
+                        deliver(systemStale)
+                    }
+                    staleFallback != null && staleFallback.ageMs < QuackLocationStore.STALE_MAX_AGE_MS -> {
+                        Log.d(TAG, "Hard timeout: using persisted location age=${staleFallback.ageMinutes}min")
+                        delivered = true
+                        handler.post { callback.onLocation(staleFallback.lat, staleFallback.lng) }
+                    }
+                    else -> {
+                        Log.e(TAG, "No location available at all — giving up")
+                        callback.onError("Location timed out — please enable location services and try again")
+                    }
                 }
             }
         }, HARD_TIMEOUT_MS)
+    }
+
+    private fun deliverBestFallback(
+        persisted: QuackLocationStore.StoredLocation?,
+        system: Location?,
+        reason: String,
+    ) {
+        when {
+            system != null -> {
+                Log.d(TAG, "Fallback ($reason): using system cache")
+                deliver(system)
+            }
+            persisted != null && persisted.ageMs < QuackLocationStore.STALE_MAX_AGE_MS -> {
+                Log.d(TAG, "Fallback ($reason): using persisted age=${persisted.ageMinutes}min")
+                delivered = true
+                handler.post { callback.onLocation(persisted.lat, persisted.lng) }
+            }
+            else -> {
+                callback.onError("Location unavailable — please enable location services")
+            }
+        }
     }
 
     fun cancel() = cleanup()
@@ -184,11 +208,10 @@ class QuackLocationHelper(context: Context, private val callback: Callback) {
             LocationManager.GPS_PROVIDER,
             LocationManager.NETWORK_PROVIDER,
             LocationManager.PASSIVE_PROVIDER,
-            "fused"  // some devices expose a fused provider
+            "fused",
         )) {
             try { lm.getLastKnownLocation(provider)?.let { candidates.add(it) } } catch (_: Exception) {}
         }
-        // Prefer the most accurate; among equal accuracy, prefer the newest
         return candidates.minWithOrNull(compareBy<Location> { it.accuracy }.thenByDescending { it.time })
     }
 
@@ -198,14 +221,16 @@ class QuackLocationHelper(context: Context, private val callback: Callback) {
             return
         }
         delivered = true
-        Log.d(TAG, "deliver() — lat=${loc.latitude} lng=${loc.longitude} acc=${loc.accuracy}m provider=${loc.provider}")
+        Log.d(TAG, "deliver() lat=${loc.latitude} lng=${loc.longitude} acc=${loc.accuracy}m provider=${loc.provider}")
         cleanup()
+        // Persist for instant delivery next time
+        QuackLocationStore.save(appContext, loc.latitude, loc.longitude)
         handler.post { callback.onLocation(loc.latitude, loc.longitude) }
     }
 
     private fun cleanup() {
-        try { lm.removeUpdates(gpsListener) } catch (_: Exception) {}
-        try { lm.removeUpdates(netListener) } catch (_: Exception) {}
+        try { lm.removeUpdates(gpsListener) }     catch (_: Exception) {}
+        try { lm.removeUpdates(netListener) }     catch (_: Exception) {}
         try { lm.removeUpdates(passiveListener) } catch (_: Exception) {}
         handler.removeCallbacksAndMessages(null)
     }

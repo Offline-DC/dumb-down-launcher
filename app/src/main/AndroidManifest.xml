@@ -135,6 +135,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- Receives star-key long-press broadcast from FlipMouse daemon -->
+        <receiver
+            android:name=".TypeSyncToggleReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.TOGGLE_TYPESYNC" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
