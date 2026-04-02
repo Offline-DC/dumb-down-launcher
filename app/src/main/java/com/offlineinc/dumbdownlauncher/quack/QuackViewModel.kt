@@ -15,9 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.Calendar
 
 private const val TAG = "QuackViewModel"
 
@@ -78,24 +76,49 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun todayKey(): String =
-        SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+    /**
+     * Returns the epoch millis of the most recent 6am in local time.
+     * If it's currently before 6am, returns yesterday's 6am.
+     * The quack limit resets at 6am each day.
+     */
+    private fun currentWindowStart(): Long {
+        val cal = Calendar.getInstance()
+        if (cal.get(Calendar.HOUR_OF_DAY) < 6) {
+            cal.add(Calendar.DAY_OF_YEAR, -1)
+        }
+        cal.set(Calendar.HOUR_OF_DAY, 6)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
 
     private fun getPostsToday(): Int {
         val prefs = getApplication<Application>()
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val savedDate = prefs.getString(KEY_DATE, "") ?: ""
-        return if (savedDate == todayKey()) prefs.getInt(KEY_COUNT, 0) else 0
+        val savedWindow = try {
+            prefs.getLong(KEY_DATE, 0L)
+        } catch (_: ClassCastException) {
+            // Migration: old versions stored this as a String date. Clear it.
+            prefs.edit().remove(KEY_DATE).apply()
+            0L
+        }
+        return if (savedWindow == currentWindowStart()) prefs.getInt(KEY_COUNT, 0) else 0
     }
 
     private fun incrementPostsToday() {
         val prefs = getApplication<Application>()
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val today = todayKey()
-        val savedDate = prefs.getString(KEY_DATE, "") ?: ""
-        val current = if (savedDate == today) prefs.getInt(KEY_COUNT, 0) else 0
+        val window = currentWindowStart()
+        val savedWindow = try {
+            prefs.getLong(KEY_DATE, 0L)
+        } catch (_: ClassCastException) {
+            prefs.edit().remove(KEY_DATE).apply()
+            0L
+        }
+        val current = if (savedWindow == window) prefs.getInt(KEY_COUNT, 0) else 0
         prefs.edit()
-            .putString(KEY_DATE, today)
+            .putLong(KEY_DATE, window)
             .putInt(KEY_COUNT, current + 1)
             .apply()
         _state.value = _state.value.copy(postsToday = current + 1)
@@ -267,7 +290,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
         // Daily limit
         if (postsRemaining <= 0) {
-            _state.value = s.copy(submitError = "3 quacks used. 3 more tmmrw. quack.")
+            _state.value = s.copy(submitError = "3 quacks used. 3 more at 6am. quack.")
             return
         }
 
