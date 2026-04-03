@@ -128,6 +128,21 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     val postsRemaining: Int
         get() = (MAX_POSTS_PER_DAY - _state.value.postsToday).coerceAtLeast(0)
 
+    /**
+     * Backend returned 429 — force local count to MAX so the "X/3 quacks left
+     * today" indicator matches reality. Fixes the case where local prefs got
+     * out of sync (app data cleared, reinstall, etc.).
+     */
+    private fun syncPostsTodayToMax() {
+        val prefs = getApplication<Application>()
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putLong(KEY_DATE, currentWindowStart())
+            .putInt(KEY_COUNT, MAX_POSTS_PER_DAY)
+            .apply()
+        _state.value = _state.value.copy(postsToday = MAX_POSTS_PER_DAY)
+    }
+
     private fun playHonk() {
         try {
             honkPlayer?.let {
@@ -303,7 +318,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
         // Daily limit
         if (postsRemaining <= 0) {
-            _state.value = s.copy(submitError = "3 quacks used. 3 more at 6am. quack.")
+            _state.value = s.copy(submitError = "3 quacks used. try again tomorrow. quack.")
             return
         }
 
@@ -329,8 +344,12 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e(TAG, "submitPost: FAILED", e)
                 // Map API errors to inline compose-screen messages rather than full-screen errors
                 val msg = when {
-                    e is QuackApiClient.ApiException && e.statusCode == 429 ->
-                        "3 quacks used. try again in 24 hours. quack."
+                    e is QuackApiClient.ApiException && e.statusCode == 429 -> {
+                        // Backend is the source of truth — sync local count so the
+                        // "X/3 quacks left today" indicator matches reality.
+                        syncPostsTodayToMax()
+                        "3 quacks used. try again tomorrow. quack."
+                    }
                     e is QuackApiClient.ApiException && e.statusCode == 422 ->
                         "no links. quacks only."
                     else -> friendlyError(e)
@@ -357,7 +376,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         e is QuackApiClient.ApiException -> when (e.statusCode) {
             404 -> "quack service not found"
             422 -> "no links. quacks only."
-            429 -> "3 quacks used. try again in 24 hours. quack."
+            429 -> "3 quacks used. try again tomorrow. quack."
             500 -> "server error — try again"
             else -> "server error (${e.statusCode})"
         }
