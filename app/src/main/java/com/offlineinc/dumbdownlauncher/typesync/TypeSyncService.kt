@@ -59,17 +59,33 @@ class TypeSyncService : Service() {
         sharedSecret = pairing.sharedSecret
         flipPhoneNumber = pairing.flipPhoneNumber
 
-        // Proactively ensure the accessibility service is bound so text
-        // injection works immediately when the first message arrives.
-        Thread { MouseAccessibilityService.ensureAccessibilityEnabled() }.start()
-
-        connect()
+        // Ensure the accessibility service is bound before opening the WebSocket
+        // so text injection works on the very first message. Mirrors the
+        // waitForAccessibilityThenRelay() pattern in WebKeyboardService.
+        waitForAccessibilityThenConnect()
 
         // Auto-stop after 10 minutes
         shutdownHandler.removeCallbacks(shutdownRunnable)
         shutdownHandler.postDelayed(shutdownRunnable, TEN_MINUTES_MS)
 
         return START_NOT_STICKY
+    }
+
+    private fun waitForAccessibilityThenConnect() {
+        Thread {
+            MouseAccessibilityService.ensureAccessibilityEnabled()
+            val deadline = System.currentTimeMillis() + 2000L
+            while (MouseAccessibilityService.instance == null &&
+                   System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(100) } catch (_: InterruptedException) { break }
+            }
+            if (MouseAccessibilityService.instance != null) {
+                Log.i(TAG, "Accessibility service ready — connecting")
+            } else {
+                Log.w(TAG, "Accessibility service not ready after 2 s — connecting anyway (injectText will retry)")
+            }
+            connect()
+        }.start()
     }
 
     private fun connect() {

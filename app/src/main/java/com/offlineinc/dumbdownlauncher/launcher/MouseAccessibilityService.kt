@@ -84,6 +84,24 @@ class MouseAccessibilityService : AccessibilityService() {
             // behind slow mouse-enable / density-change shell commands.
             textInjectorExecutor.execute {
                 Log.d("MouseService", "injectText via blind clipboard paste for ${text.length} chars")
+
+                // If the a11y service isn't bound yet, try to force-enable it and
+                // wait up to 1.5 s for Android to bind it before we fall back to
+                // the shell keyevent path (which doesn't work in all apps).
+                if (instance == null) {
+                    Log.w("MouseService", "injectText: a11y instance null — calling ensureAccessibilityEnabled and waiting for bind")
+                    ensureAccessibilityEnabled()
+                    val deadline = System.currentTimeMillis() + 1500L
+                    while (instance == null && System.currentTimeMillis() < deadline) {
+                        try { Thread.sleep(100) } catch (_: InterruptedException) { break }
+                    }
+                    if (instance != null) {
+                        Log.i("MouseService", "injectText: a11y service bound after wait — proceeding with ACTION_PASTE")
+                    } else {
+                        Log.w("MouseService", "injectText: a11y service still null after 1.5 s — keyevent fallback will be used")
+                    }
+                }
+
                 injectViaClipboardBlind(instance, text)
             }
         }
@@ -97,35 +115,48 @@ class MouseAccessibilityService : AccessibilityService() {
          * service is bound before any text injection is needed.
          */
         fun ensureAccessibilityEnabled() {
+            // Fast path: service is already bound, nothing to do.
+            if (instance != null) return
+
             try {
-                // Read current enabled services
                 val readProc = ProcessBuilder("su", "-c", "settings get secure enabled_accessibility_services")
                     .redirectErrorStream(true)
                     .start()
                 val current = readProc.inputStream.bufferedReader().readText().trim()
                 readProc.waitFor()
 
-                if (current.contains(A11Y_SERVICE_ID)) return // already listed
+                if (current.contains(A11Y_SERVICE_ID)) {
+                    // Listed in settings but instance is null — process restarted and
+                    // Android hasn't rebound the service yet. Remove then re-add to
+                    // force a rebind (a settings change is what triggers Android to bind).
+                    Log.i("MouseService", "ensureAccessibilityEnabled: listed but not bound — forcing rebind")
+                    val without = current.split(":").filter { it.trim() != A11Y_SERVICE_ID }.joinToString(":")
+                    val withoutValue = without.ifBlank { "null" }
+                    ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$withoutValue'")
+                        .redirectErrorStream(true).start().waitFor()
+                    try { Thread.sleep(300) } catch (_: InterruptedException) {}
+                    val newValue = if (withoutValue == "null" || withoutValue.isBlank()) A11Y_SERVICE_ID else "$withoutValue:$A11Y_SERVICE_ID"
+                    ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
+                        .redirectErrorStream(true).start().waitFor()
+                    return
+                }
 
-                // Append our service to the list
+                // Not listed at all — add it and make sure the master toggle is on.
                 val newValue = if (current.isBlank() || current == "null") {
                     A11Y_SERVICE_ID
                 } else {
                     "$current:$A11Y_SERVICE_ID"
                 }
-                val writeProc = ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
-                    .redirectErrorStream(true)
-                    .start()
-                writeProc.inputStream.bufferedReader().readText()
-                writeProc.waitFor()
-
-                // Make sure accessibility master toggle is on
-                val toggleProc = ProcessBuilder("su", "-c", "settings put secure accessibility_enabled 1")
-                    .redirectErrorStream(true)
-                    .start()
-                toggleProc.inputStream.bufferedReader().readText()
-                toggleProc.waitFor()
-
+                ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
+                    .redirectErrorStream(true).start().also {
+                        it.inputStream.bufferedReader().readText()
+                        it.waitFor()
+                    }
+                ProcessBuilder("su", "-c", "settings put secure accessibility_enabled 1")
+                    .redirectErrorStream(true).start().also {
+                        it.inputStream.bufferedReader().readText()
+                        it.waitFor()
+                    }
                 Log.i("MouseService", "ensureAccessibilityEnabled: force-enabled via root (was: '$current')")
             } catch (t: Throwable) {
                 Log.w("MouseService", "ensureAccessibilityEnabled: failed — ${t.message}")
@@ -165,17 +196,46 @@ class MouseAccessibilityService : AccessibilityService() {
                 // Let the clipboard settle
                 try { Thread.sleep(CLIPBOARD_SETTLE_MS) } catch (_: InterruptedException) {}
 
-                // 2. Dispatch KEYCODE_PASTE (279) via shell — this tells the focused
-                //    window to paste from the clipboard, even if we can't see the node.
-                val proc = ProcessBuilder("su", "-c", "input keyevent 279")
-                    .redirectErrorStream(true)
-                    .start()
-                val exitCode = proc.waitFor()
-                if (exitCode != 0) {
-                    Log.e("MouseService", "injectViaClipboardBlind: paste keyevent failed with exit code $exitCode")
-                    showToast(ctx, "TypeSync: paste failed")
+                // 2. Try ACTION_PASTE via the accessibility tree first.
+                //    This works for custom input fields (e.g. OpenBubbles) that respond
+                //    to a11y actions but ignore raw KEYCODE_PASTE shell key events.
+                val svc = service ?: instance
+                var pastedViaA11y = false
+                if (svc == null) {
+                    Log.w("MouseService", "injectViaClipboardBlind: no a11y service instance, falling back to keyevent")
                 } else {
-                    Log.i("MouseService", "injectViaClipboardBlind: clipboard set + paste keyevent dispatched for ${text.length} chars")
+                    try {
+                        val focused = svc.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                        if (focused != null) {
+                            val pasted = focused.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                            focused.recycle()
+                            if (pasted) {
+                                Log.i("MouseService", "injectViaClipboardBlind: pasted via a11y ACTION_PASTE for ${text.length} chars")
+                                pastedViaA11y = true
+                            } else {
+                                Log.d("MouseService", "injectViaClipboardBlind: a11y ACTION_PASTE returned false, falling back to keyevent")
+                            }
+                        } else {
+                            Log.d("MouseService", "injectViaClipboardBlind: no focused input node found, falling back to keyevent")
+                        }
+                    } catch (t: Throwable) {
+                        Log.w("MouseService", "injectViaClipboardBlind: a11y paste threw — ${t.message}, falling back to keyevent")
+                    }
+                }
+
+                // 3. Fall back to KEYCODE_PASTE (279) via shell for fields that don't
+                //    expose themselves in the a11y tree (e.g. standard EditText in SMS).
+                if (!pastedViaA11y) {
+                    val proc = ProcessBuilder("su", "-c", "input keyevent 279")
+                        .redirectErrorStream(true)
+                        .start()
+                    val exitCode = proc.waitFor()
+                    if (exitCode != 0) {
+                        Log.e("MouseService", "injectViaClipboardBlind: paste keyevent failed with exit code $exitCode")
+                        showToast(ctx, "TypeSync: paste failed")
+                    } else {
+                        Log.i("MouseService", "injectViaClipboardBlind: clipboard set + paste keyevent dispatched for ${text.length} chars")
+                    }
                 }
             } catch (t: Throwable) {
                 Log.e("MouseService", "injectViaClipboardBlind failed: ${t.message} — text not injected")

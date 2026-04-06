@@ -16,6 +16,10 @@ class DumbDownApp : Application() {
         ensureNetworkLocationEnabled()
         // Update FlipMouse (DumbMouse) binary if a newer version is bundled
         Thread { FlipMouseUpdater.checkAndUpdate(this) }.start()
+        // Ensure the mouse accessibility service is bound at startup so it's
+        // ready before the user toggles TypeSync for the first time.
+        MouseAccessibilityService.appContext = applicationContext
+        Thread { MouseAccessibilityService.ensureAccessibilityEnabled() }.start()
         // Start the cover display service. As the HOME launcher we are always alive,
         // so no foreground notification is required. The service is START_STICKY and
         // re-attaches automatically when the cover display is connected.
