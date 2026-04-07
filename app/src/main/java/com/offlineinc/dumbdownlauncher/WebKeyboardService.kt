@@ -207,21 +207,11 @@ class WebKeyboardService : Service() {
                             sendBroadcast(Intent(ACTION_STOP_BROADCAST))
                         }
                         "companion_connected" -> {
-                            // Smart phone just (re)connected to the relay — update notification
-                            // so the user knows they can start typing on the other device.
                             val companionRole = msg.optString("role", "smart phone")
                             Log.i(TAG, "📱 Companion connected: $companionRole")
-                            mainHandler.post {
-                                updateNotification("Smart phone connected — ready to type")
-                            }
                         }
                         "companion_disconnected" -> {
-                            // Smart phone dropped from the relay — prompt user to reopen
-                            // the app on the other device.
                             Log.i(TAG, "📵 Companion disconnected")
-                            mainHandler.post {
-                                updateNotification("Open ur smart phone and go to type sync to type")
-                            }
                         }
                         else -> Log.d(TAG, "ignoring message type=${msg.getString("type")}")
                     }
@@ -294,42 +284,20 @@ class WebKeyboardService : Service() {
                     NotificationChannel(
                         CHANNEL_ID,
                         "Type Sync",
-                        NotificationManager.IMPORTANCE_LOW
-                    ).apply { description = "Type Sync relay is active" }
+                        NotificationManager.IMPORTANCE_NONE   // hidden — always-on, no need to show
+                    )
                 )
             }
         }
     }
 
-    private fun buildNotification(statusText: String = "Type sync is active — open smart phone to type") =
+    /** Minimal notification required by Android for foreground services.
+     *  Hidden via IMPORTANCE_NONE channel — the user never sees it. */
+    private fun buildNotification() =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_edit)
-            .setContentTitle("Type Sync active")
-            .setContentText(statusText)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Stop",
-                PendingIntent.getService(
-                    this, 1,
-                    Intent(this, WebKeyboardService::class.java).apply {
-                        action = ACTION_STOP
-                    },
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            )
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
-
-    /**
-     * Update the foreground notification text in place without stopping/restarting
-     * the service. Called when the companion connects or disconnects so the user
-     * can see the current status on the flip phone's notification shade.
-     */
-    private fun updateNotification(statusText: String) {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIF_ID, buildNotification(statusText))
-        Log.d(TAG, "🔔 Notification updated: $statusText")
-    }
 
 }
