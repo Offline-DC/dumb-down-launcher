@@ -74,7 +74,7 @@ class TypeSyncService : Service() {
     private fun waitForAccessibilityThenConnect() {
         Thread {
             MouseAccessibilityService.ensureAccessibilityEnabled()
-            val deadline = System.currentTimeMillis() + 2000L
+            val deadline = System.currentTimeMillis() + 5000L
             while (MouseAccessibilityService.instance == null &&
                    System.currentTimeMillis() < deadline) {
                 try { Thread.sleep(100) } catch (_: InterruptedException) { break }
@@ -82,7 +82,7 @@ class TypeSyncService : Service() {
             if (MouseAccessibilityService.instance != null) {
                 Log.i(TAG, "Accessibility service ready — connecting")
             } else {
-                Log.w(TAG, "Accessibility service not ready after 2 s — connecting anyway (injectText will retry)")
+                Log.w(TAG, "Accessibility service not ready after 5 s — connecting anyway (injectText will retry)")
             }
             connect()
         }.start()

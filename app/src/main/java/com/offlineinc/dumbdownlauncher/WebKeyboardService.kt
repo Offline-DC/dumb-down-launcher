@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit
  * device-link pairing.
  *
  * Lifecycle:
- *   startService(ACTION_START, phoneNumber) → opens WS, starts 5-min timer
+ *   startService(ACTION_START, phoneNumber) → opens WS, stays open indefinitely
  *   startService(ACTION_STOP)               → closes WS, stops service
  *
  * When an encrypted { type:"text", encrypted:"…", iv:"…" } message arrives,
@@ -51,7 +51,6 @@ class WebKeyboardService : Service() {
         private const val NOTIF_ID    = 9001
         private const val WS_URL      =
             "wss://offline-dc-backend-ba4815b2bcc8.herokuapp.com/keyboard/ws"
-        private const val FIVE_MINUTES = 5 * 60 * 1000L
 
         @Volatile var isRunning = false
 
@@ -82,7 +81,6 @@ class WebKeyboardService : Service() {
                     return START_NOT_STICKY
                 }
 
-                sharedSecret = pairing.sharedSecret
                 val phone = pairing.flipPhoneNumber.ifBlank {
                     intent.getStringExtra(EXTRA_PHONE_NUMBER)
                 }
@@ -92,7 +90,20 @@ class WebKeyboardService : Service() {
                     return START_NOT_STICKY
                 }
 
-                Log.i(TAG, "Starting encrypted relay for $phone")
+                // If already running, tear down the old WebSocket so we
+                // reconnect with the (potentially new) shared secret.
+                // This handles re-pairing: the user pairs with a new phone
+                // and the service needs to pick up the fresh credentials.
+                if (isRunning) {
+                    Log.i(TAG, "ACTION_START while running — restarting relay with fresh credentials")
+                    mainHandler.removeCallbacksAndMessages(null)
+                    webSocket?.close(1000, "credential refresh")
+                    webSocket = null
+                    reconnectCount = 0
+                }
+
+                sharedSecret = pairing.sharedSecret
+                Log.i(TAG, "Starting encrypted relay for $phone (secretLen=${pairing.sharedSecret.length})")
                 // Make app context available immediately so clipboard paste
                 // works even before the accessibility service binds.
                 MouseAccessibilityService.appContext = applicationContext
@@ -101,7 +112,7 @@ class WebKeyboardService : Service() {
             }
             ACTION_STOP -> shutDown()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -234,19 +245,6 @@ class WebKeyboardService : Service() {
                 Log.i(TAG, "🔌 WS closed: code=$code reason=\"$reason\"")
             }
         })
-
-        // 5-minute hard cutoff
-        mainHandler.postDelayed({
-            Log.i(TAG, "⏱ 5-minute timer expired — stopping Type Sync for $phoneNumber")
-            shutDown()
-            sendBroadcast(Intent(ACTION_STOP_BROADCAST))
-            // Toast on the main thread to notify the user
-            android.widget.Toast.makeText(
-                applicationContext,
-                "type sync off (timed out)",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-        }, FIVE_MINUTES)
     }
 
     private fun handleTextMessage(msg: JSONObject) {
@@ -255,15 +253,17 @@ class WebKeyboardService : Service() {
             Log.w(TAG, "Received text message without encryption — ignoring")
             return
         }
+        val encB64 = msg.getString("encrypted")
+        val ivB64 = msg.getString("iv")
         try {
-            val ciphertext = TypeSyncCrypto.fromBase64(msg.getString("encrypted"))
-            val iv = TypeSyncCrypto.fromBase64(msg.getString("iv"))
+            val ciphertext = TypeSyncCrypto.fromBase64(encB64)
+            val iv = TypeSyncCrypto.fromBase64(ivB64)
             val plaintext = TypeSyncCrypto.decryptAesGcm(ciphertext, iv, secret)
             val text = String(plaintext, Charsets.UTF_8)
             Log.i(TAG, "🔓 decrypted text (${text.length} chars)")
             MouseAccessibilityService.injectText(text)
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Decryption failed", e)
+            Log.e(TAG, "❌ Decryption failed — enc=${encB64.length}ch iv=${ivB64.length}ch secretLen=${secret.length} secretPrefix=${secret.take(4)}…", e)
         }
     }
 
@@ -301,7 +301,7 @@ class WebKeyboardService : Service() {
         }
     }
 
-    private fun buildNotification(statusText: String = "Open ur smart phone and go to type sync to type") =
+    private fun buildNotification(statusText: String = "Type sync is active — open smart phone to type") =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_edit)
             .setContentTitle("Type Sync active")

@@ -47,7 +47,6 @@ object FlipMouseUpdater {
 
             copyAssetToTmp(context, "flipmouse/mouse", "$TMP_DIR/mouse")
             copyAssetToTmp(context, "flipmouse/module.prop", "$TMP_DIR/module.prop")
-
             // 4. Replace the binary using rm + cp rather than cp-over.
             //    Overwriting a running executable yields "Text file busy" on Linux.
             //    rm just removes the directory entry; running processes keep their
@@ -57,7 +56,6 @@ object FlipMouseUpdater {
             exec("su -c cp $TMP_DIR/mouse $MOUSE_BIN")
             exec("su -c chmod 755 $MOUSE_BIN")
             exec("su -c cp $TMP_DIR/module.prop $MODULE_PROP")
-
             // 5. Kill all running instances (old binary still running via its inode),
             //    then restart with the new binary.
             //    Use a finally block so the daemon always comes back up even if

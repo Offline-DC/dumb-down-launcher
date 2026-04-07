@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.location.LocationManager
 import android.util.Log
+import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
@@ -20,10 +21,40 @@ class DumbDownApp : Application() {
         // ready before the user toggles TypeSync for the first time.
         MouseAccessibilityService.appContext = applicationContext
         Thread { MouseAccessibilityService.ensureAccessibilityEnabled() }.start()
+
+        // Start a periodic watchdog that re-enables the a11y service whenever
+        // it drops (e.g. Android kills it in the background).
+        MouseAccessibilityService.startWatchdog()
+
+        // Listen for system-level accessibility state changes — if Android
+        // disables accessibility services (e.g. after a crash), re-enable
+        // ours immediately rather than waiting for the next watchdog tick.
+        registerAccessibilityRecoveryListener()
+
         // Start the cover display service. As the HOME launcher we are always alive,
         // so no foreground notification is required. The service is START_STICKY and
         // re-attaches automatically when the cover display is connected.
         startService(Intent(this, CoverDisplayService::class.java))
+    }
+
+    private fun registerAccessibilityRecoveryListener() {
+        val am = getSystemService(ACCESSIBILITY_SERVICE) as? AccessibilityManager ?: return
+        am.addAccessibilityStateChangeListener { enabled ->
+            // Ignore state changes that are side-effects of our own settings
+            // toggle inside ensureAccessibilityEnabled — these fire as
+            // enabled=false when we temporarily remove the service and would
+            // otherwise re-trigger ensureAccessibilityEnabled in a loop.
+            val msSinceToggle = android.os.SystemClock.uptimeMillis() - MouseAccessibilityService.lastToggleTimestamp
+            if (msSinceToggle < 5_000L) {
+                Log.d("DumbDownApp", "Accessibility state changed (enabled=$enabled) — ignoring (own toggle ${msSinceToggle}ms ago)")
+                return@addAccessibilityStateChangeListener
+            }
+
+            if (!enabled || MouseAccessibilityService.instance == null) {
+                Log.w("DumbDownApp", "Accessibility state changed (enabled=$enabled, instance=${MouseAccessibilityService.instance != null}) — re-enabling service")
+                Thread { MouseAccessibilityService.ensureAccessibilityEnabled() }.start()
+            }
+        }
     }
 
     /**

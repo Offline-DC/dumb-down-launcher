@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import java.util.concurrent.atomic.AtomicBoolean
 
 @SuppressLint("AccessibilityPolicy")
 class MouseAccessibilityService : AccessibilityService() {
@@ -33,6 +34,26 @@ class MouseAccessibilityService : AccessibilityService() {
     companion object {
         /** Shared single-thread executor for all shell commands — avoids raw Thread{} churn. */
         private val shellExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+        /* ── Watchdog: periodically verifies the service is still bound ──────── */
+
+        private val watchdogHandler = Handler(Looper.getMainLooper())
+        private const val WATCHDOG_INTERVAL_MS = 15_000L
+
+        private val watchdogRunnable = object : Runnable {
+            override fun run() {
+                if (instance == null) {
+                    Log.w("MouseService", "watchdog: instance null — re-enabling")
+                    shellExecutor.execute { ensureAccessibilityEnabled() }
+                }
+                watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+            }
+        }
+
+        fun startWatchdog() {
+            watchdogHandler.removeCallbacks(watchdogRunnable)
+            watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS)
+        }
 
         /**
          * Dedicated executor for text injection so it is never blocked behind
@@ -91,14 +112,14 @@ class MouseAccessibilityService : AccessibilityService() {
                 if (instance == null) {
                     Log.w("MouseService", "injectText: a11y instance null — calling ensureAccessibilityEnabled and waiting for bind")
                     ensureAccessibilityEnabled()
-                    val deadline = System.currentTimeMillis() + 1500L
+                    val deadline = System.currentTimeMillis() + 5000L
                     while (instance == null && System.currentTimeMillis() < deadline) {
                         try { Thread.sleep(100) } catch (_: InterruptedException) { break }
                     }
                     if (instance != null) {
                         Log.i("MouseService", "injectText: a11y service bound after wait — proceeding with ACTION_PASTE")
                     } else {
-                        Log.w("MouseService", "injectText: a11y service still null after 1.5 s — keyevent fallback will be used")
+                        Log.w("MouseService", "injectText: a11y service still null after 5 s — keyevent fallback will be used")
                     }
                 }
 
@@ -108,59 +129,148 @@ class MouseAccessibilityService : AccessibilityService() {
 
         private const val A11Y_SERVICE_ID = "com.offlineinc.dumbdownlauncher/com.offlineinc.dumbdownlauncher.MouseAccessibilityService"
 
+        /** Guard to prevent concurrent/re-entrant calls to [ensureAccessibilityEnabled]. */
+        private val enabling = AtomicBoolean(false)
+
+        /**
+         * Timestamp (uptimeMillis) of the last settings toggle inside
+         * [ensureAccessibilityEnabled].  External listeners (e.g. the
+         * AccessibilityStateChangeListener in DumbDownApp) should ignore
+         * state-change callbacks that arrive within a short window of this
+         * timestamp — those are side-effects of our own toggle, not the
+         * system killing the service.
+         */
+        @Volatile var lastToggleTimestamp: Long = 0L
+            private set
+
+        /** Maximum number of toggle attempts in [ensureAccessibilityEnabled]. */
+        private const val MAX_ENABLE_ATTEMPTS = 3
+        /** Delay between remove and re-add when forcing a rebind (ms). */
+        private const val REBIND_TOGGLE_GAP_MS = 800L
+        /** Time to wait for Android to bind the service after a settings change (ms). */
+        private const val BIND_WAIT_AFTER_TOGGLE_MS = 2000L
+        /**
+         * When the service is already listed in settings but not yet bound,
+         * wait this long for Android to bind it naturally before force-toggling.
+         * This avoids the destructive remove→re-add cycle when the framework
+         * is simply slow to process the bind after a cold start.
+         */
+        private const val INITIAL_BIND_GRACE_MS = 3000L
+
         /**
          * Force-enable the accessibility service via root `settings` command.
          * Android will bind it shortly after the secure setting is updated.
          * Call this proactively (e.g. when TypeSyncService starts) so the
          * service is bound before any text injection is needed.
+         *
+         * Retries up to [MAX_ENABLE_ATTEMPTS] times with increasing toggle gaps
+         * to handle the case where Android is slow to process the settings change.
          */
         fun ensureAccessibilityEnabled() {
-            // Fast path: service is already bound, nothing to do.
-            if (instance != null) return
-
-            try {
-                val readProc = ProcessBuilder("su", "-c", "settings get secure enabled_accessibility_services")
-                    .redirectErrorStream(true)
-                    .start()
-                val current = readProc.inputStream.bufferedReader().readText().trim()
-                readProc.waitFor()
-
-                if (current.contains(A11Y_SERVICE_ID)) {
-                    // Listed in settings but instance is null — process restarted and
-                    // Android hasn't rebound the service yet. Remove then re-add to
-                    // force a rebind (a settings change is what triggers Android to bind).
-                    Log.i("MouseService", "ensureAccessibilityEnabled: listed but not bound — forcing rebind")
-                    val without = current.split(":").filter { it.trim() != A11Y_SERVICE_ID }.joinToString(":")
-                    val withoutValue = without.ifBlank { "null" }
-                    ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$withoutValue'")
-                        .redirectErrorStream(true).start().waitFor()
-                    try { Thread.sleep(300) } catch (_: InterruptedException) {}
-                    val newValue = if (withoutValue == "null" || withoutValue.isBlank()) A11Y_SERVICE_ID else "$withoutValue:$A11Y_SERVICE_ID"
-                    ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
-                        .redirectErrorStream(true).start().waitFor()
-                    return
-                }
-
-                // Not listed at all — add it and make sure the master toggle is on.
-                val newValue = if (current.isBlank() || current == "null") {
-                    A11Y_SERVICE_ID
-                } else {
-                    "$current:$A11Y_SERVICE_ID"
-                }
-                ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
-                    .redirectErrorStream(true).start().also {
-                        it.inputStream.bufferedReader().readText()
-                        it.waitFor()
-                    }
-                ProcessBuilder("su", "-c", "settings put secure accessibility_enabled 1")
-                    .redirectErrorStream(true).start().also {
-                        it.inputStream.bufferedReader().readText()
-                        it.waitFor()
-                    }
-                Log.i("MouseService", "ensureAccessibilityEnabled: force-enabled via root (was: '$current')")
-            } catch (t: Throwable) {
-                Log.w("MouseService", "ensureAccessibilityEnabled: failed — ${t.message}")
+            // Prevent concurrent / re-entrant calls (e.g. watchdog + recovery
+            // listener + injectText all firing at once).
+            if (!enabling.compareAndSet(false, true)) {
+                Log.d("MouseService", "ensureAccessibilityEnabled: already running — skipping")
+                return
             }
+            try {
+                doEnsureAccessibilityEnabled()
+            } finally {
+                enabling.set(false)
+            }
+        }
+
+        private fun doEnsureAccessibilityEnabled() {
+            for (attempt in 1..MAX_ENABLE_ATTEMPTS) {
+                // Fast path: service is already bound, nothing to do.
+                if (instance != null) return
+
+                try {
+                    val readProc = ProcessBuilder("su", "-c", "settings get secure enabled_accessibility_services")
+                        .redirectErrorStream(true)
+                        .start()
+                    val current = readProc.inputStream.bufferedReader().readText().trim()
+                    readProc.waitFor()
+
+                    if (current.contains(A11Y_SERVICE_ID)) {
+                        // Listed in settings but instance is null — Android may
+                        // still be in the process of binding (e.g. cold start).
+                        // Wait for it to bind naturally before force-toggling.
+                        if (attempt == 1) {
+                            Log.i("MouseService", "ensureAccessibilityEnabled: listed but not bound — waiting ${INITIAL_BIND_GRACE_MS}ms for natural bind")
+                            val graceDeadline = System.currentTimeMillis() + INITIAL_BIND_GRACE_MS
+                            while (instance == null && System.currentTimeMillis() < graceDeadline) {
+                                try { Thread.sleep(200) } catch (_: InterruptedException) { break }
+                            }
+                            if (instance != null) {
+                                Log.i("MouseService", "ensureAccessibilityEnabled: bound naturally during grace period")
+                                return
+                            }
+                        }
+
+                        // Still not bound — force a rebind via remove → re-add.
+                        Log.i("MouseService", "ensureAccessibilityEnabled: forcing rebind (attempt $attempt/$MAX_ENABLE_ATTEMPTS)")
+
+                        // Mark that we're about to toggle settings — external listeners
+                        // should ignore state changes for a few seconds.
+                        lastToggleTimestamp = android.os.SystemClock.uptimeMillis()
+
+                        val without = current.split(":").filter { it.trim() != A11Y_SERVICE_ID }.joinToString(":")
+                        val withoutValue = without.ifBlank { "null" }
+
+                        // First disable the master toggle so Android fully tears down
+                        ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$withoutValue'")
+                            .redirectErrorStream(true).start().waitFor()
+
+                        // Wait long enough for the framework to process the removal
+                        val gap = REBIND_TOGGLE_GAP_MS * attempt
+                        try { Thread.sleep(gap) } catch (_: InterruptedException) {}
+
+                        // Re-add the service
+                        val newValue = if (withoutValue == "null" || withoutValue.isBlank()) A11Y_SERVICE_ID else "$withoutValue:$A11Y_SERVICE_ID"
+                        ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
+                            .redirectErrorStream(true).start().waitFor()
+                        ProcessBuilder("su", "-c", "settings put secure accessibility_enabled 1")
+                            .redirectErrorStream(true).start().waitFor()
+                    } else {
+                        // Not listed at all — add it and make sure the master toggle is on.
+                        lastToggleTimestamp = android.os.SystemClock.uptimeMillis()
+                        val newValue = if (current.isBlank() || current == "null") {
+                            A11Y_SERVICE_ID
+                        } else {
+                            "$current:$A11Y_SERVICE_ID"
+                        }
+                        ProcessBuilder("su", "-c", "settings put secure enabled_accessibility_services '$newValue'")
+                            .redirectErrorStream(true).start().also {
+                                it.inputStream.bufferedReader().readText()
+                                it.waitFor()
+                            }
+                        ProcessBuilder("su", "-c", "settings put secure accessibility_enabled 1")
+                            .redirectErrorStream(true).start().also {
+                                it.inputStream.bufferedReader().readText()
+                                it.waitFor()
+                            }
+                        Log.i("MouseService", "ensureAccessibilityEnabled: force-enabled via root (was: '$current', attempt $attempt)")
+                    }
+
+                    // Wait for the system to actually bind the service
+                    val deadline = System.currentTimeMillis() + BIND_WAIT_AFTER_TOGGLE_MS
+                    while (instance == null && System.currentTimeMillis() < deadline) {
+                        try { Thread.sleep(100) } catch (_: InterruptedException) { break }
+                    }
+
+                    if (instance != null) {
+                        Log.i("MouseService", "ensureAccessibilityEnabled: service bound on attempt $attempt")
+                        return
+                    }
+
+                    Log.w("MouseService", "ensureAccessibilityEnabled: still not bound after attempt $attempt")
+                } catch (t: Throwable) {
+                    Log.w("MouseService", "ensureAccessibilityEnabled: attempt $attempt failed — ${t.message}")
+                }
+            }
+
+            Log.e("MouseService", "ensureAccessibilityEnabled: FAILED to bind after $MAX_ENABLE_ATTEMPTS attempts")
         }
 
         /** Small delay after setting the clipboard to let the system propagate it. */

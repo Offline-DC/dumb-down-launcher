@@ -515,11 +515,8 @@ private suspend fun confirmPairing(
         val store = PairingStore(ctx)
         store.savePairing(phoneNumber, secret, pairingId)
 
-        // Auto-set platform if the server knows which smartphone OS was used
-        if (smartPlatform == "ios" || smartPlatform == "android") {
-            com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences.saveChoice(ctx, smartPlatform)
-            Log.i(TAG, "confirmPairing: auto-set platform to $smartPlatform")
-        }
+        // Platform is set by IntentChoiceScreen (iMessage / Google Messages),
+        // not by the linking step — don't override it here.
 
         onResult(true, null)
     } catch (e: Exception) {

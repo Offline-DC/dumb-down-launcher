@@ -37,7 +37,6 @@ import com.offlineinc.dumbdownlauncher.ui.IntentChoiceScreen
 import com.offlineinc.dumbdownlauncher.ui.LinkingChoiceScreen
 import com.offlineinc.dumbdownlauncher.ui.MouseTutorialScreen
 import com.offlineinc.dumbdownlauncher.ui.PairingScreen
-import com.offlineinc.dumbdownlauncher.ui.PlatformChoiceDialog
 
 
 const val ALL_APPS = "__ALL_APPS__"
@@ -91,55 +90,43 @@ class MainActivity : AppCompatActivity() {
         // "skipped" is the legacy value for users who tapped skip on the old pairing screen.
         val validPlatforms = setOf("ios", "android", "skipped", "none")
         // New users: neither linking nor platform chosen yet
-        val needsLinking  = linkingChoice == null && platformChoice == null && !pairingStore.isPaired
-        // Linking chosen but still picking platform
-        val needsIntent   = linkingChoice != null && platformChoice == null && !pairingStore.isPaired
-        // Chose to link — always pair, even if platform is "none" (super dumb users
-        // who still want their contacts synced etc.)
-        val needsPairing  = !pairingStore.isPaired && platformChoice != null && linkingChoice == true
-        // Backwards-compat: paired users from before intent screen, platform still unknown
-        val needsPlatform = platformChoice !in validPlatforms && !needsLinking && !needsIntent
+        val needsLinking  = linkingChoice == null && !pairingStore.isPaired
+        // Linking=yes → pair first, intent comes after contactsync
+        val needsPairing  = linkingChoice == true && !pairingStore.isPaired
+        // Need to pick messaging platform (after pairing+contactsync if linked,
+        // or right after linking=no, or backwards-compat for old paired users)
+        val needsIntent   = platformChoice !in validPlatforms && !needsLinking && !needsPairing
 
         // Backwards-compat: existing users who already completed pairing + platform
         // before the mouse tutorial was added should not be forced through it on update.
-        if (!needsLinking && !needsIntent && !needsPairing && !needsPlatform && !isMouseTutorialDone()) {
+        if (!needsLinking && !needsPairing && !needsIntent && !isMouseTutorialDone()) {
             Log.d("ONBOARDING", "Existing user detected — auto-marking mouse tutorial done")
             markMouseTutorialDone()
         }
 
         onboardingStep.value = when {
-            needsLinking  -> "linking"   // brand-new users: are you linking?
-            needsIntent   -> "intent"    // linking chosen: pick imessage / google messages / none
-            needsPairing  -> "pairing"   // linking=yes: pair the phone
-            needsPlatform -> "platform"  // backwards-compat: paired but platform unknown
+            needsLinking  -> "linking"      // brand-new users: are you linking?
+            needsPairing  -> "pairing"      // linking=yes: pair the phone first
+            needsIntent   -> "intent"       // pick imessage / google messages / none
             !isMouseTutorialDone() -> "mousetutorial"
             else -> null
         }
         Log.d("ONBOARDING", "onCreate: isPaired=${pairingStore.isPaired} platform=$platformChoice linking=$linkingChoice step=${onboardingStep.value}")
 
-        // If paired but platform unknown, fetch it from the server in the background
-        if (!needsPairing && needsPlatform && platformChoice != "none") {
-            val phone = pairingStore.flipPhoneNumber
-            if (phone != null) {
-                Thread {
-                    try {
-                        val api = com.offlineinc.dumbdownlauncher.pairing.PairingApiClient(okhttp3.OkHttpClient())
-                        val status = api.getPairingStatus(phone)
-                        val serverPlatform = status.optString("smartPlatform", "")
-                        if (serverPlatform == "ios" || serverPlatform == "android") {
-                            PlatformPreferences.saveChoice(this@MainActivity, serverPlatform)
-                            Log.d("ONBOARDING", "Auto-detected platform from server: $serverPlatform")
-                            runOnUiThread {
-                                if (!isDestroyed && onboardingStep.value == "platform") {
-                                    onboardingStep.value = nextStepAfterPlatform()
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w("ONBOARDING", "Failed to fetch platform from server: ${e.message}")
-                    }
-                }.start()
-            }
+        // Platform (ios/android) is set solely by IntentChoiceScreen
+        // (iMessage vs Google Messages). Don't auto-detect from the server.
+
+        // Start (or restart) the always-on Type Sync WebSocket if paired.
+        // Sending ACTION_START to an already-running service refreshes the
+        // credentials, which is needed after re-pairing with a new phone.
+        if (pairingStore.isPaired) {
+            startService(
+                Intent(this, WebKeyboardService::class.java).apply {
+                    action = WebKeyboardService.ACTION_START
+                    putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, pairingStore.flipPhoneNumber)
+                }
+            )
+            Log.d("TYPESYNC", "Started/refreshed Type Sync WebSocket")
         }
 
         // Report launcher version to server if it changed since last report
@@ -210,7 +197,9 @@ class MainActivity : AppCompatActivity() {
                             onChoose = { willLink ->
                                 PlatformPreferences.saveLinkingChoice(this@MainActivity, willLink)
                                 Log.d("ONBOARDING", "Linking choice: $willLink")
-                                onboardingStep.value = "intent"
+                                // Linking=yes → pair first, intent comes after contactsync.
+                                // Linking=no  → pick messaging platform next.
+                                onboardingStep.value = if (willLink) "pairing" else "intent"
                             }
                         )
                     }
@@ -222,21 +211,12 @@ class MainActivity : AppCompatActivity() {
                                 AllAppsActivity.invalidateCache()
                                 MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                 Log.d("ONBOARDING", "Intent choice: $choice linking=${PlatformPreferences.getLinkingChoice(this@MainActivity)}")
-                                when {
-                                    PlatformPreferences.getLinkingChoice(this@MainActivity) == true -> {
-                                        // Linking=yes → always go through pairing, regardless of platform
-                                        onboardingStep.value = "pairing"
-                                    }
-                                    choice == "none" -> {
-                                        // Not linking + super dumb — skip everything, go home
-                                        markMouseTutorialDone()
-                                        onboardingStep.value = null
-                                    }
-                                    else -> {
-                                        // Not linking + has smart platform — skip pairing/sync,
-                                        // go straight to mouse tutorial
-                                        onboardingStep.value = if (isMouseTutorialDone()) null else "mousetutorial"
-                                    }
+                                if (choice == "none" && PlatformPreferences.getLinkingChoice(this@MainActivity) != true) {
+                                    // Not linking + super dumb — skip everything, go home
+                                    markMouseTutorialDone()
+                                    onboardingStep.value = null
+                                } else {
+                                    onboardingStep.value = if (isMouseTutorialDone()) null else "mousetutorial"
                                 }
                             }
                         )
@@ -251,6 +231,19 @@ class MainActivity : AppCompatActivity() {
                                 Log.d("ONBOARDING", "Pairing complete — launching contact sync")
                                 AllAppsActivity.invalidateCache()
                                 MainAppsGridActivity.invalidateItemCache()
+
+                                // Start (or restart) TypeSync with the fresh shared secret
+                                // immediately so it's ready by the time the user finishes
+                                // onboarding and starts typing.
+                                val store = PairingStore(this@MainActivity)
+                                startService(
+                                    Intent(this@MainActivity, WebKeyboardService::class.java).apply {
+                                        action = WebKeyboardService.ACTION_START
+                                        putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, store.flipPhoneNumber)
+                                    }
+                                )
+                                Log.d("TYPESYNC", "Started/refreshed Type Sync after pairing")
+
                                 // After pairing, send user straight to contact sync
                                 onboardingStep.value = "contactsync"
                                 startActivity(
@@ -261,16 +254,10 @@ class MainActivity : AppCompatActivity() {
                                 overridePendingTransition(0, 0)
                             },
                             onSkip = {
-                                Log.d("ONBOARDING", "User skipped pairing — marking setup complete")
+                                Log.d("ONBOARDING", "User skipped pairing — moving to intent")
                                 PairingStore(this@MainActivity).isPaired = true
-                                // Keep the platform the user already chose on the intent screen;
-                                // only fall back to "skipped" if no platform was set yet.
-                                val existingPlatform = PlatformPreferences.getChoice(this@MainActivity)
-                                if (existingPlatform.isNullOrEmpty()) {
-                                    PlatformPreferences.saveChoice(this@MainActivity, "skipped")
-                                }
-                                markMouseTutorialDone()
-                                onboardingStep.value = null
+                                // Platform not chosen yet — intent screen comes next
+                                onboardingStep.value = "intent"
                             }
                         )
                     }
@@ -279,33 +266,19 @@ class MainActivity : AppCompatActivity() {
                     "contactsync" -> {
                         Box(modifier = Modifier.fillMaxSize().background(Color.Black))
                     }
-                    "platform" -> {
-                        PlatformChoiceDialog(
-                            onChoose = { choice ->
-                                if (choice != "skipped" && choice != "skip") {
-                                    PlatformPreferences.saveChoice(this@MainActivity, choice)
-                                    Log.d("ONBOARDING", "Platform choice saved: $choice")
-                                } else {
-                                    Log.d("ONBOARDING", "Platform choice skipped")
-                                }
-                                onboardingStep.value = nextStepAfterPlatform()
-                                MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
-                            }
-                        )
-                    }
                     "platform_for_smarttxt" -> {
-                        PlatformChoiceDialog(
+                        IntentChoiceScreen(
                             onChoose = { choice ->
-                                if (choice != "skipped" && choice != "skip") {
-                                    PlatformPreferences.saveChoice(this@MainActivity, choice)
+                                PlatformPreferences.saveChoice(this@MainActivity, choice)
+                                AllAppsActivity.invalidateCache()
+                                MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
+                                if (choice == "ios" || choice == "android") {
                                     Log.d("ONBOARDING", "Platform choice saved (for smart txt): $choice")
                                     onboardingStep.value = "launching_smarttxt"
-                                    MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                     launchSmartTxtForPlatform(choice)
                                 } else {
-                                    Log.d("ONBOARDING", "Platform choice skipped — going to home")
+                                    Log.d("ONBOARDING", "Platform choice 'none' — going to home")
                                     onboardingStep.value = null
-                                    MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                 }
                             }
                         )
@@ -370,18 +343,11 @@ class MainActivity : AppCompatActivity() {
         if (onboardingStep.value == "launching_smarttxt") {
             onboardingStep.value = null
         }
-        // User returned from ContactSyncActivity — advance to tutorial or done.
-        // Platform is already known (set on the intent screen before pairing), so
-        // we skip the old platform picker step.
+        // User returned from ContactSyncActivity — show intent screen to pick
+        // messaging platform (iMessage / Google Messages / none).
         if (onboardingStep.value == "contactsync") {
-            val platform = PlatformPreferences.getChoice(this)
-            if (platform == "ios" || platform == "android" || platform == "none" || platform == "skipped") {
-                Log.d("ONBOARDING", "Contact sync done, platform=$platform")
-                onboardingStep.value = nextStepAfterPlatform()
-            } else {
-                Log.d("ONBOARDING", "Contact sync done, platform unknown — showing picker (backwards compat)")
-                onboardingStep.value = "platform"
-            }
+            Log.d("ONBOARDING", "Contact sync done — showing intent screen")
+            onboardingStep.value = "intent"
         }
         // Bump the key so HomeScreen re-fetches the wallpaper in case the user
         // changed it while the launcher was in the background.
@@ -599,10 +565,6 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread(onDone)
         }.start()
     }
-
-    /** After platform is chosen/detected, go to mouse tutorial if not done, else finish. */
-    private fun nextStepAfterPlatform(): String? =
-        if (isMouseTutorialDone()) null else "mousetutorial"
 
     /**
      * One-time migration: pull pairing data from the old contact-sync app's

@@ -26,6 +26,7 @@
     <application
         android:name=".DumbDownApp"
         android:allowBackup="true"
+        android:persistent="true"
         android:label="Dumb Launcher"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
