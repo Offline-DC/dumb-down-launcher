@@ -445,7 +445,7 @@ class MainAppsGridActivity : AppCompatActivity() {
             }
             else -> {
                 val component = item.launchComponent ?: return
-                if (item.packageName == "com.openbubbles.messaging" ||
+                if ((item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this)) ||
                     item.packageName == "com.ubercab.uberlite" ||
                     item.packageName == "com.google.android.apps.mapslite") {
                     MouseAccessibilityService.setMouseEnabled(this, true)

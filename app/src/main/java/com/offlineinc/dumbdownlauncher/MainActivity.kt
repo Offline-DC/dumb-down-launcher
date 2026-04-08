@@ -468,14 +468,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchSmartTxtForPlatform(platform: String) {
-        MouseAccessibilityService.setMouseEnabled(this, true)
         when (platform) {
             "android" -> {
+                MouseAccessibilityService.setMouseEnabled(this, true)
                 Log.d("ONBOARDING", "Launching Google Messages web for Android")
                 openUrlInChrome("https://messages.google.com/web")
             }
             "ios" -> {
                 Log.d("ONBOARDING", "Launching OpenBubbles for iOS")
+                if (MouseAccessibilityService.isOpenBubblesMouseNeeded(this)) {
+                    MouseAccessibilityService.setMouseEnabled(this, true)
+                }
                 val intent = packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
                 if (intent != null) {
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -483,6 +486,7 @@ class MainActivity : AppCompatActivity() {
                     overridePendingTransition(0, 0)
                 } else {
                     Log.w("ONBOARDING", "OpenBubbles not installed — falling back to Google Messages web")
+                    MouseAccessibilityService.setMouseEnabled(this, true)
                     openUrlInChrome("https://messages.google.com/web")
                 }
             }

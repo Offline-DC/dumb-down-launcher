@@ -6,6 +6,8 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -84,6 +86,25 @@ class MouseAccessibilityService : AccessibilityService() {
                     it.runMouseCmd("disable")
                 }
             } ?: runMouseCmdStatic(if (active) "enable" else "disable")
+        }
+
+        /**
+         * Returns true if OpenBubbles needs mouse support, i.e. its version code
+         * is below 20002221 (newer builds have native touch handling).
+         */
+        fun isOpenBubblesMouseNeeded(context: Context): Boolean {
+            return try {
+                val info = context.packageManager.getPackageInfo("com.openbubbles.messaging", 0)
+                val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode.toLong()
+                }
+                versionCode < 20002221
+            } catch (e: PackageManager.NameNotFoundException) {
+                false
+            }
         }
 
         fun setMouseEnabled(context: Context, enabled: Boolean) {
@@ -410,7 +431,7 @@ class MouseAccessibilityService : AccessibilityService() {
     }
 
     private fun isTargetApp(pkg: String): Boolean =
-        pkg == "com.openbubbles.messaging"
+        (pkg == "com.openbubbles.messaging" && isOpenBubblesMouseNeeded(this))
             || pkg == "com.android.chrome"
             || pkg == "org.chromium.chrome"
             || pkg == "com.google.android.apps.mapslite"

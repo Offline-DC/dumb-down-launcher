@@ -241,7 +241,9 @@ class AllAppsActivity : AppCompatActivity() {
                         MainAppsGridActivity.openMessagesInChrome(this@AllAppsActivity)
                     }
                     "com.openbubbles.messaging" -> {
-                        MouseAccessibilityService.setMouseEnabled(this@AllAppsActivity, true)
+                        if (MouseAccessibilityService.isOpenBubblesMouseNeeded(this@AllAppsActivity)) {
+                            MouseAccessibilityService.setMouseEnabled(this@AllAppsActivity, true)
+                        }
                         val launchIntent = packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
                         if (launchIntent != null) {
                             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
