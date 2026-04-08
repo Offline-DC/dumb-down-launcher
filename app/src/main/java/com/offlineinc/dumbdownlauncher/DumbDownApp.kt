@@ -1,6 +1,7 @@
 package com.offlineinc.dumbdownlauncher
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.location.LocationManager
 import android.util.Log
@@ -34,6 +35,9 @@ class DumbDownApp : Application() {
         // Ensure the OpenBubbles "dumb" activation file exists (blank) so that
         // older builds that check for it still work. Does NOT overwrite an existing file.
         Thread { ensureOpenBubblesDumbFile() }.start()
+
+        // One-time migrations that run once per version bump
+        Thread { runOneTimeMigrations() }.start()
 
         // Start the cover display service. As the HOME launcher we are always alive,
         // so no foreground notification is required. The service is START_STICKY and
@@ -118,6 +122,47 @@ class DumbDownApp : Application() {
             }
         } catch (e: Exception) {
             Log.w(tag, "Cannot create OpenBubbles dumb file: ${e.message}")
+        }
+    }
+
+    /**
+     * Runs one-time migrations keyed by name. Each migration executes at most
+     * once across app updates. Add new entries to the map below.
+     */
+    private fun runOneTimeMigrations() {
+        val tag = "DumbDownApp"
+        val prefs = getSharedPreferences("migrations", Context.MODE_PRIVATE)
+
+        val migrations = mapOf<String, () -> Unit>(
+            // Disable TCL OTA updater so carrier/OEM updates don't nag or auto-install
+            "disable_tcl_fota" to {
+                try {
+                    val proc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "pm disable-user --user 0 com.tcl.fota.system")
+                    )
+                    val stderr = proc.errorStream.bufferedReader().readText().trim()
+                    val exit = proc.waitFor()
+                    if (exit == 0) {
+                        Log.d(tag, "Disabled com.tcl.fota.system")
+                    } else {
+                        Log.w(tag, "Failed to disable com.tcl.fota.system (exit=$exit): $stderr")
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Cannot disable com.tcl.fota.system: ${e.message}")
+                }
+            },
+        )
+
+        for ((key, action) in migrations) {
+            if (prefs.getBoolean(key, false)) continue
+            try {
+                Log.d(tag, "Running migration: $key")
+                action()
+                prefs.edit().putBoolean(key, true).apply()
+                Log.d(tag, "Migration complete: $key")
+            } catch (e: Exception) {
+                Log.w(tag, "Migration failed: $key — ${e.message}")
+            }
         }
     }
 
