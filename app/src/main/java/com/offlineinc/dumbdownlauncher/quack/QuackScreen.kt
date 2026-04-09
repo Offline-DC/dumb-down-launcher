@@ -241,11 +241,12 @@ private fun FeedScreen(
         focusRequester.requestFocus()
     }
 
-    // Poll for new posts every 10 seconds
+    // Tick every 30 s so post ages stay fresh (e.g. "3 min" → "4 min")
+    var ageTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
-            delay(10_000)
-            viewModel.refreshFeed()
+            delay(30_000)
+            ageTick++
         }
     }
 
@@ -265,6 +266,9 @@ private fun FeedScreen(
                     }
                     Key.SoftLeft -> {
                         viewModel.enterCompose(); true
+                    }
+                    Key.DirectionCenter -> {
+                        viewModel.startLocation(); true
                     }
                     Key.SoftRight -> {
                         viewModel.showRules(); true
@@ -299,7 +303,7 @@ private fun FeedScreen(
                 modifier = Modifier.weight(1f),
             ) {
                 itemsIndexed(state.posts) { index, post ->
-                    PostRow(post, selected = index == state.selectedIndex)
+                    PostRow(post, selected = index == state.selectedIndex, ageTick = ageTick)
                 }
             }
         }
@@ -307,14 +311,15 @@ private fun FeedScreen(
         // Soft keys
         SoftKeyBar(
             leftLabel = "quack",
-            centerLabel = null,
+            centerLabel = "refresh",
             rightLabel = "rulez",
         )
     }
 }
 
 @Composable
-private fun PostRow(post: QuackPost, selected: Boolean) {
+@Suppress("UNUSED_PARAMETER") // ageTick forces recomposition so formatAge stays fresh
+private fun PostRow(post: QuackPost, selected: Boolean, ageTick: Int = 0) {
     val bgColor = if (selected) DumbTheme.Colors.Yellow else Color.Transparent
     val textColor = if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.White
     val metaColor = if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.Gray

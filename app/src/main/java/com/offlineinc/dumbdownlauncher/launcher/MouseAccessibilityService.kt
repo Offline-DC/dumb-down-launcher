@@ -7,7 +7,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -581,6 +585,59 @@ class MouseAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ── Background location warming ────────────────────────────────────
+    // Requests a low-frequency GPS + network fix so getLastKnownLocation()
+    // always has a recent result. This means apps like Google Maps and
+    // Uber Lite get a near-instant fix instead of a 15-30 s cold start.
+    private var locationWarmer: LocationListener? = null
+
+    @SuppressLint("MissingPermission")
+    private fun startLocationWarming() {
+        try {
+            val lm = getSystemService(LOCATION_SERVICE) as? LocationManager ?: return
+            val listener = object : LocationListener {
+                override fun onLocationChanged(loc: Location) {
+                    Log.d("LocWarmer", "Fix: ${loc.provider} ${loc.latitude},${loc.longitude} acc=${loc.accuracy}m")
+                }
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }
+            locationWarmer = listener
+
+            // Request updates every 30 min / 500 m — just enough to keep the
+            // system cache warm without draining the battery.
+            val intervalMs = 30L * 60 * 1000  // 30 minutes
+            val minDistanceM = 500f            // 500 meters
+
+            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, intervalMs, minDistanceM, listener, Looper.getMainLooper())
+                Log.i("LocWarmer", "Registered NETWORK_PROVIDER (${intervalMs / 1000}s / ${minDistanceM.toInt()}m)")
+            }
+            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, intervalMs, minDistanceM, listener, Looper.getMainLooper())
+                Log.i("LocWarmer", "Registered GPS_PROVIDER (${intervalMs / 1000}s / ${minDistanceM.toInt()}m)")
+            }
+            if (lm.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)) {
+                lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
+                Log.i("LocWarmer", "Registered PASSIVE_PROVIDER")
+            }
+        } catch (e: Exception) {
+            Log.w("LocWarmer", "Failed to start location warming: ${e.message}")
+        }
+    }
+
+    private fun stopLocationWarming() {
+        try {
+            locationWarmer?.let {
+                val lm = getSystemService(LOCATION_SERVICE) as? LocationManager
+                lm?.removeUpdates(it)
+                Log.i("LocWarmer", "Stopped location warming")
+            }
+            locationWarmer = null
+        } catch (_: Exception) {}
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -597,6 +654,9 @@ class MouseAccessibilityService : AccessibilityService() {
         if (webViewActivityActive || isCurrentlyInTargetApp()) {
             mouseEnabled = true
         }
+
+        // Keep the system location cache warm so Maps / Uber get near-instant fixes
+        startLocationWarming()
     }
 
     private fun isTargetApp(pkg: String): Boolean =
@@ -760,6 +820,7 @@ class MouseAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        stopLocationWarming()
         super.onDestroy()
         instance = null
     }
