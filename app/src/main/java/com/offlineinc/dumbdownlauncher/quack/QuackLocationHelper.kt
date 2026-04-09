@@ -216,15 +216,20 @@ class QuackLocationHelper(context: Context, private val callback: Callback) {
     }
 
     private fun deliver(loc: Location) {
+        // Always persist the latest fix so the next open gets a fresh location,
+        // even if we already delivered (e.g. from persisted cache).
+        QuackLocationStore.save(appContext, loc.latitude, loc.longitude)
+
         if (delivered) {
-            Log.d(TAG, "deliver() skipped — already delivered")
+            // We got a better fix after already delivering — save it (done above)
+            // and clean up the listeners so we stop the 1 Hz log spam.
+            Log.d(TAG, "deliver() — fresher fix saved (acc=${loc.accuracy}m), cleaning up listeners")
+            cleanup()
             return
         }
         delivered = true
         Log.d(TAG, "deliver() lat=${loc.latitude} lng=${loc.longitude} acc=${loc.accuracy}m provider=${loc.provider}")
         cleanup()
-        // Persist for instant delivery next time
-        QuackLocationStore.save(appContext, loc.latitude, loc.longitude)
         handler.post { callback.onLocation(loc.latitude, loc.longitude) }
     }
 
