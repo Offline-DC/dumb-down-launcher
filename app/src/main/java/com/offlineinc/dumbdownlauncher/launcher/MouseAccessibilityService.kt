@@ -500,25 +500,54 @@ class MouseAccessibilityService : AccessibilityService() {
                 // Let the clipboard settle
                 try { Thread.sleep(CLIPBOARD_SETTLE_MS) } catch (_: InterruptedException) {}
 
-                // 2. Try ACTION_PASTE via the accessibility tree first.
-                //    This works for custom input fields (e.g. OpenBubbles) that respond
-                //    to a11y actions but ignore raw KEYCODE_PASTE shell key events.
+                // 2. Try ACTION_PASTE via the accessibility tree.
+                //    For native EditText this is reliable and we're done.
+                //    For WebView apps (e.g. OpenBubbles) ACTION_PASTE can return
+                //    true without actually inserting text, so we skip it and go
+                //    straight to keyevent which goes through the IME pipeline.
                 val svc = service ?: instance
                 var pastedViaA11y = false
+                var isWebViewApp = false
                 if (svc == null) {
                     Log.w("MouseService", "injectViaClipboardBlind: no a11y service instance, falling back to keyevent")
                 } else {
                     try {
                         val focused = svc.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                         if (focused != null) {
-                            val pasted = focused.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-                            focused.recycle()
-                            if (pasted) {
-                                Log.i("MouseService", "injectViaClipboardBlind: pasted via a11y ACTION_PASTE for ${text.length} chars")
-                                pastedViaA11y = true
+                            val pkg = focused.packageName?.toString() ?: ""
+                            val className = focused.className?.toString() ?: ""
+                            isWebViewApp = className.contains("WebView", ignoreCase = true)
+                                    || pkg == "com.openbubbles.messaging"
+                            Log.d("MouseService", "injectViaClipboardBlind: focused pkg=$pkg class=$className isWebView=$isWebViewApp")
+
+                            if (isWebViewApp) {
+                                // WebViews ignore clipboard-based paste (ACTION_PASTE
+                                // and keyevent 279 both silently fail). Use ACTION_SET_TEXT
+                                // which bypasses the clipboard and writes directly through
+                                // the accessibility framework.
+                                val existing = focused.text?.toString() ?: ""
+                                val args = Bundle()
+                                args.putCharSequence(
+                                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                                    existing + text
+                                )
+                                val set = focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                                if (set) {
+                                    Log.i("MouseService", "injectViaClipboardBlind: WebView — ACTION_SET_TEXT ok for ${text.length} chars")
+                                    pastedViaA11y = true
+                                } else {
+                                    Log.d("MouseService", "injectViaClipboardBlind: WebView — ACTION_SET_TEXT failed, falling back to input text")
+                                }
                             } else {
-                                Log.d("MouseService", "injectViaClipboardBlind: a11y ACTION_PASTE returned false, falling back to keyevent")
+                                val pasted = focused.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                                if (pasted) {
+                                    Log.i("MouseService", "injectViaClipboardBlind: pasted via a11y ACTION_PASTE for ${text.length} chars")
+                                    pastedViaA11y = true
+                                } else {
+                                    Log.d("MouseService", "injectViaClipboardBlind: a11y ACTION_PASTE returned false, falling back to keyevent")
+                                }
                             }
+                            focused.recycle()
                         } else {
                             Log.d("MouseService", "injectViaClipboardBlind: no focused input node found, falling back to keyevent")
                         }
@@ -527,18 +556,36 @@ class MouseAccessibilityService : AccessibilityService() {
                     }
                 }
 
-                // 3. Fall back to KEYCODE_PASTE (279) via shell for fields that don't
-                //    expose themselves in the a11y tree (e.g. standard EditText in SMS).
+                // 3. Fallback for fields that don't expose themselves in the a11y tree.
+                //    For WebView apps, try `input text` (simulates keystrokes, no clipboard).
+                //    For native apps, try KEYCODE_PASTE (279) via shell.
                 if (!pastedViaA11y) {
-                    val proc = ProcessBuilder("su", "-c", "input keyevent 279")
-                        .redirectErrorStream(true)
-                        .start()
-                    val exitCode = proc.waitFor()
-                    if (exitCode != 0) {
-                        Log.e("MouseService", "injectViaClipboardBlind: paste keyevent failed with exit code $exitCode")
-                        showToast(ctx, "TypeSync: paste failed")
+                    if (isWebViewApp) {
+                        // `input text` simulates keystrokes through the input subsystem —
+                        // works for WebViews where clipboard paste can't reach.
+                        val escaped = text.replace(" ", "%s")
+                            .replace("'", "'\\''")
+                        val proc = ProcessBuilder("su", "-c", "input text '$escaped'")
+                            .redirectErrorStream(true)
+                            .start()
+                        val exitCode = proc.waitFor()
+                        if (exitCode != 0) {
+                            Log.e("MouseService", "injectViaClipboardBlind: input text failed with exit code $exitCode")
+                            showToast(ctx, "TypeSync: paste failed")
+                        } else {
+                            Log.i("MouseService", "injectViaClipboardBlind: typed via input text for ${text.length} chars")
+                        }
                     } else {
-                        Log.i("MouseService", "injectViaClipboardBlind: clipboard set + paste keyevent dispatched for ${text.length} chars")
+                        val proc = ProcessBuilder("su", "-c", "input keyevent 279")
+                            .redirectErrorStream(true)
+                            .start()
+                        val exitCode = proc.waitFor()
+                        if (exitCode != 0) {
+                            Log.e("MouseService", "injectViaClipboardBlind: paste keyevent failed with exit code $exitCode")
+                            showToast(ctx, "TypeSync: paste failed")
+                        } else {
+                            Log.i("MouseService", "injectViaClipboardBlind: pasted via keyevent 279 for ${text.length} chars")
+                        }
                     }
                 }
             } catch (t: Throwable) {
@@ -586,56 +633,75 @@ class MouseAccessibilityService : AccessibilityService() {
     }
 
     // ── Background location warming ────────────────────────────────────
-    // Requests a low-frequency GPS + network fix so getLastKnownLocation()
+    // Grabs a single GPS + network fix every 30 min so getLastKnownLocation()
     // always has a recent result. This means apps like Google Maps and
     // Uber Lite get a near-instant fix instead of a 15-30 s cold start.
-    private var locationWarmer: LocationListener? = null
+    //
+    // Uses single-shot requests instead of continuous updates because
+    // MediaTek GPS ignores minTime and streams fixes at 1 Hz.
+    private val warmHandler = Handler(Looper.getMainLooper())
+    private var warmRunning = false
+    private val WARM_INTERVAL_MS = 30L * 60 * 1000  // 30 minutes
 
     @SuppressLint("MissingPermission")
     private fun startLocationWarming() {
+        if (warmRunning) return
+        warmRunning = true
+        Log.i("LocWarmer", "Starting single-shot location warming (every ${WARM_INTERVAL_MS / 60000}min)")
+        requestSingleFix()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestSingleFix() {
+        if (!warmRunning) return
         try {
             val lm = getSystemService(LOCATION_SERVICE) as? LocationManager ?: return
+            var gotFix = false
+
             val listener = object : LocationListener {
                 override fun onLocationChanged(loc: Location) {
-                    Log.d("LocWarmer", "Fix: ${loc.provider} ${loc.latitude},${loc.longitude} acc=${loc.accuracy}m")
+                    if (!gotFix) {
+                        gotFix = true
+                        Log.d("LocWarmer", "Fix: ${loc.provider} acc=${loc.accuracy}m — removing listener, next in ${WARM_INTERVAL_MS / 60000}min")
+                        lm.removeUpdates(this)
+                        scheduleNextFix()
+                    }
                 }
                 override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
                 override fun onProviderEnabled(provider: String) {}
                 override fun onProviderDisabled(provider: String) {}
             }
-            locationWarmer = listener
 
-            // Request updates every 30 min / 500 m — just enough to keep the
-            // system cache warm without draining the battery.
-            val intervalMs = 30L * 60 * 1000  // 30 minutes
-            val minDistanceM = 500f            // 500 meters
-
-            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, intervalMs, minDistanceM, listener, Looper.getMainLooper())
-                Log.i("LocWarmer", "Registered NETWORK_PROVIDER (${intervalMs / 1000}s / ${minDistanceM.toInt()}m)")
-            }
             if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, intervalMs, minDistanceM, listener, Looper.getMainLooper())
-                Log.i("LocWarmer", "Registered GPS_PROVIDER (${intervalMs / 1000}s / ${minDistanceM.toInt()}m)")
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
             }
-            if (lm.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
-                Log.i("LocWarmer", "Registered PASSIVE_PROVIDER")
+            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
             }
+
+            // Safety: if no fix arrives in 30 s, remove listener and schedule next attempt
+            warmHandler.postDelayed({
+                if (!gotFix) {
+                    Log.w("LocWarmer", "No fix after 30s — will retry in ${WARM_INTERVAL_MS / 60000}min")
+                    lm.removeUpdates(listener)
+                    scheduleNextFix()
+                }
+            }, 30_000)
         } catch (e: Exception) {
-            Log.w("LocWarmer", "Failed to start location warming: ${e.message}")
+            Log.w("LocWarmer", "Failed to request fix: ${e.message}")
+            scheduleNextFix()
         }
     }
 
+    private fun scheduleNextFix() {
+        if (!warmRunning) return
+        warmHandler.postDelayed(::requestSingleFix, WARM_INTERVAL_MS)
+    }
+
     private fun stopLocationWarming() {
-        try {
-            locationWarmer?.let {
-                val lm = getSystemService(LOCATION_SERVICE) as? LocationManager
-                lm?.removeUpdates(it)
-                Log.i("LocWarmer", "Stopped location warming")
-            }
-            locationWarmer = null
-        } catch (_: Exception) {}
+        warmRunning = false
+        warmHandler.removeCallbacksAndMessages(null)
+        Log.i("LocWarmer", "Stopped location warming")
     }
 
     override fun onServiceConnected() {
@@ -657,6 +723,16 @@ class MouseAccessibilityService : AccessibilityService() {
 
         // Keep the system location cache warm so Maps / Uber get near-instant fixes
         startLocationWarming()
+
+        // Prime the clipboard framework so the first TypeSync paste into a
+        // WebView (e.g. OpenBubbles) works immediately.  Without this,
+        // WebViews sometimes ignore ACTION_PASTE until the clipboard has
+        // been written to at least once in the current process.
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("init", ""))
+            Log.d("MouseService", "Clipboard primed")
+        } catch (_: Exception) {}
     }
 
     private fun isTargetApp(pkg: String): Boolean =
