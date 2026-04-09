@@ -117,15 +117,10 @@ class MainActivity : AppCompatActivity() {
         // (iMessage vs Google Messages). Don't auto-detect from the server.
 
         // Start (or restart) the always-on Type Sync WebSocket if paired.
-        // Sending ACTION_START to an already-running service refreshes the
-        // credentials, which is needed after re-pairing with a new phone.
+        // The relay now lives inside MouseAccessibilityService (no foreground
+        // service notification required).
         if (pairingStore.isPaired) {
-            startService(
-                Intent(this, WebKeyboardService::class.java).apply {
-                    action = WebKeyboardService.ACTION_START
-                    putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, pairingStore.flipPhoneNumber)
-                }
-            )
+            MouseAccessibilityService.startRelay(this, pairingStore.flipPhoneNumber)
             Log.d("TYPESYNC", "Started/refreshed Type Sync WebSocket")
         }
 
@@ -236,12 +231,7 @@ class MainActivity : AppCompatActivity() {
                                 // immediately so it's ready by the time the user finishes
                                 // onboarding and starts typing.
                                 val store = PairingStore(this@MainActivity)
-                                startService(
-                                    Intent(this@MainActivity, WebKeyboardService::class.java).apply {
-                                        action = WebKeyboardService.ACTION_START
-                                        putExtra(WebKeyboardService.EXTRA_PHONE_NUMBER, store.flipPhoneNumber)
-                                    }
-                                )
+                                MouseAccessibilityService.startRelay(this@MainActivity, store.flipPhoneNumber)
                                 Log.d("TYPESYNC", "Started/refreshed Type Sync after pairing")
 
                                 // After pairing, send user straight to contact sync

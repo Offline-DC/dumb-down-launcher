@@ -15,6 +15,15 @@ import android.view.KeyEvent
 import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
+import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 @SuppressLint("AccessibilityPolicy")
@@ -106,6 +115,166 @@ class MouseAccessibilityService : AccessibilityService() {
                 false
             }
         }
+
+        // ── Type Sync WebSocket relay ────────────────────────────────────
+        // Lives here instead of a foreground service so there is no
+        // persistent notification.  The AccessibilityService process is
+        // already kept alive by Android.
+
+        private const val RELAY_TAG = "TypeSyncRelay"
+        private const val WS_URL   =
+            "wss://offline-dc-backend-ba4815b2bcc8.herokuapp.com/keyboard/ws"
+
+        @Volatile var relayRunning = false
+            private set
+
+        private val relayHandler = Handler(Looper.getMainLooper())
+        private var relayWebSocket: WebSocket? = null
+        private var relaySecret: String? = null
+        private var relayPhone: String? = null
+        private var relayReconnectCount = 0
+
+        private val relayClient = OkHttpClient.Builder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .pingInterval(20, TimeUnit.SECONDS)
+            .build()
+
+        private const val RELAY_A11Y_WAIT_MS = 5000L
+
+        /**
+         * Start (or restart) the encrypted WebSocket relay.
+         * Safe to call multiple times — tears down the old socket first.
+         */
+        fun startRelay(context: Context, phoneNumber: String?) {
+            val pairing = DeviceLinkReader.readPairing(context)
+            if (pairing == null) {
+                Log.e(RELAY_TAG, "startRelay — no pairing found, cannot start")
+                return
+            }
+            val phone = pairing.flipPhoneNumber.ifBlank { phoneNumber.orEmpty() }
+            if (phone.isBlank()) {
+                Log.e(RELAY_TAG, "startRelay — no phone number available")
+                return
+            }
+
+            // Tear down any existing connection (e.g. re-pairing)
+            if (relayRunning) {
+                Log.i(RELAY_TAG, "startRelay: already running — restarting with fresh credentials")
+                relayHandler.removeCallbacksAndMessages(null)
+                relayWebSocket?.close(1000, "credential refresh")
+                relayWebSocket = null
+                relayReconnectCount = 0
+            }
+
+            relaySecret = pairing.sharedSecret
+            appContext = context.applicationContext
+            ensureAccessibilityEnabled()
+
+            // Wait for a11y service on a background thread, then open the WS
+            Thread {
+                val deadline = System.currentTimeMillis() + RELAY_A11Y_WAIT_MS
+                while (instance == null && System.currentTimeMillis() < deadline) {
+                    try { Thread.sleep(200) } catch (_: InterruptedException) { break }
+                }
+                if (instance != null) {
+                    Log.i(RELAY_TAG, "Accessibility service ready — starting relay")
+                } else {
+                    Log.w(RELAY_TAG, "Accessibility service not ready — starting relay anyway")
+                }
+                relayHandler.post { openRelaySocket(phone) }
+            }.start()
+        }
+
+        fun stopRelay() {
+            relayHandler.removeCallbacksAndMessages(null)
+            try {
+                relayWebSocket?.send(JSONObject().apply {
+                    put("type", "disconnect")
+                    put("role", "phone")
+                }.toString())
+            } catch (_: Exception) {}
+            relayWebSocket?.close(1000, "relay stopped")
+            relayWebSocket = null
+            relayRunning = false
+        }
+
+        private fun openRelaySocket(phoneNumber: String) {
+            relayRunning = true
+            relayPhone = phoneNumber
+            val secret = relaySecret ?: return
+
+            Log.i(RELAY_TAG, "━━━ openRelaySocket ━━━  phone=$phoneNumber  attempt=$relayReconnectCount")
+
+            val request = Request.Builder().url(WS_URL).build()
+            relayWebSocket = relayClient.newWebSocket(request, object : WebSocketListener() {
+
+                override fun onOpen(ws: WebSocket, response: Response) {
+                    relayReconnectCount = 0
+                    val e164 = if (phoneNumber.startsWith("+")) phoneNumber else "+$phoneNumber"
+                    Log.i(RELAY_TAG, "✅ WS open (HTTP ${response.code}) — handshake for $e164")
+
+                    val timestamp = (System.currentTimeMillis() / 1000).toString()
+                    val hmac = TypeSyncCrypto.hmacSha256Hex("$e164$timestamp".toByteArray(), secret)
+                    val handshake = JSONObject().apply {
+                        put("type",        "connect")
+                        put("role",        "phone")
+                        put("phoneNumber", e164)
+                        put("timestamp",   timestamp)
+                        put("hmac",        hmac)
+                    }
+                    ws.send(handshake.toString())
+                }
+
+                override fun onMessage(ws: WebSocket, text: String) {
+                    Log.d(RELAY_TAG, "← $text")
+                    try {
+                        val msg = JSONObject(text)
+                        when (msg.getString("type")) {
+                            "text" -> handleRelayText(msg)
+                            "auth_failed" -> {
+                                Log.e(RELAY_TAG, "❌ Auth failed: ${msg.optString("reason")}")
+                                stopRelay()
+                            }
+                            "companion_connected" -> Log.i(RELAY_TAG, "📱 Companion connected: ${msg.optString("role")}")
+                            "companion_disconnected" -> Log.i(RELAY_TAG, "📵 Companion disconnected")
+                            else -> Log.d(RELAY_TAG, "ignoring type=${msg.getString("type")}")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(RELAY_TAG, "parse failed: ${e.message}")
+                    }
+                }
+
+                override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                    Log.e(RELAY_TAG, "❌ WS failure: ${t.message}")
+                    relayReconnectCount++
+                    if (relayRunning) {
+                        Log.i(RELAY_TAG, "🔄 reconnecting in 3 s (attempt $relayReconnectCount)")
+                        relayHandler.postDelayed({ openRelaySocket(phoneNumber) }, 3_000)
+                    }
+                }
+
+                override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                    Log.i(RELAY_TAG, "🔌 WS closed: code=$code reason=\"$reason\"")
+                }
+            })
+        }
+
+        private fun handleRelayText(msg: JSONObject) {
+            val secret = relaySecret ?: return
+            if (!msg.has("encrypted") || !msg.has("iv")) return
+            try {
+                val ciphertext = TypeSyncCrypto.fromBase64(msg.getString("encrypted"))
+                val iv = TypeSyncCrypto.fromBase64(msg.getString("iv"))
+                val plaintext = TypeSyncCrypto.decryptAesGcm(ciphertext, iv, secret)
+                val text = String(plaintext, Charsets.UTF_8)
+                Log.i(RELAY_TAG, "🔓 decrypted ${text.length} chars")
+                injectText(text)
+            } catch (e: Exception) {
+                Log.e(RELAY_TAG, "❌ Decryption failed", e)
+            }
+        }
+
+        // ── end relay ────────────────────────────────────────────────────────
 
         fun setMouseEnabled(context: Context, enabled: Boolean) {
             instance?.let {

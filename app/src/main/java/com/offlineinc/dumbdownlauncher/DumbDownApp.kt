@@ -1,9 +1,11 @@
 package com.offlineinc.dumbdownlauncher
 
 import android.app.Application
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.location.LocationManager
+import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
@@ -134,6 +136,15 @@ class DumbDownApp : Application() {
         val prefs = getSharedPreferences("migrations", Context.MODE_PRIVATE)
 
         val migrations = mapOf<String, () -> Unit>(
+            // Delete the old "type_sync" notification channel that was used by the
+            // now-removed WebKeyboardService foreground service.
+            "delete_type_sync_channel" to {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                    nm.deleteNotificationChannel("type_sync")
+                    Log.d(tag, "Deleted old type_sync notification channel")
+                }
+            },
             // Disable TCL OTA updater so carrier/OEM updates don't nag or auto-install
             "disable_tcl_fota" to {
                 try {

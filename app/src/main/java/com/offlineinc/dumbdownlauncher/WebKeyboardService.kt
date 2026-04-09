@@ -279,6 +279,13 @@ class WebKeyboardService : Service() {
     private fun ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            // v2: existing installs may have this channel at IMPORTANCE_LOW
+            // (Android never lets apps raise importance after creation).
+            // Delete and recreate so the update silences it for good.
+            val existing = nm.getNotificationChannel(CHANNEL_ID)
+            if (existing != null && existing.importance != NotificationManager.IMPORTANCE_NONE) {
+                nm.deleteNotificationChannel(CHANNEL_ID)
+            }
             if (nm.getNotificationChannel(CHANNEL_ID) == null) {
                 nm.createNotificationChannel(
                     NotificationChannel(
