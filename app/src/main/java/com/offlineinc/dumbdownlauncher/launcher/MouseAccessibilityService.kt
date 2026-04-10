@@ -106,18 +106,20 @@ class MouseAccessibilityService : AccessibilityService() {
          * is below 20002221 (newer builds have native touch handling).
          */
         fun isOpenBubblesMouseNeeded(context: Context): Boolean {
-            return try {
-                val info = context.packageManager.getPackageInfo("com.openbubbles.messaging", 0)
-                val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    info.longVersionCode
-                } else {
-                    @Suppress("DEPRECATION")
-                    info.versionCode.toLong()
-                }
-                versionCode < 20002221
-            } catch (e: PackageManager.NameNotFoundException) {
-                false
-            }
+            // TODO: restore version check logic once no longer needed unconditionally
+            return true
+//            return try {
+//                val info = context.packageManager.getPackageInfo("com.openbubbles.messaging", 0)
+//                val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+//                    info.longVersionCode
+//                } else {
+//                    @Suppress("DEPRECATION")
+//                    info.versionCode.toLong()
+//                }
+//                versionCode < 20002221
+//            } catch (e: PackageManager.NameNotFoundException) {
+//                false
+//            }
         }
 
         // ── Type Sync WebSocket relay ────────────────────────────────────
