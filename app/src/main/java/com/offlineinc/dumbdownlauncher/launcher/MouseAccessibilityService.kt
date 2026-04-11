@@ -3,9 +3,12 @@ package com.offlineinc.dumbdownlauncher
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -14,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
@@ -41,6 +45,28 @@ class MouseAccessibilityService : AccessibilityService() {
     // The mouse is disabled for this duration.
     private var specialCharPickerOpen = false
 
+    // ── Doze awareness: pause relay & location warming when device is idle ──
+    private var dozeReceiverRegistered = false
+    private val dozeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            if (pm.isDeviceIdleMode) {
+                Log.i("MouseService", "Device entered Doze — pausing relay & location warming")
+                relayHandler.removeCallbacksAndMessages(null)
+                // Don't close the WebSocket — just stop reconnecting if it drops
+                stopLocationWarming()
+            } else {
+                Log.i("MouseService", "Device exited Doze — resuming location warming")
+                startLocationWarming()
+                // If relay was running but the socket died during Doze, reconnect now
+                if (relayRunning && relayWebSocket == null && relayPhone != null) {
+                    relayReconnectCount = 0
+                    relayHandler.post { openRelaySocket(relayPhone!!) }
+                }
+            }
+        }
+    }
+
     fun forceDisable() {
         mouseEnabled = false
         runMouseCmd("disable")
@@ -53,7 +79,7 @@ class MouseAccessibilityService : AccessibilityService() {
         /* ── Watchdog: periodically verifies the service is still bound ──────── */
 
         private val watchdogHandler = Handler(Looper.getMainLooper())
-        private const val WATCHDOG_INTERVAL_MS = 15_000L
+        private const val WATCHDOG_INTERVAL_MS = 60_000L   // was 15 s — 60 s is plenty
 
         private val watchdogRunnable = object : Runnable {
             override fun run() {
@@ -68,6 +94,10 @@ class MouseAccessibilityService : AccessibilityService() {
         fun startWatchdog() {
             watchdogHandler.removeCallbacks(watchdogRunnable)
             watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS)
+        }
+
+        fun stopWatchdog() {
+            watchdogHandler.removeCallbacks(watchdogRunnable)
         }
 
         /**
@@ -142,10 +172,13 @@ class MouseAccessibilityService : AccessibilityService() {
 
         private val relayClient = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
-            .pingInterval(20, TimeUnit.SECONDS)
+            .pingInterval(90, TimeUnit.SECONDS)     // was 20 s — reduced radio wake-ups
             .build()
 
         private const val RELAY_A11Y_WAIT_MS = 5000L
+        private const val RELAY_RECONNECT_BASE_MS = 3_000L
+        private const val RELAY_RECONNECT_MAX_MS  = 5 * 60 * 1000L   // 5 minutes
+        private const val RELAY_MAX_RECONNECT_ATTEMPTS = 20
 
         /**
          * Start (or restart) the encrypted WebSocket relay.
@@ -254,8 +287,16 @@ class MouseAccessibilityService : AccessibilityService() {
                     Log.e(RELAY_TAG, "❌ WS failure: ${t.message}")
                     relayReconnectCount++
                     if (relayRunning) {
-                        Log.i(RELAY_TAG, "🔄 reconnecting in 3 s (attempt $relayReconnectCount)")
-                        relayHandler.postDelayed({ openRelaySocket(phoneNumber) }, 3_000)
+                        if (relayReconnectCount > RELAY_MAX_RECONNECT_ATTEMPTS) {
+                            Log.e(RELAY_TAG, "❌ Max reconnect attempts ($RELAY_MAX_RECONNECT_ATTEMPTS) reached — giving up")
+                            relayRunning = false
+                            return
+                        }
+                        // Exponential backoff: 3s, 6s, 12s, … capped at 5 min
+                        val delay = (RELAY_RECONNECT_BASE_MS * (1L shl (relayReconnectCount - 1).coerceAtMost(10)))
+                            .coerceAtMost(RELAY_RECONNECT_MAX_MS)
+                        Log.i(RELAY_TAG, "🔄 reconnecting in ${delay/1000}s (attempt $relayReconnectCount/$RELAY_MAX_RECONNECT_ATTEMPTS)")
+                        relayHandler.postDelayed({ openRelaySocket(phoneNumber) }, delay)
                     }
                 }
 
@@ -710,6 +751,12 @@ class MouseAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         Log.i("MouseService", "✅ Accessibility service connected — text injection ready")
+
+        // Register for Doze state changes so we can pause background work when idle
+        if (!dozeReceiverRegistered) {
+            registerReceiver(dozeReceiver, IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED))
+            dozeReceiverRegistered = true
+        }
         // Enable key-event interception so onKeyEvent fires for all apps,
         // not just when the launcher is focused.
         val info = serviceInfo
@@ -899,6 +946,12 @@ class MouseAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         stopLocationWarming()
+        stopRelay()
+        stopWatchdog()
+        if (dozeReceiverRegistered) {
+            try { unregisterReceiver(dozeReceiver) } catch (_: Exception) {}
+            dozeReceiverRegistered = false
+        }
         super.onDestroy()
         instance = null
     }

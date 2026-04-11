@@ -26,6 +26,9 @@ class TypeSyncService : Service() {
         private const val TAG = "TypeSyncService"
         private const val WS_URL = "wss://offline-dc-backend-ba4815b2bcc8.herokuapp.com/keyboard/ws"
         private const val TEN_MINUTES_MS = 10 * 60 * 1000L
+        private const val RECONNECT_BASE_MS = 3_000L
+        private const val RECONNECT_MAX_MS  = 5 * 60 * 1000L   // 5 minutes
+        private const val MAX_RECONNECT_ATTEMPTS = 20
 
         private var instance: TypeSyncService? = null
 
@@ -35,8 +38,10 @@ class TypeSyncService : Service() {
     private var webSocket: WebSocket? = null
     private var sharedSecret: String? = null
     private var flipPhoneNumber: String? = null
+    private var reconnectCount = 0
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS) // no read timeout for WS
+        .pingInterval(90, TimeUnit.SECONDS)    // keepalive — was missing, needed for long-lived WS
         .build()
     private var shutdownHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val shutdownRunnable = Runnable { stopSelf() }
@@ -101,6 +106,7 @@ class TypeSyncService : Service() {
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                reconnectCount = 0
                 Log.i(TAG, "WebSocket opened, sending authenticated handshake")
                 val handshake = JSONObject().apply {
                     put("type", "connect")
@@ -129,8 +135,17 @@ class TypeSyncService : Service() {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}")
-                // Attempt reconnect after 3 seconds
-                shutdownHandler.postDelayed({ connect() }, 3000)
+                reconnectCount++
+                if (reconnectCount > MAX_RECONNECT_ATTEMPTS) {
+                    Log.e(TAG, "Max reconnect attempts ($MAX_RECONNECT_ATTEMPTS) reached — stopping")
+                    stopSelf()
+                    return
+                }
+                // Exponential backoff: 3s, 6s, 12s, … capped at 5 min
+                val delay = (RECONNECT_BASE_MS * (1L shl (reconnectCount - 1).coerceAtMost(10)))
+                    .coerceAtMost(RECONNECT_MAX_MS)
+                Log.i(TAG, "Reconnecting in ${delay/1000}s (attempt $reconnectCount/$MAX_RECONNECT_ATTEMPTS)")
+                shutdownHandler.postDelayed({ connect() }, delay)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

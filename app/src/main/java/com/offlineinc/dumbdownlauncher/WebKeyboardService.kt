@@ -63,8 +63,14 @@ class WebKeyboardService : Service() {
     private var sharedSecret: String? = null
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)   // no read timeout — WS is long-lived
-        .pingInterval(20, TimeUnit.SECONDS)      // keep-alive pings
+        .pingInterval(90, TimeUnit.SECONDS)      // keep-alive pings (was 20s — reduced for battery)
         .build()
+
+    private companion object ReconnectConfig {
+        const val RECONNECT_BASE_MS = 3_000L
+        const val RECONNECT_MAX_MS  = 5 * 60 * 1000L   // 5 minutes
+        const val MAX_RECONNECT_ATTEMPTS = 20
+    }
 
     // -------------------------------------------------------------------------
     // Service lifecycle
@@ -226,8 +232,17 @@ class WebKeyboardService : Service() {
                 t.cause?.let { Log.e(TAG, "  caused by: ${it.message}") }
                 reconnectCount++
                 if (isRunning) {
-                    Log.i(TAG, "🔄 reconnecting in 3s (attempt $reconnectCount)")
-                    mainHandler.postDelayed({ startRelay(phoneNumber) }, 3_000)
+                    if (reconnectCount > MAX_RECONNECT_ATTEMPTS) {
+                        Log.e(TAG, "❌ Max reconnect attempts ($MAX_RECONNECT_ATTEMPTS) reached — stopping")
+                        shutDown()
+                        sendBroadcast(Intent(ACTION_STOP_BROADCAST))
+                        return
+                    }
+                    // Exponential backoff: 3s, 6s, 12s, … capped at 5 min
+                    val delay = (RECONNECT_BASE_MS * (1L shl (reconnectCount - 1).coerceAtMost(10)))
+                        .coerceAtMost(RECONNECT_MAX_MS)
+                    Log.i(TAG, "🔄 reconnecting in ${delay/1000}s (attempt $reconnectCount/$MAX_RECONNECT_ATTEMPTS)")
+                    mainHandler.postDelayed({ startRelay(phoneNumber) }, delay)
                 }
             }
 
