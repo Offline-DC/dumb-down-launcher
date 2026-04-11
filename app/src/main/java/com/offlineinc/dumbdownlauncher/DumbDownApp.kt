@@ -238,6 +238,27 @@ class DumbDownApp : Application() {
                     Log.w(tag, "Cannot disable com.tcl.fota.system: ${e.message}")
                 }
             },
+            // Remove OpenBubbles from the Doze whitelist. A bug in OpenBubbles'
+            // DartWorker causes a WorkManager crash loop (APNService not started
+            // race condition) that holds wake locks indefinitely when whitelisted.
+            // The APNService foreground service is unaffected by Doze and keeps
+            // the iMessage bridge alive without the whitelist.
+            "remove_openbubbles_doze_whitelist" to {
+                try {
+                    val proc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "dumpsys deviceidle whitelist -com.openbubbles.messaging")
+                    )
+                    val output = proc.inputStream.bufferedReader().readText().trim()
+                    val exit = proc.waitFor()
+                    if (exit == 0) {
+                        Log.d(tag, "Removed OpenBubbles from Doze whitelist: $output")
+                    } else {
+                        Log.w(tag, "Failed to remove OpenBubbles from Doze whitelist (exit=$exit): $output")
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Cannot remove OpenBubbles from Doze whitelist: ${e.message}")
+                }
+            },
         )
 
         for ((key, action) in migrations) {
