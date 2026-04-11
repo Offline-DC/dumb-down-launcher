@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.lifecycleScope
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
+import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
@@ -119,28 +120,35 @@ class MainActivity : AppCompatActivity() {
         // Start (or restart) the always-on Type Sync WebSocket if paired.
         // The relay now lives inside MouseAccessibilityService (no foreground
         // service notification required).
+        // Deferred until network is available — on boot the cellular radio may
+        // not be up yet, which previously caused a crash.
         if (pairingStore.isPaired) {
-            MouseAccessibilityService.startRelay(this, pairingStore.flipPhoneNumber)
-            Log.d("TYPESYNC", "Started/refreshed Type Sync WebSocket")
+            NetworkUtils.whenNetworkAvailable(this) {
+                MouseAccessibilityService.startRelay(this, pairingStore.flipPhoneNumber)
+                Log.d("TYPESYNC", "Started/refreshed Type Sync WebSocket")
+            }
         }
 
-        // Report launcher version to server if it changed since last report
+        // Report launcher version to server if it changed since last report.
+        // Also deferred until network is ready to avoid crash on early boot.
         if (pairingStore.isPaired) {
             val currentVersion = BuildConfig.VERSION_NAME
             if (currentVersion != pairingStore.lastReportedVersion) {
                 val phone = pairingStore.flipPhoneNumber
                 val secret = pairingStore.sharedSecret
                 if (phone != null && secret != null) {
-                    Thread {
-                        try {
-                            val api = PairingApiClient(okhttp3.OkHttpClient())
-                            api.reportVersion(phone, currentVersion, secret)
-                            pairingStore.lastReportedVersion = currentVersion
-                            Log.d("ONBOARDING", "Reported launcher version $currentVersion to server")
-                        } catch (e: Exception) {
-                            Log.w("ONBOARDING", "Failed to report version: ${e.message}")
-                        }
-                    }.start()
+                    NetworkUtils.whenNetworkAvailable(this) {
+                        Thread {
+                            try {
+                                val api = PairingApiClient(okhttp3.OkHttpClient())
+                                api.reportVersion(phone, currentVersion, secret)
+                                pairingStore.lastReportedVersion = currentVersion
+                                Log.d("ONBOARDING", "Reported launcher version $currentVersion to server")
+                            } catch (e: Exception) {
+                                Log.w("ONBOARDING", "Failed to report version: ${e.message}")
+                            }
+                        }.start()
+                    }
                 }
             }
         }
