@@ -56,6 +56,10 @@ class WebKeyboardService : Service() {
 
         private const val A11Y_WAIT_TIMEOUT_MS = 5000L
         private const val A11Y_POLL_MS = 200L
+
+        private const val RECONNECT_BASE_MS = 3_000L
+        private const val RECONNECT_MAX_MS  = 5 * 60 * 1000L   // 5 minutes
+        private const val MAX_RECONNECT_ATTEMPTS = 20
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -65,12 +69,6 @@ class WebKeyboardService : Service() {
         .readTimeout(0, TimeUnit.MILLISECONDS)   // no read timeout — WS is long-lived
         .pingInterval(90, TimeUnit.SECONDS)      // keep-alive pings (was 20s — reduced for battery)
         .build()
-
-    private companion object ReconnectConfig {
-        const val RECONNECT_BASE_MS = 3_000L
-        const val RECONNECT_MAX_MS  = 5 * 60 * 1000L   // 5 minutes
-        const val MAX_RECONNECT_ATTEMPTS = 20
-    }
 
     // -------------------------------------------------------------------------
     // Service lifecycle
