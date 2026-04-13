@@ -26,6 +26,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.offlineinc.dumbdownlauncher.AllAppsActivity
 import com.offlineinc.dumbdownlauncher.MainAppsGridActivity
+import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
@@ -353,9 +354,11 @@ private fun DeviceLinkedContent(
 
     LaunchedEffect(Unit) { mainFocus.requestFocus() }
 
-    // Check if pairing is still active on the backend
+    // Check if pairing is still active on the backend.
+    // Skip when the network isn't available yet (common on early boot) to
+    // avoid a crash before the cellular radio is up.
     LaunchedEffect(Unit) {
-        if (phoneNumber != null) {
+        if (phoneNumber != null && NetworkUtils.isNetworkAvailable(ctx)) {
             withContext(Dispatchers.IO) {
                 try {
                     val apiClient = PairingApiClient(OkHttpClient())
@@ -369,6 +372,8 @@ private fun DeviceLinkedContent(
                     Log.d(TAG, "[Pairing] Status check failed — ${e.message}")
                 }
             }
+        } else if (phoneNumber != null) {
+            Log.d(TAG, "[Pairing] Network not available — skipping backend status check")
         }
     }
 
@@ -501,6 +506,12 @@ private suspend fun confirmPairing(
     phoneNumber: String,
     onResult: (success: Boolean, error: String?) -> Unit
 ) {
+    // Bail early with a friendly message if the network isn't up yet
+    // (e.g. right after boot before cellular is ready).
+    if (!NetworkUtils.isNetworkAvailable(ctx)) {
+        onResult(false, "no internet connection")
+        return
+    }
     try {
         val apiClient = PairingApiClient(OkHttpClient())
         val result = withContext(Dispatchers.IO) {

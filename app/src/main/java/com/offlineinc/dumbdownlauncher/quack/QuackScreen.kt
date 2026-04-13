@@ -374,7 +374,12 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
                     Key.SoftRight -> {
-                        if (!accepted) { viewModel.acceptRules(); true }
+                        // Only accept on a fresh press (repeatCount == 0).
+                        // Held-down keys arrive as repeats and are consumed
+                        // but ignored — prevents accept→home→back-to-rules.
+                        val repeat = event.nativeKeyEvent.repeatCount
+                        if (!accepted && repeat == 0) { viewModel.acceptRules(); true }
+                        else if (!accepted) true   // consume repeats
                         else false
                     }
                     Key.Back, Key.SoftLeft -> { viewModel.exitRules(); true }
