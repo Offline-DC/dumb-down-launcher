@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,6 +30,10 @@ fun PermissionsCard(
     var buttonFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
 
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -51,6 +56,7 @@ fun PermissionsCard(
 
             Box(
                 modifier = Modifier
+                    .fillMaxWidth()
                     .focusRequester(focusRequester)
                     .onFocusChanged { buttonFocused = it.isFocused }
                     .focusable()

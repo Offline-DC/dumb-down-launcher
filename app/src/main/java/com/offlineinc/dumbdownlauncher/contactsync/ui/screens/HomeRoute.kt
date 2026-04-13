@@ -51,8 +51,15 @@ fun HomeRoute(
 
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ ->
+    ) { grants ->
         vm.refreshPermissions(ctx)
+        // If permission was just granted, kick off a fresh connection attempt
+        // so the user doesn't have to back out and re-enter the page
+        val granted = grants.values.all { it }
+        if (granted && !vm.isSyncing) {
+            vm.resetForReconnect()
+            vm.connectWebSocket(ctx)
+        }
     }
 
     HomeScreen(

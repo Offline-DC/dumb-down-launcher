@@ -82,13 +82,12 @@ fun DumbButton(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
             .background(
                 if (focused) DumbTheme.Colors.Yellow
                 else DumbTheme.Colors.White.copy(alpha = 0.08f),
                 RoundedCornerShape(DumbTheme.Corner.Medium)
             )
-            .padding(vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         BasicText(

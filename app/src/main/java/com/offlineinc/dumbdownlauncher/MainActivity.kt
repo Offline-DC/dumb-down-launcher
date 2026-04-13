@@ -113,6 +113,7 @@ class MainActivity : AppCompatActivity() {
             else -> null
         }
         Log.d("ONBOARDING", "onCreate: isPaired=${pairingStore.isPaired} platform=$platformChoice linking=$linkingChoice step=${onboardingStep.value}")
+        Log.i("ONBOARDING", "onCreate: stripeProductIds=${pairingStore.stripeProductIds}")
 
         // Platform (ios/android) is set solely by IntentChoiceScreen
         // (iMessage vs Google Messages). Don't auto-detect from the server.
@@ -215,9 +216,9 @@ class MainActivity : AppCompatActivity() {
                                 MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                 Log.d("ONBOARDING", "Intent choice: $choice linking=${PlatformPreferences.getLinkingChoice(this@MainActivity)}")
                                 if (choice == "none" && PlatformPreferences.getLinkingChoice(this@MainActivity) != true) {
-                                    // Not linking + super dumb — skip everything, go home
+                                    // Not linking + super dumb — skip smart txt, show done screen
                                     markMouseTutorialDone()
-                                    onboardingStep.value = null
+                                    onboardingStep.value = "onboarding_complete"
                                 } else {
                                     onboardingStep.value = if (isMouseTutorialDone()) null else "mousetutorial"
                                 }

@@ -30,6 +30,17 @@ class PairingStore(context: Context) {
         set(v) = prefs.edit().putString("last_reported_version", v).apply()
 
     /**
+     * Stripe product IDs associated with this phone line's subscription.
+     * Stored as a comma-separated string; null if not yet fetched or not found.
+     */
+    var stripeProductIds: List<String>?
+        get() {
+            val raw = prefs.getString("stripe_product_ids", null) ?: return null
+            return if (raw.isEmpty()) emptyList() else raw.split(",")
+        }
+        set(v) = prefs.edit().putString("stripe_product_ids", v?.joinToString(",")).apply()
+
+    /**
      * Write all pairing credentials in a single atomic commit so downstream
      * readers never see a partial state (e.g. isPaired=true but secret empty).
      */
