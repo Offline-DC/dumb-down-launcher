@@ -149,13 +149,13 @@ class DumbDownApp : Application() {
                     Log.d(tag, "Deleted old type_sync notification channel")
                 }
             },
-            // Create a 512 MB swap file to give low-RAM devices more headroom
+            // Create a 256 MB swap file to give low-RAM devices more headroom
             // for memory-hungry apps (Uber Lite, WhatsApp, Chrome, etc.).
             // Removes any existing swap file first to avoid wasting space.
-            "create_swap_512m" to {
+            "create_swap_256m" to {
                 val swapTag = "SwapSetup"
                 val swapFile = "/data/swapfile"
-                val sizeMb = 512
+                val sizeMb = 256
                 try {
                     Log.i(swapTag, "━━━ Starting $sizeMb MB swap setup ━━━")
 
@@ -314,7 +314,7 @@ class DumbDownApp : Application() {
 
     /**
      * Activates the swap file if it exists and isn't already active.
-     * The file is created by the "create_swap_512m" migration; this just
+     * The file is created by the "create_swap_256m" migration; this just
      * re-enables it after every reboot.
      */
     private fun enableSwapIfPresent() {

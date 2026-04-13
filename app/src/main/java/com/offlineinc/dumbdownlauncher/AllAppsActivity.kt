@@ -89,10 +89,16 @@ class AllAppsActivity : AppCompatActivity() {
 
             val resolved = pm.queryIntentActivities(intent, 0)
 
+            val pairingStore = com.offlineinc.dumbdownlauncher.pairing.PairingStore(context)
+            val audioPackagesToHide = if (pairingStore.hideAudioBundle)
+                MouseAccessibilityService.AUDIO_APP_PACKAGES
+            else emptySet()
+
             val appItems = resolved.mapNotNull { ri ->
                 val activityInfo = ri.activityInfo ?: return@mapNotNull null
                 val pkg = activityInfo.packageName
                 if (pkg in hiddenPackages) return@mapNotNull null
+                if (pkg in audioPackagesToHide) return@mapNotNull null
                 val appInfo = activityInfo.applicationInfo
                 try {
                     val defaultLabel = pm.getApplicationLabel(appInfo).toString()
@@ -112,10 +118,9 @@ class AllAppsActivity : AppCompatActivity() {
                 .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
                 .toMutableList()
 
-            val pairingStore = com.offlineinc.dumbdownlauncher.pairing.PairingStore(context)
-
-            // Show contact sync (built-in) when paired
-            if (pairingStore.isPaired) {
+            // Show contact sync (built-in) when paired, unless smart txt is hidden
+            // (hideSmartTxt subscribers don't have access to contact sync)
+            if (pairingStore.isPaired && !pairingStore.hideSmartTxt) {
                 appItems.add(AppItem(
                     packageName = CONTACT_SYNC,
                     label = "contact sync",
@@ -150,12 +155,14 @@ class AllAppsActivity : AppCompatActivity() {
                 ))
             }
 
-            appItems.add(AppItem(
-                packageName = DEVICE_SETUP,
-                label = "device setup",
-                icon = pm.defaultActivityIcon,
-                launchComponent = null,
-            ))
+            if (!pairingStore.hideSmartTxt) {
+                appItems.add(AppItem(
+                    packageName = DEVICE_SETUP,
+                    label = "device setup",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                ))
+            }
             appItems.add(AppItem(
                 packageName = CHECK_UPDATES,
                 label = "updates",
@@ -267,7 +274,12 @@ class AllAppsActivity : AppCompatActivity() {
                         )
                         overridePendingTransition(0, 0)
                     }
-                    else -> launchApp(item)
+                    else -> {
+                        if (item.packageName in MouseAccessibilityService.AUDIO_APP_PACKAGES) {
+                            MouseAccessibilityService.setMouseEnabled(this@AllAppsActivity, true)
+                        }
+                        launchApp(item)
+                    }
                 }
                 },
                 onBack = { finish() },

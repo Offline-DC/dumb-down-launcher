@@ -50,6 +50,16 @@ class MouseAccessibilityService : AccessibilityService() {
         /** Shared single-thread executor for all shell commands — avoids raw Thread{} churn. */
         private val shellExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
+        /**
+         * Audio apps that require mouse support and should be hidden when the
+         * audio bundle is already included in the user's subscription.
+         */
+        val AUDIO_APP_PACKAGES = setOf(
+            "de.danoeh.antennapod",   // AntennaPod
+            "com.spotify.music",      // Spotify
+            "com.apple.android.music" // Apple Music
+        )
+
         /* ── Watchdog: periodically verifies the service is still bound ──────── */
 
         private val watchdogHandler = Handler(Looper.getMainLooper())
@@ -639,6 +649,7 @@ class MouseAccessibilityService : AccessibilityService() {
             || pkg == "org.chromium.chrome"
             || pkg == "com.google.android.apps.mapslite"
             || pkg == "com.ubercab.uberlite"
+            || pkg in AUDIO_APP_PACKAGES
 
     // Returns true if a target-app window is currently on screen.
     // Used to sync mouseEnabled on service (re)connect.
