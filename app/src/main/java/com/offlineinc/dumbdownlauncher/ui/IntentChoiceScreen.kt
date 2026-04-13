@@ -28,8 +28,8 @@ fun IntentChoiceScreen(
 ) {
     // Pairs of (display label, internal value)
     val options = listOf(
-        "imessage"        to "ios",
-        "google messages" to "android",
+        "ios"             to "ios",
+        "android"         to "android",
         "none - super dumb" to "none",
     )
 
@@ -73,7 +73,7 @@ fun IntentChoiceScreen(
             verticalArrangement = Arrangement.Center
         ) {
             BasicText(
-                text = "what do u want?",
+                text = "what texts are u syncing?",
                 style = DumbTheme.Text.PageTitle,
                 modifier = Modifier.padding(bottom = 24.dp)
             )
