@@ -25,28 +25,36 @@ object PhoneNumberReader {
 
     fun read(ctx: Context): Pair<String?, String?> {
         return try {
+            // 1. Setup-script-written values (most reliable on MediaTek flip phones):
+            //    automated_configuration.sh writes the number to Settings.Secure and
+            //    content://telephony/siminfo during provisioning, so check these first.
+            val scriptNumber = readViaSu()
+            if (scriptNumber != null) {
+                Log.i(TAG, "Got phone number via setup-script store")
+                return formatE164(scriptNumber) to null
+            }
+
+            // 2. SubscriptionManager (Android 13+) — SIM API, unreliable on MediaTek
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val subManager = ctx.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
                 val subs = subManager?.activeSubscriptionInfoList
                 val number = subs?.firstOrNull()?.number
                 if (!number.isNullOrBlank()) {
+                    Log.i(TAG, "Got phone number via SubscriptionManager")
                     return formatE164(number) to null
                 }
             }
+
+            // 3. TelephonyManager.getLine1Number — deprecated SIM API, last resort
             @Suppress("DEPRECATION")
             val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
             val line = tm?.line1Number
             if (!line.isNullOrBlank()) {
+                Log.i(TAG, "Got phone number via TelephonyManager")
                 return formatE164(line) to null
             }
 
-            val rootNumber = readViaSu()
-            if (rootNumber != null) {
-                Log.i(TAG, "Got phone number via root fallback")
-                return formatE164(rootNumber) to null
-            }
-
-            Log.e(TAG, "SIM did not provide phone number (all methods exhausted)")
+            Log.e(TAG, "Phone number not available (all methods exhausted)")
             null to "unable to read phone number from SIM"
         } catch (e: SecurityException) {
             Log.w(TAG, "Need phone permission", e)

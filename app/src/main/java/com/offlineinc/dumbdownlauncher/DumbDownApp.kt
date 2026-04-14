@@ -10,6 +10,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
+import com.offlineinc.dumbdownlauncher.quack.LocationCacheWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 
 class DumbDownApp : Application() {
@@ -18,6 +19,7 @@ class DumbDownApp : Application() {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
         ensureNetworkLocationEnabled()
+        LocationCacheWorker.schedule(this)
         // Update FlipMouse (DumbMouse) binary if a newer version is bundled
         Thread { FlipMouseUpdater.checkAndUpdate(this) }.start()
         // Ensure the mouse accessibility service is bound at startup so it's

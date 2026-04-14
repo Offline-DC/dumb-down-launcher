@@ -302,20 +302,25 @@ class MouseAccessibilityService : AccessibilityService() {
             textInjectorExecutor.execute {
                 Log.d("MouseService", "injectText via blind clipboard paste for ${text.length} chars")
 
-                // If the a11y service isn't bound yet, try to force-enable it and
-                // wait up to 1.5 s for Android to bind it before we fall back to
-                // the shell keyevent path (which doesn't work in all apps).
+                // If the a11y service isn't bound yet, try to force-enable it.
+                // If we already know it's down (a11yKnownDown=true), skip the
+                // 5-second wait entirely and go straight to keyevent — otherwise
+                // every typed word costs a 5s stall while the service is out.
                 if (instance == null) {
-                    Log.w("MouseService", "injectText: a11y instance null — calling ensureAccessibilityEnabled and waiting for bind")
-                    ensureAccessibilityEnabled()
-                    val deadline = System.currentTimeMillis() + 5000L
-                    while (instance == null && System.currentTimeMillis() < deadline) {
-                        try { Thread.sleep(100) } catch (_: InterruptedException) { break }
-                    }
-                    if (instance != null) {
-                        Log.i("MouseService", "injectText: a11y service bound after wait — proceeding with ACTION_PASTE")
+                    if (a11yKnownDown) {
+                        // Service is known-down; watchdog is already working on it.
+                        // Don't block — go straight to keyevent fallback.
+                        Log.d("MouseService", "injectText: a11y known-down — skipping wait, using keyevent")
                     } else {
-                        Log.w("MouseService", "injectText: a11y service still null after 5 s — keyevent fallback will be used")
+                        Log.w("MouseService", "injectText: a11y instance null — calling ensureAccessibilityEnabled and waiting for bind")
+                        ensureAccessibilityEnabled()
+                        // ensureAccessibilityEnabled already waited up to 6s and toggled
+                        // the setting; check the result rather than waiting again.
+                        if (instance != null) {
+                            Log.i("MouseService", "injectText: a11y service bound — proceeding with ACTION_PASTE")
+                        } else {
+                            Log.w("MouseService", "injectText: a11y service still null — keyevent fallback will be used")
+                        }
                     }
                 }
 
@@ -339,26 +344,67 @@ class MouseAccessibilityService : AccessibilityService() {
         @Volatile var lastToggleTimestamp: Long = 0L
             private set
 
-        /** How long to wait for Android to bind the service on cold start (ms). */
+        /**
+         * True once we've confirmed the service is not coming back on its own.
+         * Cleared in [onServiceConnected] when the service binds again.
+         * Used by [injectText] to skip the 5s wait and go straight to keyevent,
+         * avoiding the "each word takes 5 seconds" problem when the service is down.
+         */
+        @Volatile var a11yKnownDown = false
+
+        /** How long to wait for Android to bind the service after a settings toggle (ms). */
         private const val INITIAL_BIND_GRACE_MS = 3000L
 
         /**
-         * Waits for the accessibility service to bind naturally.
-         * Registration is handled externally (Magisk module) — this just
-         * blocks briefly so callers don't have to poll themselves.
+         * Ensures the accessibility service is bound. First waits briefly for
+         * natural binding, then actively toggles the secure setting via root to
+         * force Android to rebind the service if it hasn't appeared on its own.
          */
         fun ensureAccessibilityEnabled() {
             if (instance != null) return
             if (!enabling.compareAndSet(false, true)) return
             try {
-                val deadline = System.currentTimeMillis() + INITIAL_BIND_GRACE_MS
-                while (instance == null && System.currentTimeMillis() < deadline) {
+                // Stage 1: wait briefly for natural binding (e.g. just started)
+                val deadline1 = System.currentTimeMillis() + INITIAL_BIND_GRACE_MS
+                while (instance == null && System.currentTimeMillis() < deadline1) {
                     try { Thread.sleep(200) } catch (_: InterruptedException) { break }
                 }
                 if (instance != null) {
-                    Log.i("MouseService", "ensureAccessibilityEnabled: service bound")
+                    Log.i("MouseService", "ensureAccessibilityEnabled: service bound naturally")
+                    a11yKnownDown = false
+                    return
+                }
+
+                // Stage 2: actively toggle the setting to force Android to rebind.
+                // Some devices (especially MediaTek) require a settings write after
+                // a process restart before the system will re-deliver the service bind.
+                Log.i("MouseService", "ensureAccessibilityEnabled: not bound — toggling setting to force rebind")
+                lastToggleTimestamp = android.os.SystemClock.uptimeMillis()
+                try {
+                    ProcessBuilder(
+                        "su", "-c",
+                        // Write the service ID fresh — Android watches this key and
+                        // rebinds any newly-listed services within a few seconds.
+                        "settings put secure enabled_accessibility_services $A11Y_SERVICE_ID && " +
+                        "settings put secure accessibility_enabled 1"
+                    ).redirectErrorStream(true).start().waitFor()
+                } catch (e: Exception) {
+                    Log.w("MouseService", "ensureAccessibilityEnabled: settings toggle failed: ${e.message}")
+                }
+
+                // Stage 3: wait again after the toggle
+                val deadline2 = System.currentTimeMillis() + INITIAL_BIND_GRACE_MS
+                while (instance == null && System.currentTimeMillis() < deadline2) {
+                    try { Thread.sleep(200) } catch (_: InterruptedException) { break }
+                }
+
+                if (instance != null) {
+                    Log.i("MouseService", "ensureAccessibilityEnabled: service bound after toggle")
+                    a11yKnownDown = false
                 } else {
                     Log.i("MouseService", "ensureAccessibilityEnabled: not bound yet — watchdog will retry in ${WATCHDOG_INTERVAL_MS / 1000}s")
+                    // Mark as known-down so injectText stops waiting 5s on every call
+                    a11yKnownDown = true
                 }
             } finally {
                 enabling.set(false)
@@ -605,6 +651,7 @@ class MouseAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        a11yKnownDown = false
         Log.i("MouseService", "✅ Accessibility service connected — text injection ready")
         // Enable key-event interception so onKeyEvent fires for all apps,
         // not just when the launcher is focused.

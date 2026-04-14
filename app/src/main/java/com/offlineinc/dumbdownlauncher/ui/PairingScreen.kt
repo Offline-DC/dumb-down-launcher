@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +39,16 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 private const val TAG = "PairingScreen"
+
+/**
+ * Pairing screen states:
+ *  - LOADING:     reading phone number in background (retries happening)
+ *  - ERROR:       retries exhausted — show support number
+ *  - READY:       phone number known, show pairing code entry
+ *  - PAIRING:     pairing API call in progress
+ *  - PAIRED:      success, navigating forward
+ */
+private enum class ScreenState { LOADING, ERROR, READY, PAIRING, PAIRED }
 
 /**
  * Full-screen pairing code entry — shown during onboarding before the
@@ -78,30 +87,27 @@ fun PairingScreen(
     val scope = rememberCoroutineScope()
     var skipFocused by remember { mutableStateOf(false) }
 
+    var screenState by remember { mutableStateOf(ScreenState.LOADING) }
     var phoneNumber by remember { mutableStateOf<String?>(null) }
-    var phoneError by remember { mutableStateOf<String?>(null) }
     var pairingCode by remember { mutableStateOf("") }
-    var isPairing by remember { mutableStateOf(false) }
-    var isPaired by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     // Retry-aware phone number reader — SIM may not be ready immediately,
-    // so retry with increasing delays before showing an error.
-    // Uses 8 attempts with back-off (1s, 1s, 2s, 2s, 3s, 3s, 4s) ≈ 16s total,
-    // giving the SIM and root fallback plenty of time.
+    // so retry with increasing delays before falling back to the #686# flow.
+    // Uses 8 attempts with back-off (1s, 1s, 2s, 2s, 3s, 3s, 4s) ≈ 16s total.
     suspend fun readPhoneNumberWithRetry() {
-        phoneError = null
+        screenState = ScreenState.LOADING
         val maxAttempts = 8
         repeat(maxAttempts) { attempt ->
             val result = readPhoneNumber(ctx)
             if (result.first != null) {
                 phoneNumber = result.first
-                phoneError = null
+                screenState = ScreenState.READY
                 return
             }
-            // On last attempt, surface the error
             if (attempt == maxAttempts - 1) {
-                phoneError = result.second
+                // All retries exhausted — show error with support number
+                screenState = ScreenState.ERROR
                 return
             }
             val delayMs = ((attempt / 2) + 1) * 1000L
@@ -110,12 +116,11 @@ fun PairingScreen(
         }
     }
 
-    // Try reading the phone number on every resume — covers the case where
-    // the permission dialog was up and the user just granted it.
+    // On resume: kick off the retry loop only if still in the initial loading state.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && phoneNumber == null) {
+            if (event == Lifecycle.Event.ON_RESUME && screenState == ScreenState.LOADING && phoneNumber == null) {
                 scope.launch { readPhoneNumberWithRetry() }
             }
         }
@@ -125,7 +130,7 @@ fun PairingScreen(
 
     // Re-read phone number once su permission grant completes
     LaunchedEffect(permissionsReady) {
-        if (permissionsReady && phoneNumber == null) {
+        if (permissionsReady && phoneNumber == null && screenState == ScreenState.LOADING) {
             readPhoneNumberWithRetry()
         }
     }
@@ -135,8 +140,8 @@ fun PairingScreen(
     }
 
     // Navigate forward after successful pairing
-    LaunchedEffect(isPaired) {
-        if (isPaired) {
+    LaunchedEffect(screenState) {
+        if (screenState == ScreenState.PAIRED) {
             delay(800)
             onPaired()
         }
@@ -172,43 +177,49 @@ fun PairingScreen(
                     return@onPreviewKeyEvent true
                 }
 
-                // Number key input (0-9) via D-pad numpad
-                val digit = keyToDigit(event.key)
-                if (digit != null && pairingCode.length < 4 && !isPairing && !isPaired) {
-                    pairingCode += digit
-                    error = null
-                    return@onPreviewKeyEvent true
+                // ── State-specific key handling ─────────────────────────
+
+                when (screenState) {
+                    // Normal pairing code entry
+                    ScreenState.READY -> {
+                        val digit = keyToDigit(event.key)
+                        if (digit != null && pairingCode.length < 4) {
+                            pairingCode += digit
+                            error = null
+                            return@onPreviewKeyEvent true
+                        }
+                        return@onPreviewKeyEvent when (event.key) {
+                            Key.Back, Key.Backspace, Key.Delete -> {
+                                if (pairingCode.isNotEmpty()) {
+                                    pairingCode = pairingCode.dropLast(1)
+                                    true
+                                } else false
+                            }
+                            Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+                                if (pairingCode.length == 4 && phoneNumber != null) {
+                                    screenState = ScreenState.PAIRING
+                                    error = null
+                                    scope.launch {
+                                        confirmPairing(ctx, pairingCode, phoneNumber!!) { success, err ->
+                                            if (success) {
+                                                screenState = ScreenState.PAIRED
+                                            } else {
+                                                screenState = ScreenState.READY
+                                                error = err
+                                            }
+                                        }
+                                    }
+                                    true
+                                } else false
+                            }
+                            else -> false
+                        }
+                    }
+
+                    ScreenState.LOADING, ScreenState.ERROR, ScreenState.PAIRING, ScreenState.PAIRED -> { /* ignore input */ }
                 }
 
-                when (event.key) {
-                    // Back / backspace / delete → remove last digit
-                    Key.Back, Key.Backspace, Key.Delete -> {
-                        if (pairingCode.isNotEmpty() && !isPairing) {
-                            pairingCode = pairingCode.dropLast(1)
-                            true
-                        } else false
-                    }
-                    // Enter / center → confirm pairing
-                    Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                        if (pairingCode.length == 4 && phoneNumber != null && !isPairing && !isPaired) {
-                            isPairing = true
-                            error = null
-                            scope.launch {
-                                confirmPairing(ctx, pairingCode, phoneNumber!!) { success, err ->
-                                    if (success) {
-                                        isPaired = true
-                                        isPairing = false
-                                    } else {
-                                        isPairing = false
-                                        error = err
-                                    }
-                                }
-                            }
-                            true
-                        } else false
-                    }
-                    else -> false
-                }
+                false
             }
     ) {
         Column(
@@ -230,93 +241,111 @@ fun PairingScreen(
                 modifier = Modifier.padding(bottom = 10.dp)
             )
 
-            if (phoneError != null) {
-                BasicText(
-                    text = phoneError!!,
-                    style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                    modifier = Modifier.padding(vertical = 16.dp)
-                )
-            } else if (phoneNumber != null) {
-                Row(modifier = Modifier.padding(bottom = 10.dp)) {
+            when (screenState) {
+                // ── Loading: reading phone number in background ──────
+                ScreenState.LOADING -> {
+                    BasicText(
+                        text = "reading phone number...",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                }
+
+                // ── Error: couldn't read number — call support ───────
+                ScreenState.ERROR -> {
+                    BasicText(
+                        text = "couldn't read ur phone number",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    BasicText(
+                        text = "call the dumb line for help:",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
+                        modifier = Modifier.padding(bottom = 2.dp)
+                    )
+                    BasicText(
+                        text = "404-716-3605",
+                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
+                    )
+                }
+
+                // ── Ready: phone number known, show code entry ───────
+                ScreenState.READY, ScreenState.PAIRING, ScreenState.PAIRED -> {
+                    Row(modifier = Modifier.padding(bottom = 10.dp)) {
                         BasicText(
                             text = "ur dumb #: ",
                             style = DumbTheme.Text.Subtitle
                         )
                         BasicText(
-                            text = formatDisplay(phoneNumber!!),
+                            text = formatDisplay(phoneNumber ?: ""),
                             style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
                         )
                     }
 
-                BasicText(
-                    text = "enter code from app",
-                    style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+                    BasicText(
+                        text = "enter code from app",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
 
-                // 4 digit boxes
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 10.dp)
-                ) {
-                    for (i in 0 until 4) {
-                        val char = if (pairingCode.length > i) pairingCode[i].toString() else ""
-                        val isCurrent = i == pairingCode.length && !isPaired
-                        Box(
-                            modifier = Modifier
-                                .size(52.dp)
-                                .background(
-                                    if (isCurrent) DumbTheme.Colors.Yellow.copy(alpha = 0.15f)
-                                    else DumbTheme.Colors.White.copy(alpha = 0.1f),
-                                    RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            BasicText(
-                                text = char,
-                                style = TextStyle(
-                                    fontFamily = DumbTheme.BioRhyme,
-                                    fontSize = 32.sp,
-                                    color = DumbTheme.Colors.Yellow
+                    // 4 digit boxes
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    ) {
+                        for (i in 0 until 4) {
+                            val char = if (pairingCode.length > i) pairingCode[i].toString() else ""
+                            val isCurrent = i == pairingCode.length && screenState != ScreenState.PAIRED
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .background(
+                                        if (isCurrent) DumbTheme.Colors.Yellow.copy(alpha = 0.15f)
+                                        else DumbTheme.Colors.White.copy(alpha = 0.1f),
+                                        RoundedCornerShape(8.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                BasicText(
+                                    text = char,
+                                    style = TextStyle(
+                                        fontFamily = DumbTheme.BioRhyme,
+                                        fontSize = 32.sp,
+                                        color = DumbTheme.Colors.Yellow
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
-                }
 
-                // Error display
-                if (error != null) {
-                    BasicText(
-                        text = error!!,
-                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                }
-
-                // Status — only show when there's something to say
-                val statusText = when {
-                    isPaired -> "paired!"
-                    isPairing -> "pairing..."
-                    pairingCode.length == 4 -> "press ok to pair"
-                    else -> null
-                }
-                if (statusText != null) {
-                    val statusColor = if (isPairing) DumbTheme.Colors.Gray else DumbTheme.Colors.Yellow
-                    BasicText(
-                        text = statusText,
-                        style = DumbTheme.Text.Subtitle.copy(
-                            color = statusColor,
-                            textAlign = TextAlign.Center
+                    // Error display
+                    if (error != null) {
+                        BasicText(
+                            text = error!!,
+                            style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow),
+                            modifier = Modifier.padding(bottom = 4.dp)
                         )
-                    )
+                    }
+
+                    // Status
+                    val statusText = when (screenState) {
+                        ScreenState.PAIRED -> "paired!"
+                        ScreenState.PAIRING -> "pairing..."
+                        else -> if (pairingCode.length == 4) "press ok to pair" else null
+                    }
+                    if (statusText != null) {
+                        val statusColor = if (screenState == ScreenState.PAIRING) DumbTheme.Colors.Gray
+                                          else DumbTheme.Colors.Yellow
+                        BasicText(
+                            text = statusText,
+                            style = DumbTheme.Text.Subtitle.copy(
+                                color = statusColor,
+                                textAlign = TextAlign.Center
+                            )
+                        )
+                    }
                 }
-            } else if (phoneNumber == null && phoneError == null) {
-                BasicText(
-                    text = "reading phone number...",
-                    style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
-                    modifier = Modifier.padding(top = 16.dp)
-                )
             }
         }
 

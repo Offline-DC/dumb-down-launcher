@@ -54,4 +54,14 @@ object PlatformPreferences {
         }
         return flag
     }
+
+    /**
+     * Wipes all setup state (platform choice, linking choice, platform dialog flag).
+     * After calling this the next app launch will return the user to the beginning
+     * of the onboarding flow.
+     */
+    fun clearAll(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().clear().apply()
+    }
 }

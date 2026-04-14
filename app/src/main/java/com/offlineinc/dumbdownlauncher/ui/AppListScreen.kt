@@ -35,6 +35,7 @@ fun AppListScreen(
     titleEndLabel: String? = null,
     items: List<AppItem>,
     onActivate: (AppItem) -> Unit,
+    onLongActivate: ((AppItem) -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     showSoftKeys: Boolean = true,
     softKeyLeftLabel: String = "Notifications",
@@ -51,6 +52,11 @@ fun AppListScreen(
     var selectedIndex by remember { mutableIntStateOf(0) }
     var didWrap by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+    // Long-press detection state for center/enter key:
+    // - centerKeyDown: true while the key is physically held
+    // - longPressConsumed: true once the long-press action has fired (suppress key-up activation)
+    var centerKeyDown by remember { mutableStateOf(false) }
+    var longPressConsumed by remember { mutableStateOf(false) }
 
     LaunchedEffect(items.size) {
         selectedIndex = selectedIndex.coerceIn(0, (items.lastIndex).coerceAtLeast(0))
@@ -90,56 +96,79 @@ fun AppListScreen(
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-
                 when (event.key) {
-                    Key.DirectionDown -> {
-                        if (items.isNotEmpty()) {
-                            val next = (selectedIndex + 1) % items.size
-                            didWrap = next == 0
-                            selectedIndex = next
-                        }
-                        true
-                    }
-                    Key.DirectionUp -> {
-                        if (items.isNotEmpty()) {
-                            val next = (selectedIndex - 1 + items.size) % items.size
-                            didWrap = next == items.lastIndex
-                            selectedIndex = next
-                        }
-                        true
-                    }
                     Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                        if (items.isNotEmpty()) {
-                            val item = items[selectedIndex]
-                            if (item.packageName == DND_TOGGLE) {
-                                onToggleMessagesMuted?.invoke(!messagesMuted)
-                                true
-                            } else {
-                                onActivate(item)
+                        when (event.type) {
+                            KeyEventType.KeyDown -> {
+                                if (items.isEmpty()) return@onPreviewKeyEvent true
+                                val item = items[selectedIndex]
+                                val repeatCount = event.nativeKeyEvent.repeatCount
+                                if (repeatCount == 0) {
+                                    // First press — start tracking, don't activate yet
+                                    centerKeyDown = true
+                                } else if (repeatCount >= 4 && !longPressConsumed && onLongActivate != null && item.packageName != DND_TOGGLE) {
+                                    // Long-press threshold reached (~600 ms hold)
+                                    longPressConsumed = true
+                                    onLongActivate(item)
+                                }
+                                true // always consume KeyDown for this key
+                            }
+                            KeyEventType.KeyUp -> {
+                                if (items.isNotEmpty() && centerKeyDown && !longPressConsumed) {
+                                    // Key released without long-press — treat as normal tap
+                                    val item = items[selectedIndex]
+                                    if (item.packageName == DND_TOGGLE) {
+                                        onToggleMessagesMuted?.invoke(!messagesMuted)
+                                    } else {
+                                        onActivate(item)
+                                    }
+                                }
+                                // Reset for next press
+                                centerKeyDown = false
+                                longPressConsumed = false
                                 true
                             }
-                        } else true
+                            else -> false
+                        }
                     }
-                    Key.Back -> {
-                        onBack?.invoke()
-                        onBack != null
+                    else -> {
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.DirectionDown -> {
+                                if (items.isNotEmpty()) {
+                                    val next = (selectedIndex + 1) % items.size
+                                    didWrap = next == 0
+                                    selectedIndex = next
+                                }
+                                true
+                            }
+                            Key.DirectionUp -> {
+                                if (items.isNotEmpty()) {
+                                    val next = (selectedIndex - 1 + items.size) % items.size
+                                    didWrap = next == items.lastIndex
+                                    selectedIndex = next
+                                }
+                                true
+                            }
+                            Key.Back -> {
+                                onBack?.invoke()
+                                onBack != null
+                            }
+                            Key.Menu -> {
+                                if (showSoftKeys && onSoftKeyLeft != null) {
+                                    onSoftKeyLeft.invoke()
+                                    true
+                                } else false
+                            }
+                            Key.B -> {
+                                if (showSoftKeys && onSoftKeyRight != null) {
+                                    onSoftKeyRight.invoke()
+                                    true
+                                } else false
+                            }
+                            else -> false
+                        }
                     }
-
-                    Key.Menu -> {
-                        if (showSoftKeys && onSoftKeyLeft != null) {
-                            onSoftKeyLeft.invoke()
-                            true
-                        } else false
-                    }
-                    Key.B -> {
-                        if (showSoftKeys && onSoftKeyRight != null) {
-                            onSoftKeyRight.invoke()
-                            true
-                        } else false
-                    }
-
-                    else -> false
                 }
             }
     ) {

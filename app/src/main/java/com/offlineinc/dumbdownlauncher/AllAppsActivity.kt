@@ -25,6 +25,7 @@ import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.model.AppItem
+import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.ui.AppListScreen
 
 class AllAppsActivity : AppCompatActivity() {
@@ -206,6 +207,18 @@ class AllAppsActivity : AppCompatActivity() {
                 title = "all apps",
                 titleEndLabel = "v${BuildConfig.VERSION_NAME}",
                 items = items,
+                onLongActivate = { item ->
+                    if (item.packageName == DEVICE_SETUP) {
+                        // Clear all setup state so the next launch returns to onboarding
+                        PlatformPreferences.clearAll(this@AllAppsActivity)
+                        PairingStore(this@AllAppsActivity).clear()
+                        Toast.makeText(
+                            this@AllAppsActivity,
+                            "Setup cleared — restart to go through setup again",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                },
                 onActivate = { item ->
                     when (item.packageName) {
                     DEVICE_SETUP -> {
