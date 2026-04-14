@@ -209,14 +209,19 @@ fun PairingScreen(
                                             }
                                         }
                                     }
-                                    true
-                                } else false
+                                }
+                                true // always consume — don't let OK bubble to skip button
                             }
                             else -> false
                         }
                     }
 
-                    ScreenState.LOADING, ScreenState.ERROR, ScreenState.PAIRING, ScreenState.PAIRED -> { /* ignore input */ }
+                    ScreenState.LOADING, ScreenState.ERROR, ScreenState.PAIRING, ScreenState.PAIRED -> {
+                        // Consume OK in these states so it doesn't bubble to the skip button
+                        if (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter) {
+                            return@onPreviewKeyEvent true
+                        }
+                    }
                 }
 
                 false

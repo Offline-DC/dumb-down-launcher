@@ -106,8 +106,8 @@ fun AppListScreen(
                                 if (repeatCount == 0) {
                                     // First press — start tracking, don't activate yet
                                     centerKeyDown = true
-                                } else if (repeatCount >= 4 && !longPressConsumed && onLongActivate != null && item.packageName != DND_TOGGLE) {
-                                    // Long-press threshold reached (~600 ms hold)
+                                } else if (repeatCount >= 2 && !longPressConsumed && onLongActivate != null && item.packageName != DND_TOGGLE) {
+                                    // Long-press threshold reached (~300 ms hold)
                                     longPressConsumed = true
                                     onLongActivate(item)
                                 }
