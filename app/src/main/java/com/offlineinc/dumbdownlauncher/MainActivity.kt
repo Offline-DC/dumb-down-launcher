@@ -85,8 +85,13 @@ class MainActivity : AppCompatActivity() {
             migrateFromContactSync(pairingStore)
         }
 
-        val platformChoice = PlatformPreferences.getChoice(this)
-        val linkingChoice  = PlatformPreferences.getLinkingChoice(this)
+        // If the subscription already includes smart txt, treat the device as
+        // fully set up with no linking and "none" platform — skip all onboarding
+        // and hide the device setup option.
+        val effectivePlatformChoice = if (pairingStore.hideSmartTxt) "none" else PlatformPreferences.getChoice(this)
+        val effectiveLinkingChoice  = if (pairingStore.hideSmartTxt) false   else PlatformPreferences.getLinkingChoice(this)
+        val platformChoice = effectivePlatformChoice
+        val linkingChoice  = effectiveLinkingChoice
         // "none" (super dumb) is a valid choice — no smart text, no pairing needed.
         // "skipped" is the legacy value for users who tapped skip on the old pairing screen.
         val validPlatforms = setOf("ios", "android", "skipped", "none")
@@ -151,6 +156,36 @@ class MainActivity : AppCompatActivity() {
                         }.start()
                     }
                 }
+            }
+        }
+
+        // Fetch stripeProductIds on every launch if not yet stored.
+        // Uses the unauthenticated /stripe-product-ids endpoint so it works
+        // regardless of pairing state.
+        // Falls back to PhoneNumberReader if flipPhoneNumber isn't in PairingStore
+        // (e.g. devices that were paired before the phone number was persisted).
+        if (pairingStore.stripeProductIds == null) {
+            val appCtx = applicationContext
+            NetworkUtils.whenNetworkAvailable(this) {
+                Thread {
+                    try {
+                        val phone = pairingStore.flipPhoneNumber
+                            ?: com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader.read(appCtx).first
+                        if (phone == null) {
+                            Log.w("ONBOARDING", "Cannot fetch stripeProductIds — phone number unavailable")
+                            return@Thread
+                        }
+                        val api = PairingApiClient(okhttp3.OkHttpClient())
+                        val result = api.getStripeProductIds(phone)
+                        pairingStore.stripeProductIds = result.productIds
+                        pairingStore.hideAudioBundle = result.hideAudioBundle
+                        pairingStore.hideSmartTxt = result.hideSmartTxt
+                        AllAppsActivity.invalidateCache()
+                        Log.i("ONBOARDING", "Fetched stripeProductIds=${result.productIds} hideAudioBundle=${result.hideAudioBundle} hideSmartTxt=${result.hideSmartTxt}")
+                    } catch (e: Exception) {
+                        Log.w("ONBOARDING", "Failed to fetch stripeProductIds: ${e.message}")
+                    }
+                }.start()
             }
         }
 

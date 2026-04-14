@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.lifecycle.lifecycleScope
 import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
+import com.offlineinc.dumbdownlauncher.MouseAccessibilityService
 import com.offlineinc.dumbdownlauncher.notifications.DumbNotificationListenerService
 import com.offlineinc.dumbdownlauncher.notifications.NotificationStore
 
@@ -65,6 +66,13 @@ class NotificationsActivity : AppCompatActivity() {
                     try {
                         val pi = item.contentIntent
                         if (pi != null) {
+                            val needsMouse = item.packageName in MouseAccessibilityService.AUDIO_APP_PACKAGES
+                                || (item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this@NotificationsActivity))
+                                || item.packageName == "org.chromium.chrome"
+                                || item.packageName == "com.android.chrome"
+                            if (needsMouse) {
+                                MouseAccessibilityService.setMouseEnabled(this@NotificationsActivity, true)
+                            }
                             pi.send()
                             overridePendingTransition(0, 0)
                             if (item.packageName != packageName) {

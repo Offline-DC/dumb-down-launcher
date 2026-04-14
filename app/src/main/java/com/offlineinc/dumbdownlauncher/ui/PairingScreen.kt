@@ -398,16 +398,6 @@ private fun DeviceLinkedContent(
                     if (!paired) {
                         Log.w(TAG, "[Pairing] Backend says NOT paired — auto-unlinking")
                         withContext(Dispatchers.Main) { onUnpair() }
-                    } else {
-                        // Refresh stored product IDs from the latest status
-                        val productIdsArr = status.optJSONArray("stripeProductIds")
-                        if (productIdsArr != null) {
-                            val ids = (0 until productIdsArr.length()).map { productIdsArr.getString(it) }
-                            PairingStore(ctx).stripeProductIds = ids
-                            Log.i(TAG, "[Pairing] stripeProductIds saved: $ids")
-                        } else {
-                            Log.w(TAG, "[Pairing] stripeProductIds missing from response (field was null or absent)")
-                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "[Pairing] Status check failed — ${e.message}", e)
@@ -566,19 +556,6 @@ private suspend fun confirmPairing(
 
         val store = PairingStore(ctx)
         store.savePairing(phoneNumber, secret, pairingId)
-
-        // Fetch and persist product IDs now that we're paired
-        try {
-            val status = apiClient.getPairingStatus(phoneNumber)
-            val productIdsArr = status.optJSONArray("stripeProductIds")
-            if (productIdsArr != null) {
-                val ids = (0 until productIdsArr.length()).map { productIdsArr.getString(it) }
-                store.stripeProductIds = ids
-                Log.d(TAG, "confirmPairing: stripeProductIds=$ids")
-            }
-        } catch (e: Exception) {
-            Log.d(TAG, "confirmPairing: could not fetch stripeProductIds — ${e.message}")
-        }
 
         // Platform is set by IntentChoiceScreen (iMessage / Google Messages),
         // not by the linking step — don't override it here.

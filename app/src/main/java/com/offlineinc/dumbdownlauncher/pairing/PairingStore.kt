@@ -41,6 +41,24 @@ class PairingStore(context: Context) {
         set(v) = prefs.edit().putString("stripe_product_ids", v?.joinToString(",")).apply()
 
     /**
+     * True if the backend indicated the audio bundle is already included in the
+     * subscription and should not be shown as an upsell.
+     * Returns false until the value has been fetched and stored.
+     */
+    var hideAudioBundle: Boolean
+        get() = prefs.getBoolean("hide_audio_bundle", false)
+        set(v) = prefs.edit().putBoolean("hide_audio_bundle", v).apply()
+
+    /**
+     * True if the backend indicated smart txt is already included in the
+     * subscription and should not be shown as an upsell.
+     * Returns false until the value has been fetched and stored.
+     */
+    var hideSmartTxt: Boolean
+        get() = prefs.getBoolean("hide_smart_txt", false)
+        set(v) = prefs.edit().putBoolean("hide_smart_txt", v).apply()
+
+    /**
      * Write all pairing credentials in a single atomic commit so downstream
      * readers never see a partial state (e.g. isPaired=true but secret empty).
      */

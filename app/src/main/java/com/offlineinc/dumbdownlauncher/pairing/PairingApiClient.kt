@@ -9,6 +9,19 @@ import org.json.JSONObject
 import java.io.IOException
 
 /**
+ * Result of [PairingApiClient.getStripeProductIds].
+ *
+ * @param productIds     Raw Stripe product IDs for this phone line.
+ * @param hideAudioBundle True if the subscription includes a product that hides
+ *                        the audio-bundle upsell (e.g. it's already included).
+ */
+data class StripeProductResult(
+    val productIds: List<String>,
+    val hideAudioBundle: Boolean,
+    val hideSmartTxt: Boolean,
+)
+
+/**
  * Minimal API client for the pairing confirm endpoint.
  * Only used during onboarding to pair the flip phone with the smartphone.
  */
@@ -17,6 +30,7 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
         private const val TAG = "PairingAPI"
         private const val BASE_URL = "https://offline-dc-backend-ba4815b2bcc8.herokuapp.com/contact-sync"
         private val JSON_TYPE = "application/json".toMediaType()
+
     }
 
     /**
@@ -79,6 +93,36 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
             throw IOException("Report version failed: ${response.code}")
         }
         Log.i(TAG, "reportVersion: success")
+    }
+
+    /**
+     * Fetches Stripe product IDs for a given flip phone number.
+     * Does not require authentication — safe to call before or after pairing.
+     *
+     * Returns a [StripeProductResult] containing the raw product IDs and
+     * derived flags (e.g. [StripeProductResult.hideAudioBundle]).
+     */
+    fun getStripeProductIds(flipPhoneNumber: String): StripeProductResult {
+        val encoded = java.net.URLEncoder.encode(flipPhoneNumber, "UTF-8")
+        val request = Request.Builder()
+            .url("$BASE_URL/stripe-product-ids?flipPhoneNumber=$encoded")
+            .get()
+            .build()
+
+        Log.d(TAG, "HTTP ${request.method} ${request.url}")
+        val response = httpClient.newCall(request).execute()
+        val bodyStr = response.body?.string() ?: "{}"
+        if (!response.isSuccessful) {
+            Log.e(TAG, "getStripeProductIds: HTTP ${response.code}")
+            throw IOException("Request failed: ${response.code}")
+        }
+        val json = JSONObject(bodyStr)
+        val arr = json.optJSONArray("stripeProductIds")
+        val ids = if (arr != null) (0 until arr.length()).map { arr.getString(it) } else emptyList()
+        val hideAudioBundle = json.optBoolean("hideAudioBundle", false)
+        val hideSmartTxt = json.optBoolean("hideSmartTxt", false)
+        Log.d(TAG, "getStripeProductIds: ids=$ids hideAudioBundle=$hideAudioBundle hideSmartTxt=$hideSmartTxt")
+        return StripeProductResult(productIds = ids, hideAudioBundle = hideAudioBundle, hideSmartTxt = hideSmartTxt)
     }
 
     /**

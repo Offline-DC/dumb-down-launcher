@@ -149,8 +149,9 @@ class MainAppsGridActivity : AppCompatActivity() {
             val pm = context.packageManager
             val result = mutableListOf<AppItem>()
 
+            val hideSmartTxt = com.offlineinc.dumbdownlauncher.pairing.PairingStore(context).hideSmartTxt
             val platform = PlatformPreferences.getChoice(context)
-            val messagingPkg = when (platform) {
+            val messagingPkg = if (hideSmartTxt) null else when (platform) {
                 "ios"     -> "com.openbubbles.messaging"
                 "android" -> GOOGLE_MESSAGES
                 else      -> null
@@ -353,10 +354,11 @@ class MainAppsGridActivity : AppCompatActivity() {
     private fun buildGridAppList(): List<AppItem> {
         val result = mutableListOf<AppItem>()
 
+        val hideSmartTxt = com.offlineinc.dumbdownlauncher.pairing.PairingStore(this).hideSmartTxt
         val platform = PlatformPreferences.getChoice(this)
         // Only include smart txt for ios/android. "none" (super dumb), "skipped",
-        // or null all mean no smart txt — clock fills the 9th slot instead.
-        val messagingPkg = when (platform) {
+        // null, or hideSmartTxt=true all mean no smart txt — clock fills the 9th slot instead.
+        val messagingPkg = if (hideSmartTxt) null else when (platform) {
             "ios"     -> "com.openbubbles.messaging"
             "android" -> GOOGLE_MESSAGES
             else      -> null   // not chosen yet — leave slot empty
