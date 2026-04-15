@@ -10,6 +10,12 @@ import java.net.URL
 /**
  * Minimal HTTP client for the Quack anonymous message board API.
  * Talks to the offline-dc-twilio Express backend.
+ *
+ * Location handling: the dumb-phone client never sends lat/lng. The backend
+ * IP-geolocates the caller's egress to determine location — GPS and the
+ * network provider are unreliable on these phones (MediaTek builds ship
+ * without a network location provider, and GPS cold-starts fail indoors).
+ * City-level IP accuracy is plenty for the 25-mile feed radius.
  */
 object QuackApiClient {
 
@@ -17,10 +23,9 @@ object QuackApiClient {
 
     class ApiException(val statusCode: Int, message: String) : Exception(message)
 
-    /** Fetch nearby posts. Returns a JSONArray of post objects.
-     *  Radius is determined server-side (25 miles); only lat/lng are sent. */
-    fun fetchPosts(lat: Double, lng: Double): JSONArray {
-        val url = URL("$BASE/posts?lat=$lat&lng=$lng")
+    /** Fetch nearby posts. Location is resolved server-side from the caller's IP. */
+    fun fetchPosts(): JSONArray {
+        val url = URL("$BASE/posts")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.connectTimeout = 15_000
@@ -42,10 +47,12 @@ object QuackApiClient {
         }
     }
 
-    /** Create a new post. Returns the created post as a JSONObject.
-     *  utcOffsetMinutes: device's total UTC offset in minutes (including DST),
-     *  used by the backend to find when 6am was in the user's local timezone. */
-    fun createPost(body: String, lat: Double, lng: Double, deviceId: String, phoneNumber: String?, utcOffsetMinutes: Int): JSONObject {
+    /**
+     * Create a new post. Location is resolved server-side from the caller's IP.
+     * utcOffsetMinutes: device's total UTC offset in minutes (including DST),
+     * used by the backend to find when 6am was in the user's local timezone.
+     */
+    fun createPost(body: String, deviceId: String, phoneNumber: String?, utcOffsetMinutes: Int): JSONObject {
         val url = URL("$BASE/posts")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
@@ -57,8 +64,6 @@ object QuackApiClient {
         val payload = JSONObject().apply {
             put("device_id", deviceId)
             put("body", body)
-            put("lat", lat)
-            put("lng", lng)
             put("utc_offset_minutes", utcOffsetMinutes)
             if (!phoneNumber.isNullOrBlank()) put("phone_number", phoneNumber)
         }

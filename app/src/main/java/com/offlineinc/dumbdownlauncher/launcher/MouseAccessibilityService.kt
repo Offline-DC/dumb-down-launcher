@@ -7,9 +7,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -63,20 +60,61 @@ class MouseAccessibilityService : AccessibilityService() {
         /* ── Watchdog: periodically verifies the service is still bound ──────── */
 
         private val watchdogHandler = Handler(Looper.getMainLooper())
+
+        /** Initial retry cadence while we still think binding is possible. */
         private const val WATCHDOG_INTERVAL_MS = 15_000L
+
+        /** Slow cadence once we've given up on fast retries — keeps polling
+         *  cheaply in case the system eventually binds (e.g. after a settings
+         *  change), without spamming logs every 15s forever. */
+        private const val WATCHDOG_LONG_INTERVAL_MS = 5 * 60_000L
+
+        /** After this many consecutive "still unbound" checks we stop toggling
+         *  settings / writing warnings and switch to the long interval. Typing
+         *  via the keyevent fallback works fine without a11y, so there's no
+         *  value in shouting about it. */
+        private const val WATCHDOG_QUIET_AFTER = 4
+
+        private var watchdogConsecutiveMisses = 0
 
         private val watchdogRunnable = object : Runnable {
             override fun run() {
-                if (instance == null) {
-                    Log.w("MouseService", "watchdog: instance null — re-enabling")
-                    shellExecutor.execute { ensureAccessibilityEnabled() }
+                if (instance != null) {
+                    // Service came back — reset counter and resume normal cadence.
+                    if (watchdogConsecutiveMisses > 0) {
+                        Log.i("MouseService", "watchdog: service bound — resuming normal cadence")
+                        watchdogConsecutiveMisses = 0
+                    }
+                    watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+                    return
                 }
-                watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+
+                watchdogConsecutiveMisses++
+                if (watchdogConsecutiveMisses <= WATCHDOG_QUIET_AFTER) {
+                    Log.w("MouseService", "watchdog: instance null — re-enabling (attempt $watchdogConsecutiveMisses)")
+                    shellExecutor.execute { ensureAccessibilityEnabled() }
+                    watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+                } else {
+                    // Quiet mode: poll at a slow interval, log at debug level,
+                    // skip the settings-toggle — it didn't help the last 4 times.
+                    if (watchdogConsecutiveMisses == WATCHDOG_QUIET_AFTER + 1) {
+                        Log.i(
+                            "MouseService",
+                            "watchdog: a11y still unbound after $WATCHDOG_QUIET_AFTER retries — " +
+                                "backing off to every ${WATCHDOG_LONG_INTERVAL_MS / 60_000}min " +
+                                "(typesync keyevent fallback still works)"
+                        )
+                    } else {
+                        Log.d("MouseService", "watchdog: still unbound (slow poll)")
+                    }
+                    watchdogHandler.postDelayed(this, WATCHDOG_LONG_INTERVAL_MS)
+                }
             }
         }
 
         fun startWatchdog() {
             watchdogHandler.removeCallbacks(watchdogRunnable)
+            watchdogConsecutiveMisses = 0
             watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS)
         }
 
@@ -388,7 +426,13 @@ class MouseAccessibilityService : AccessibilityService() {
                 // Stage 2: actively toggle the setting to force Android to rebind.
                 // Some devices (especially MediaTek) require a settings write after
                 // a process restart before the system will re-deliver the service bind.
-                Log.i("MouseService", "ensureAccessibilityEnabled: not bound — toggling setting to force rebind")
+                // Only log at INFO for the first few attempts; after that drop
+                // to DEBUG so the watchdog doesn't fill logcat.
+                if (watchdogConsecutiveMisses <= WATCHDOG_QUIET_AFTER) {
+                    Log.i("MouseService", "ensureAccessibilityEnabled: not bound — toggling setting to force rebind")
+                } else {
+                    Log.d("MouseService", "ensureAccessibilityEnabled: not bound — toggling setting (quiet)")
+                }
                 lastToggleTimestamp = android.os.SystemClock.uptimeMillis()
                 try {
                     ProcessBuilder(
@@ -412,7 +456,11 @@ class MouseAccessibilityService : AccessibilityService() {
                     Log.i("MouseService", "ensureAccessibilityEnabled: service bound after toggle")
                     a11yKnownDown = false
                 } else {
-                    Log.i("MouseService", "ensureAccessibilityEnabled: not bound yet — watchdog will retry in ${WATCHDOG_INTERVAL_MS / 1000}s")
+                    if (watchdogConsecutiveMisses <= WATCHDOG_QUIET_AFTER) {
+                        Log.i("MouseService", "ensureAccessibilityEnabled: not bound yet — watchdog will retry in ${WATCHDOG_INTERVAL_MS / 1000}s")
+                    } else {
+                        Log.d("MouseService", "ensureAccessibilityEnabled: not bound yet (quiet)")
+                    }
                     // Mark as known-down so injectText stops waiting 5s on every call
                     a11yKnownDown = true
                 }
@@ -586,78 +634,6 @@ class MouseAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ── Background location warming ────────────────────────────────────
-    // Grabs a single GPS + network fix every 30 min so getLastKnownLocation()
-    // always has a recent result. This means apps like Google Maps and
-    // Uber Lite get a near-instant fix instead of a 15-30 s cold start.
-    //
-    // Uses single-shot requests instead of continuous updates because
-    // MediaTek GPS ignores minTime and streams fixes at 1 Hz.
-    private val warmHandler = Handler(Looper.getMainLooper())
-    private var warmRunning = false
-    private val WARM_INTERVAL_MS = 30L * 60 * 1000  // 30 minutes
-
-    @SuppressLint("MissingPermission")
-    private fun startLocationWarming() {
-        if (warmRunning) return
-        warmRunning = true
-        Log.i("LocWarmer", "Starting single-shot location warming (every ${WARM_INTERVAL_MS / 60000}min)")
-        requestSingleFix()
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun requestSingleFix() {
-        if (!warmRunning) return
-        try {
-            val lm = getSystemService(LOCATION_SERVICE) as? LocationManager ?: return
-            var gotFix = false
-
-            val listener = object : LocationListener {
-                override fun onLocationChanged(loc: Location) {
-                    if (!gotFix) {
-                        gotFix = true
-                        Log.d("LocWarmer", "Fix: ${loc.provider} acc=${loc.accuracy}m — removing listener, next in ${WARM_INTERVAL_MS / 60000}min")
-                        lm.removeUpdates(this)
-                        scheduleNextFix()
-                    }
-                }
-                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-                override fun onProviderEnabled(provider: String) {}
-                override fun onProviderDisabled(provider: String) {}
-            }
-
-            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
-            }
-            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
-            }
-
-            // Safety: if no fix arrives in 30 s, remove listener and schedule next attempt
-            warmHandler.postDelayed({
-                if (!gotFix) {
-                    Log.w("LocWarmer", "No fix after 30s — will retry in ${WARM_INTERVAL_MS / 60000}min")
-                    lm.removeUpdates(listener)
-                    scheduleNextFix()
-                }
-            }, 30_000)
-        } catch (e: Exception) {
-            Log.w("LocWarmer", "Failed to request fix: ${e.message}")
-            scheduleNextFix()
-        }
-    }
-
-    private fun scheduleNextFix() {
-        if (!warmRunning) return
-        warmHandler.postDelayed(::requestSingleFix, WARM_INTERVAL_MS)
-    }
-
-    private fun stopLocationWarming() {
-        warmRunning = false
-        warmHandler.removeCallbacksAndMessages(null)
-        Log.i("LocWarmer", "Stopped location warming")
-    }
-
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -675,9 +651,6 @@ class MouseAccessibilityService : AccessibilityService() {
         if (webViewActivityActive || isCurrentlyInTargetApp()) {
             mouseEnabled = true
         }
-
-        // Keep the system location cache warm so Maps / Uber get near-instant fixes
-        startLocationWarming()
 
         // Prime the clipboard framework so the first TypeSync paste into a
         // WebView (e.g. OpenBubbles) works immediately.  Without this,
@@ -852,7 +825,6 @@ class MouseAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
-        stopLocationWarming()
         super.onDestroy()
         instance = null
     }

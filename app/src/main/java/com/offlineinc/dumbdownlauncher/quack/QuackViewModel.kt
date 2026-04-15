@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlineinc.dumbdownlauncher.R
+import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,8 +37,6 @@ data class QuackUiState(
     val isSubmitting: Boolean = false,
     val submitError: String? = null,
     val errorMessage: String = "",
-    val lat: Double = 0.0,
-    val lng: Double = 0.0,
     val postsToday: Int = 0,
     val isInitialLoad: Boolean = true,
     val hasAcceptedRules: Boolean = false,
@@ -57,7 +56,6 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(QuackUiState())
     val state: StateFlow<QuackUiState> = _state
 
-    private var locationHelper: QuackLocationHelper? = null
     private var honkPlayer: MediaPlayer? = null
     /** true when rules screen was opened via enterCompose (should go to compose after accept) */
     private var rulesFromCompose = false
@@ -153,43 +151,21 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Kept for API compatibility with callers — location is now resolved
+     * server-side from the caller's IP, so this just triggers a feed load.
+     */
     fun startLocation() {
-        _state.value = _state.value.copy(mode = QuackMode.LOADING)
-        locationHelper?.cancel()
-        locationHelper = QuackLocationHelper(getApplication(), object : QuackLocationHelper.Callback {
-            override fun onLocation(lat: Double, lng: Double) {
-                _state.value = _state.value.copy(lat = lat, lng = lng)
-                loadFeed()
-            }
-            override fun onError(reason: String) {
-                _state.value = _state.value.copy(
-                    mode = QuackMode.ERROR,
-                    errorMessage = "location error: $reason"
-                )
-            }
-        })
-        locationHelper!!.request()
+        loadFeed()
     }
 
     fun loadFeed() {
         _state.value = _state.value.copy(mode = QuackMode.LOADING)
         viewModelScope.launch {
-            // Read lat/lng inside the coroutine — AFTER the LOADING transition —
-            // so we never capture a stale (0.0, 0.0) snapshot from before location resolved.
-            val lat = _state.value.lat
-            val lng = _state.value.lng
-            if (lat == 0.0 && lng == 0.0) {
-                Log.w(TAG, "loadFeed: location not yet available, aborting")
-                _state.value = _state.value.copy(
-                    mode = QuackMode.ERROR,
-                    errorMessage = "waiting for location…",
-                )
-                return@launch
-            }
             try {
-                Log.d(TAG, "loadFeed: fetching posts at $lat,$lng")
+                Log.d(TAG, "loadFeed: fetching posts (server-side IP geoloc)")
                 val posts = withContext(Dispatchers.IO) {
-                    val arr = QuackApiClient.fetchPosts(lat, lng)
+                    val arr = QuackApiClient.fetchPosts()
                     Log.d(TAG, "loadFeed: got ${arr.length()} posts")
                     parsePosts(arr)
                 }
@@ -214,13 +190,10 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     /** Silent refresh — updates posts without showing loading state or resetting scroll. */
     fun refreshFeed() {
         if (_state.value.mode != QuackMode.FEED) return
-        val lat = _state.value.lat
-        val lng = _state.value.lng
-        if (lat == 0.0 && lng == 0.0) return
         viewModelScope.launch {
             try {
                 val posts = withContext(Dispatchers.IO) {
-                    val arr = QuackApiClient.fetchPosts(lat, lng)
+                    val arr = QuackApiClient.fetchPosts()
                     parsePosts(arr)
                 }
                 // Only update if still on feed
@@ -324,16 +297,26 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
         _state.value = s.copy(isSubmitting = true, submitError = null)
         val deviceId = QuackDeviceId.get(getApplication())
+        // Prefer the paired flip phone number (set at pairing time, E.164-normalized).
+        // Fall back to reading directly from the SIM for unpaired devices so every
+        // quack carries a phone_number — backend tags/notifies on this field.
         val phoneNumber = PairingStore(getApplication()).flipPhoneNumber
+            ?.takeIf { it.isNotBlank() }
+            ?: try {
+                PhoneNumberReader.read(getApplication()).first?.takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                Log.w(TAG, "submitPost: SIM phone-number read failed", e)
+                null
+            }
         // Total UTC offset in minutes (includes DST). Backend uses this to find
         // when 6am was in the user's local timezone for the daily reset.
         val utcOffsetMinutes = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000
-        Log.d(TAG, "submitPost: deviceId=$deviceId phoneNumber=$phoneNumber lat=${s.lat} lng=${s.lng} utcOffset=${utcOffsetMinutes}min")
+        Log.d(TAG, "submitPost: deviceId=$deviceId phoneNumber=$phoneNumber utcOffset=${utcOffsetMinutes}min (loc resolved server-side)")
 
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    QuackApiClient.createPost(text, s.lat, s.lng, deviceId, phoneNumber, utcOffsetMinutes)
+                    QuackApiClient.createPost(text, deviceId, phoneNumber, utcOffsetMinutes)
                 }
                 Log.d(TAG, "submitPost: SUCCESS — $result")
                 incrementPostsToday()
@@ -362,14 +345,9 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Retry after a feed-level error — returns to loading → fetch. */
+    /** Retry after a feed-level error — just re-fetch (location is server-side). */
     fun retry() {
-        val s = _state.value
-        if (s.lat != 0.0 || s.lng != 0.0) {
-            loadFeed()
-        } else {
-            startLocation()
-        }
+        loadFeed()
     }
 
     private fun friendlyError(e: Exception): String = when {
@@ -404,7 +382,6 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        locationHelper?.cancel()
         honkPlayer?.release()
         honkPlayer = null
     }

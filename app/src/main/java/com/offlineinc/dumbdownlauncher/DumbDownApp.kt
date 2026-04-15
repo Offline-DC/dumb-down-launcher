@@ -4,13 +4,12 @@ import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.location.LocationManager
 import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
-import com.offlineinc.dumbdownlauncher.quack.LocationCacheWorker
+import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 
 class DumbDownApp : Application() {
@@ -18,8 +17,8 @@ class DumbDownApp : Application() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
-        ensureNetworkLocationEnabled()
-        LocationCacheWorker.schedule(this)
+        // Quack now uses IP geolocation via the backend on each open — no
+        // background warming, no system location-provider fiddling needed.
         // Update FlipMouse (DumbMouse) binary if a newer version is bundled
         Thread { FlipMouseUpdater.checkAndUpdate(this) }.start()
         // Ensure the mouse accessibility service is bound at startup so it's
@@ -46,6 +45,12 @@ class DumbDownApp : Application() {
         // Enable swap if the file exists — swap doesn't survive reboot, but as
         // the HOME launcher our onCreate runs on every boot.
         Thread { enableSwapIfPresent() }.start()
+
+        // Associate the device (IMEI + SIM + phone number) with the Offline API
+        // on first boot, and re-associate whenever the phone number changes.
+        // Waits for both a SIM and network in the background before doing any work —
+        // a port of dumb-phone-configuration/device_registration.sh.
+        DeviceRegistrar.scheduleOnBoot(this)
 
         // Start the cover display service. As the HOME launcher we are always alive,
         // so no foreground notification is required. The service is START_STICKY and
@@ -361,27 +366,4 @@ class DumbDownApp : Application() {
         }
     }
 
-    /**
-     * Uses root to enable the network location provider if it's currently off.
-     * Network location resolves in <1s vs 10-20s for a GPS cold start.
-     * Runs on a background thread to avoid blocking app startup.
-     */
-    private fun ensureNetworkLocationEnabled() {
-        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
-        if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) return
-
-        Thread {
-            try {
-                val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put secure location_providers_allowed +network"))
-                val exit = proc.waitFor()
-                if (exit == 0) {
-                    Log.d("DumbDownApp", "Enabled network location provider via root")
-                } else {
-                    Log.w("DumbDownApp", "Failed to enable network location (exit=$exit)")
-                }
-            } catch (e: Exception) {
-                Log.w("DumbDownApp", "Cannot enable network location: ${e.message}")
-            }
-        }.start()
-    }
 }

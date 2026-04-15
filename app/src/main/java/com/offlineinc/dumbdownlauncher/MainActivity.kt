@@ -170,7 +170,8 @@ class MainActivity : AppCompatActivity() {
                 Thread {
                     try {
                         val phone = pairingStore.flipPhoneNumber
-                            ?: com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader.read(appCtx).first
+                            ?: com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
+                                .readWithWait(appCtx).first
                         if (phone == null) {
                             Log.w("ONBOARDING", "Cannot fetch stripeProductIds — phone number unavailable")
                             return@Thread

@@ -130,8 +130,10 @@ class AllAppsActivity : AppCompatActivity() {
                 ))
             }
 
-            // Show quack (built-in) when we can read the device's own phone number
-            if (com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader.isAvailable(context)) {
+            // Show quack (built-in) when we can read the device's own phone number.
+            // Uses the waiting variant so a cold boot (SIM still loading) doesn't
+            // hide quack forever — runs on the background bgExecutor thread.
+            if (com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader.isAvailableWithWait(context)) {
                 appItems.add(AppItem(
                     packageName = QUACK,
                     label = "quack",
@@ -375,8 +377,10 @@ class AllAppsActivity : AppCompatActivity() {
                     .readPairing(applicationContext) != null
             } catch (_: Exception) { false }
 
+            // Wait for the SIM if it isn't ready yet — onResume can fire before
+            // the modem has finished loading on cold boot. Runs on Dispatchers.IO.
             val hasPhoneNumber = com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
-                .isAvailable(applicationContext)
+                .isAvailableWithWait(applicationContext)
 
             withContext(Dispatchers.Main) {
                 if (isDestroyed) return@withContext
