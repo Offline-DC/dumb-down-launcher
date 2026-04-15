@@ -16,7 +16,7 @@ import android.util.Log
  * MediaTek flip phones where getLastKnownLocation() frequently returns null.
  *
  * Priority order:
- *  1. Our own persisted location (< 6 hours old) — instant, no GPS needed
+ *  1. Our own persisted location (< 2 hours old) — instant, no GPS needed
  *  2. System cached location (< 30 min old) — instant
  *  3. Live GPS/Network fix — wait up to HARD_TIMEOUT_MS
  *  4. Our persisted location (up to 7 days old) — stale fallback at hard timeout
@@ -79,7 +79,7 @@ class QuackLocationHelper(
     fun request() {
         Log.d(TAG, "request() called")
 
-        // ── 1. Our own persisted location (< 6 hours) ─────────────────────────
+        // ── 1. Our own persisted location (< 2 hours) ─────────────────────────
         // On MediaTek flip phones getLastKnownLocation() is often null because
         // no other app has recently requested location. We persist our own copy
         // so that after the first successful use this step is always instant.
@@ -87,7 +87,7 @@ class QuackLocationHelper(
         if (persisted != null) {
             Log.d(TAG, "Persisted location: age=${persisted.ageMinutes}min lat=${persisted.lat} lng=${persisted.lng}")
             if (persisted.ageMs < QuackLocationStore.FRESH_MAX_AGE_MS) {
-                Log.d(TAG, "Persisted location is fresh (< 6h) — delivering immediately")
+                Log.d(TAG, "Persisted location is fresh (< 2h) — delivering immediately")
                 delivered = true
                 handler.post { callback.onLocation(persisted.lat, persisted.lng) }
                 // Kick off providers quietly so the next open gets an even fresher fix
