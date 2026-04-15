@@ -268,7 +268,7 @@ private fun FeedScreen(
                         viewModel.enterCompose(); true
                     }
                     Key.DirectionCenter -> {
-                        viewModel.startLocation(); true
+                        viewModel.refreshFromUser(); true
                     }
                     Key.SoftRight -> {
                         viewModel.showRules(); true

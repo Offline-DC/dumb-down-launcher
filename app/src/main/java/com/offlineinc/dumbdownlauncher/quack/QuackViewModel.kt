@@ -152,20 +152,81 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Kept for API compatibility with callers — location is now resolved
-     * server-side from the caller's IP, so this just triggers a feed load.
+     * Called when the user first enters the quack screen (or regrants
+     * location permission). Uses whatever coarse location was prewarmed at
+     * boot — never blocks on a fresh fix.
      */
     fun startLocation() {
         loadFeed()
+    }
+
+    /**
+     * Called when the user presses the "refresh" soft key on the feed.
+     * Forces a fresh coarse-location read (blocks up to 30s while the radio
+     * gets a fix) and then reloads the feed against it. This is the only
+     * path that invalidates the 30-min location cache.
+     */
+    fun refreshFromUser() {
+        _state.value = _state.value.copy(mode = QuackMode.LOADING)
+        viewModelScope.launch {
+            try {
+                Log.d(TAG, "refreshFromUser: forcing fresh location read")
+                val posts = withContext(Dispatchers.IO) {
+                    val loc = QuackLocationReader.forceRefresh(getApplication())
+                    if (loc == null) {
+                        Log.w(TAG, "refreshFromUser: no fix — server will return empty feed")
+                    } else {
+                        Log.d(TAG, "refreshFromUser: got lat=${loc.first} lng=${loc.second}")
+                    }
+                    val arr = QuackApiClient.fetchPosts(loc?.first, loc?.second)
+                    Log.d(TAG, "refreshFromUser: got ${arr.length()} posts")
+                    parsePosts(arr)
+                }
+                _state.value = _state.value.copy(
+                    mode = QuackMode.FEED,
+                    posts = posts,
+                    selectedIndex = 0,
+                    errorMessage = "",
+                    isInitialLoad = false,
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "refreshFromUser: FAILED", e)
+                _state.value = _state.value.copy(
+                    mode = QuackMode.ERROR,
+                    errorMessage = friendlyError(e),
+                )
+            }
+        }
     }
 
     fun loadFeed() {
         _state.value = _state.value.copy(mode = QuackMode.LOADING)
         viewModelScope.launch {
             try {
-                Log.d(TAG, "loadFeed: fetching posts (server-side IP geoloc)")
+                Log.d(TAG, "loadFeed: fetching posts (using cached/in-flight location)")
                 val posts = withContext(Dispatchers.IO) {
-                    val arr = QuackApiClient.fetchPosts()
+                    // Prefer cache; if nothing's cached but the boot-time
+                    // prewarm is still running, piggyback on it (keeps the
+                    // LOADING mode up rather than flashing an empty feed).
+                    // If the prewarm already finished without a fix and the
+                    // cache is empty, kick off a fresh read and wait on it.
+                    var loc = QuackLocationReader.readCached()
+                    if (loc == null) {
+                        if (QuackLocationReader.isFetching()) {
+                            Log.d(TAG, "loadFeed: prewarm in flight — awaiting up to 60s")
+                            loc = QuackLocationReader.awaitInflight(60_000L)
+                        } else {
+                            Log.d(TAG, "loadFeed: no cache and no prewarm — kicking one off and waiting")
+                            QuackLocationReader.prewarm(getApplication())
+                            loc = QuackLocationReader.awaitInflight(60_000L)
+                        }
+                    }
+                    if (loc == null) {
+                        Log.w(TAG, "loadFeed: no location fix — server will return empty feed")
+                    } else {
+                        Log.d(TAG, "loadFeed: using lat=${loc.first} lng=${loc.second}")
+                    }
+                    val arr = QuackApiClient.fetchPosts(loc?.first, loc?.second)
                     Log.d(TAG, "loadFeed: got ${arr.length()} posts")
                     parsePosts(arr)
                 }
@@ -193,7 +254,8 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val posts = withContext(Dispatchers.IO) {
-                    val arr = QuackApiClient.fetchPosts()
+                    val loc = QuackLocationReader.readCached()
+                    val arr = QuackApiClient.fetchPosts(loc?.first, loc?.second)
                     parsePosts(arr)
                 }
                 // Only update if still on feed
@@ -311,12 +373,18 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         // Total UTC offset in minutes (includes DST). Backend uses this to find
         // when 6am was in the user's local timezone for the daily reset.
         val utcOffsetMinutes = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000
-        Log.d(TAG, "submitPost: deviceId=$deviceId phoneNumber=$phoneNumber utcOffset=${utcOffsetMinutes}min (loc resolved server-side)")
+        Log.d(TAG, "submitPost: deviceId=$deviceId phoneNumber=$phoneNumber utcOffset=${utcOffsetMinutes}min")
 
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    QuackApiClient.createPost(text, deviceId, phoneNumber, utcOffsetMinutes)
+                    val loc = QuackLocationReader.readCached()
+                    if (loc == null) {
+                        Log.w(TAG, "submitPost: no cached location — posting without coords (server will reject)")
+                    } else {
+                        Log.d(TAG, "submitPost: using cached lat=${loc.first} lng=${loc.second}")
+                    }
+                    QuackApiClient.createPost(text, deviceId, phoneNumber, utcOffsetMinutes, loc?.first, loc?.second)
                 }
                 Log.d(TAG, "submitPost: SUCCESS — $result")
                 incrementPostsToday()

@@ -9,6 +9,8 @@ import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
+import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
+import com.offlineinc.dumbdownlauncher.quack.QuackLocationReader
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 
@@ -17,8 +19,18 @@ class DumbDownApp : Application() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
-        // Quack now uses IP geolocation via the backend on each open — no
-        // background warming, no system location-provider fiddling needed.
+        // Self-grant location perms via `su pm grant` if the provisioning
+        // script never ran or a reinstall cleared them. Must happen BEFORE
+        // the prewarm so getLastKnownLocation() has permission to read. Runs
+        // on a background thread because `su` can block up to 1.5s per grant.
+        Thread {
+            LocationPermissionGranter.ensureGranted(this)
+            // Kick off a background coarse-location read on every boot. The quack
+            // feed uses client-side cell-tower location. Prewarming here means the
+            // first time the user opens quack, the 30-min cache is already
+            // populated and the feed loads instantly without waiting for a fix.
+            QuackLocationReader.prewarm(this)
+        }.start()
         // Update FlipMouse (DumbMouse) binary if a newer version is bundled
         Thread { FlipMouseUpdater.checkAndUpdate(this) }.start()
         // Ensure the mouse accessibility service is bound at startup so it's

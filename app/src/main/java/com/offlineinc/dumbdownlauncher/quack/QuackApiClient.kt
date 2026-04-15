@@ -6,16 +6,18 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 /**
  * Minimal HTTP client for the Quack anonymous message board API.
  * Talks to the offline-dc-twilio Express backend.
  *
- * Location handling: the dumb-phone client never sends lat/lng. The backend
- * IP-geolocates the caller's egress to determine location — GPS and the
- * network provider are unreliable on these phones (MediaTek builds ship
- * without a network location provider, and GPS cold-starts fail indoors).
- * City-level IP accuracy is plenty for the 25-mile feed radius.
+ * Location handling: the client sends coarse cell-tower location on every
+ * request. The backend no longer falls back to IP geolocation — cellular
+ * carriers CGNAT phones through a handful of regional POPs (e.g. T-Mobile
+ * routes DC traffic through Atlanta), so IP geoloc placed phones hundreds of
+ * miles from their real location. If the client can't get a fix, the server
+ * returns an empty feed rather than a wrong one.
  */
 object QuackApiClient {
 
@@ -23,9 +25,17 @@ object QuackApiClient {
 
     class ApiException(val statusCode: Int, message: String) : Exception(message)
 
-    /** Fetch nearby posts. Location is resolved server-side from the caller's IP. */
-    fun fetchPosts(): JSONArray {
-        val url = URL("$BASE/posts")
+    /** Fetch nearby posts. Passes coarse lat/lng for server-side radius filtering. */
+    fun fetchPosts(lat: Double?, lng: Double?): JSONArray {
+        val query = buildString {
+            if (lat != null && lng != null) {
+                append("?lat=")
+                append(URLEncoder.encode(lat.toString(), "UTF-8"))
+                append("&lng=")
+                append(URLEncoder.encode(lng.toString(), "UTF-8"))
+            }
+        }
+        val url = URL("$BASE/posts$query")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.connectTimeout = 15_000
@@ -48,11 +58,20 @@ object QuackApiClient {
     }
 
     /**
-     * Create a new post. Location is resolved server-side from the caller's IP.
+     * Create a new post. Sends coarse lat/lng (required — server rejects posts
+     * without a location).
+     *
      * utcOffsetMinutes: device's total UTC offset in minutes (including DST),
      * used by the backend to find when 6am was in the user's local timezone.
      */
-    fun createPost(body: String, deviceId: String, phoneNumber: String?, utcOffsetMinutes: Int): JSONObject {
+    fun createPost(
+        body: String,
+        deviceId: String,
+        phoneNumber: String?,
+        utcOffsetMinutes: Int,
+        lat: Double?,
+        lng: Double?,
+    ): JSONObject {
         val url = URL("$BASE/posts")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
@@ -66,6 +85,8 @@ object QuackApiClient {
             put("body", body)
             put("utc_offset_minutes", utcOffsetMinutes)
             if (!phoneNumber.isNullOrBlank()) put("phone_number", phoneNumber)
+            if (lat != null) put("lat", lat)
+            if (lng != null) put("lng", lng)
         }
         conn.outputStream.use { it.write(payload.toString().toByteArray()) }
 
