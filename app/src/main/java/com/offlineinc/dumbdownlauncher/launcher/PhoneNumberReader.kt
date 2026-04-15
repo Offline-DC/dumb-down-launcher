@@ -251,16 +251,30 @@ object PhoneNumberReader {
         return null
     }
 
-    private fun runSuCommand(cmd: String): String? {
+    /**
+     * Runs an `su -c` command with a hard timeout so a hung `su` daemon
+     * (e.g. SIM not ready, Magisk slow to respond) can't block the caller
+     * indefinitely. Without this, repeated calls on the main thread caused
+     * the launcher ANR ("launcher is not responding").
+     */
+    private fun runSuCommand(cmd: String, timeoutMs: Long = 1500L): String? {
+        var proc: Process? = null
         return try {
-            val proc = ProcessBuilder("su", "-c", cmd)
+            proc = ProcessBuilder("su", "-c", cmd)
                 .redirectErrorStream(true)
                 .start()
-            val output = BufferedReader(InputStreamReader(proc.inputStream)).use { it.readText() }
-            val exitCode = proc.waitFor()
-            if (exitCode == 0 && output.isNotBlank()) output else null
+            val finished = proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                Log.w(TAG, "runSuCommand($cmd) timed out after ${timeoutMs}ms")
+                proc.destroyForcibly()
+                return null
+            }
+            val output = BufferedReader(InputStreamReader(proc.inputStream))
+                .use { it.readText() }
+            if (proc.exitValue() == 0 && output.isNotBlank()) output else null
         } catch (e: Exception) {
             Log.w(TAG, "runSuCommand($cmd) failed: ${e.message}")
+            try { proc?.destroyForcibly() } catch (_: Exception) {}
             null
         }
     }

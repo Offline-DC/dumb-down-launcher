@@ -94,12 +94,16 @@ fun PairingScreen(
 
     // Retry-aware phone number reader — SIM may not be ready immediately,
     // so retry with increasing delays before falling back to the #686# flow.
-    // Uses 8 attempts with back-off (1s, 1s, 2s, 2s, 3s, 3s, 4s) ≈ 16s total.
+    // Uses 5 attempts with back-off (1s, 2s, 3s, 4s) ≈ 10s total.
+    //
+    // IMPORTANT: readPhoneNumber() spawns `su` subprocesses (ProcessBuilder +
+    // waitFor), which would block the main thread and trigger an ANR
+    // ("launcher is not responding"). Always run it on Dispatchers.IO.
     suspend fun readPhoneNumberWithRetry() {
         screenState = ScreenState.LOADING
-        val maxAttempts = 8
+        val maxAttempts = 5
         repeat(maxAttempts) { attempt ->
-            val result = readPhoneNumber(ctx)
+            val result = withContext(Dispatchers.IO) { readPhoneNumber(ctx) }
             if (result.first != null) {
                 phoneNumber = result.first
                 screenState = ScreenState.READY
@@ -110,7 +114,7 @@ fun PairingScreen(
                 screenState = ScreenState.ERROR
                 return
             }
-            val delayMs = ((attempt / 2) + 1) * 1000L
+            val delayMs = (attempt + 1) * 1000L
             Log.d(TAG, "SIM not ready, retrying (${attempt + 1}/$maxAttempts) in ${delayMs}ms...")
             delay(delayMs)
         }
@@ -259,7 +263,7 @@ fun PairingScreen(
                 // ── Error: couldn't read number — call support ───────
                 ScreenState.ERROR -> {
                     BasicText(
-                        text = "couldn't read ur phone number",
+                        text = "couldn't read ur phone #. is ur sim in?",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
