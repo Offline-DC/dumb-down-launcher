@@ -13,7 +13,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
@@ -51,6 +53,11 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_COUNT = "post_count"
         private const val RULES_PREFS = "quack_prefs"
         private const val KEY_RULES_ACCEPTED = "rules_accepted"
+        // Surfaced when QuackLocationHelper can't deliver any fix (cold GPS,
+        // no Network provider, no persisted/system cache). Distinct from
+        // "no posts in your area" so the user knows it's a location problem.
+        private const val LOCATION_ERROR_MSG =
+            "location unavailable. step outside with a clear view of the sky and try again."
     }
 
     private val _state = MutableStateFlow(QuackUiState())
@@ -162,23 +169,28 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Called when the user presses the "refresh" soft key on the feed.
-     * Forces a fresh coarse-location read (blocks up to 30s while the radio
-     * gets a fix) and then reloads the feed against it. This is the only
-     * path that invalidates the 30-min location cache.
+     * Reloads posts only — does NOT re-request location. The persisted
+     * location is refreshed every 6 hours by [QuackLocationRefreshWorker]
+     * and at boot via the prewarm in [DumbDownApp]; the user pressing
+     * refresh is asking for fresh quacks, not a fresh GPS fix.
      */
     fun refreshFromUser() {
         _state.value = _state.value.copy(mode = QuackMode.LOADING)
         viewModelScope.launch {
             try {
-                Log.d(TAG, "refreshFromUser: forcing fresh location read")
+                Log.d(TAG, "refreshFromUser: reloading posts (location not refetched)")
+                val loc = readPersistedLocation()
+                if (loc == null) {
+                    Log.w(TAG, "refreshFromUser: no persisted location — showing location error")
+                    _state.value = _state.value.copy(
+                        mode = QuackMode.ERROR,
+                        errorMessage = LOCATION_ERROR_MSG,
+                    )
+                    return@launch
+                }
+                Log.d(TAG, "refreshFromUser: using persisted lat=${loc.first} lng=${loc.second}")
                 val posts = withContext(Dispatchers.IO) {
-                    val loc = QuackLocationReader.forceRefresh(getApplication())
-                    if (loc == null) {
-                        Log.w(TAG, "refreshFromUser: no fix — server will return empty feed")
-                    } else {
-                        Log.d(TAG, "refreshFromUser: got lat=${loc.first} lng=${loc.second}")
-                    }
-                    val arr = QuackApiClient.fetchPosts(loc?.first, loc?.second)
+                    val arr = QuackApiClient.fetchPosts(loc.first, loc.second)
                     Log.d(TAG, "refreshFromUser: got ${arr.length()} posts")
                     parsePosts(arr)
                 }
@@ -199,34 +211,54 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Suspend wrapper around QuackLocationHelper. Returns null if the helper
+     * fails (e.g. providers disabled, hard timeout reached with no fallback).
+     */
+    private suspend fun requestLocation(): Pair<Double, Double>? =
+        suspendCancellableCoroutine { cont ->
+            val helper = QuackLocationHelper(getApplication(), object : QuackLocationHelper.Callback {
+                private var resumed = false
+                override fun onLocation(lat: Double, lng: Double) {
+                    if (resumed) return
+                    resumed = true
+                    if (cont.isActive) cont.resume(lat to lng)
+                }
+                override fun onError(reason: String) {
+                    if (resumed) return
+                    resumed = true
+                    Log.w(TAG, "requestLocation error: $reason")
+                    if (cont.isActive) cont.resume(null)
+                }
+            })
+            cont.invokeOnCancellation { helper.cancel() }
+            helper.request()
+        }
+
+    /** Read the persisted location (any age up to STALE_MAX_AGE_MS). Non-blocking. */
+    private fun readPersistedLocation(): Pair<Double, Double>? {
+        val p = QuackLocationStore.load(getApplication()) ?: return null
+        if (p.ageMs >= QuackLocationStore.STALE_MAX_AGE_MS) return null
+        return p.lat to p.lng
+    }
+
     fun loadFeed() {
         _state.value = _state.value.copy(mode = QuackMode.LOADING)
         viewModelScope.launch {
             try {
-                Log.d(TAG, "loadFeed: fetching posts (using cached/in-flight location)")
+                Log.d(TAG, "loadFeed: fetching posts (using QuackLocationHelper)")
+                val loc = requestLocation()
+                if (loc == null) {
+                    Log.w(TAG, "loadFeed: no location fix — surfacing location error")
+                    _state.value = _state.value.copy(
+                        mode = QuackMode.ERROR,
+                        errorMessage = LOCATION_ERROR_MSG,
+                    )
+                    return@launch
+                }
+                Log.d(TAG, "loadFeed: using lat=${loc.first} lng=${loc.second}")
                 val posts = withContext(Dispatchers.IO) {
-                    // Prefer cache; if nothing's cached but the boot-time
-                    // prewarm is still running, piggyback on it (keeps the
-                    // LOADING mode up rather than flashing an empty feed).
-                    // If the prewarm already finished without a fix and the
-                    // cache is empty, kick off a fresh read and wait on it.
-                    var loc = QuackLocationReader.readCached()
-                    if (loc == null) {
-                        if (QuackLocationReader.isFetching()) {
-                            Log.d(TAG, "loadFeed: prewarm in flight — awaiting up to 60s")
-                            loc = QuackLocationReader.awaitInflight(60_000L)
-                        } else {
-                            Log.d(TAG, "loadFeed: no cache and no prewarm — kicking one off and waiting")
-                            QuackLocationReader.prewarm(getApplication())
-                            loc = QuackLocationReader.awaitInflight(60_000L)
-                        }
-                    }
-                    if (loc == null) {
-                        Log.w(TAG, "loadFeed: no location fix — server will return empty feed")
-                    } else {
-                        Log.d(TAG, "loadFeed: using lat=${loc.first} lng=${loc.second}")
-                    }
-                    val arr = QuackApiClient.fetchPosts(loc?.first, loc?.second)
+                    val arr = QuackApiClient.fetchPosts(loc.first, loc.second)
                     Log.d(TAG, "loadFeed: got ${arr.length()} posts")
                     parsePosts(arr)
                 }
@@ -254,7 +286,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val posts = withContext(Dispatchers.IO) {
-                    val loc = QuackLocationReader.readCached()
+                    val loc = readPersistedLocation()
                     val arr = QuackApiClient.fetchPosts(loc?.first, loc?.second)
                     parsePosts(arr)
                 }
@@ -378,7 +410,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    val loc = QuackLocationReader.readCached()
+                    val loc = readPersistedLocation()
                     if (loc == null) {
                         Log.w(TAG, "submitPost: no cached location — posting without coords (server will reject)")
                     } else {

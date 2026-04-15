@@ -10,7 +10,8 @@ import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
-import com.offlineinc.dumbdownlauncher.quack.QuackLocationReader
+import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
+import com.offlineinc.dumbdownlauncher.quack.QuackLocationRefreshWorker
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 
@@ -25,12 +26,27 @@ class DumbDownApp : Application() {
         // on a background thread because `su` can block up to 1.5s per grant.
         Thread {
             LocationPermissionGranter.ensureGranted(this)
-            // Kick off a background coarse-location read on every boot. The quack
-            // feed uses client-side cell-tower location. Prewarming here means the
-            // first time the user opens quack, the 30-min cache is already
-            // populated and the feed loads instantly without waiting for a fix.
-            QuackLocationReader.prewarm(this)
+            // Boot-time prewarm: kick off a silent coarse-location read so the
+            // persisted location cache is populated before the user opens
+            // quack. Use the long PREWARM_TIMEOUT_MS (10 minutes) — a cold GPS
+            // chip on a phone with no Network Location Provider can need
+            // several minutes outside to download orbital data. The helper
+            // persists every fix it gets internally.
+            val noop = object : QuackLocationHelper.Callback {
+                override fun onLocation(lat: Double, lng: Double) { /* persisted internally */ }
+                override fun onError(reason: String) { /* ignore */ }
+            }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                QuackLocationHelper(
+                    this,
+                    noop,
+                    hardTimeoutMs = QuackLocationHelper.PREWARM_TIMEOUT_MS,
+                ).request()
+            }
         }.start()
+        // Periodic 6-hour background refresh of the persisted location cache,
+        // so the < 6 h freshness window is always satisfied without any UI work.
+        QuackLocationRefreshWorker.schedule(this)
         // Update FlipMouse (DumbMouse) binary if a newer version is bundled
         Thread { FlipMouseUpdater.checkAndUpdate(this) }.start()
         // Ensure the mouse accessibility service is bound at startup so it's
@@ -255,6 +271,29 @@ class DumbDownApp : Application() {
                     }
                 } catch (e: Exception) {
                     Log.w(tag, "Cannot disable com.tcl.fota.system: ${e.message}")
+                }
+            },
+            // Disable Android's Wi-Fi scan throttle (default 4 scans / 2 min
+            // for foreground apps, ~1 scan / 30 min in background) so that
+            // BeaconDB-based geolocation gets fresh BSSIDs on every request.
+            // Without this the periodic 6-h refresh worker can fall back to
+            // cell-only fixes, and the very first cold-boot scan after a
+            // fresh install may return stale results. Negligible battery
+            // impact at our actual scan rate (~5–10 scans/day).
+            "disable_wifi_scan_throttle" to {
+                try {
+                    val proc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "settings put global wifi_scan_throttle_enabled 0")
+                    )
+                    val stderr = proc.errorStream.bufferedReader().readText().trim()
+                    val exit = proc.waitFor()
+                    if (exit == 0) {
+                        Log.d(tag, "Disabled wifi_scan_throttle_enabled")
+                    } else {
+                        Log.w(tag, "Failed to disable wifi_scan_throttle (exit=$exit): $stderr")
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Cannot disable wifi_scan_throttle: ${e.message}")
                 }
             },
             // Remove OpenBubbles from the Doze whitelist. A bug in OpenBubbles'
