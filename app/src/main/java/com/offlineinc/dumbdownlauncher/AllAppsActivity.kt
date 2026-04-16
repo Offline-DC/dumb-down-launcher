@@ -221,6 +221,11 @@ class AllAppsActivity : AppCompatActivity() {
                         // Clear all setup state so the next launch returns to onboarding
                         PlatformPreferences.clearAll(this@AllAppsActivity)
                         PairingStore(this@AllAppsActivity).clear()
+                        // Clear device registration prefs so the next boot re-registers
+                        this@AllAppsActivity.getSharedPreferences("device_registration", MODE_PRIVATE)
+                            .edit().clear().apply()
+                        // Drop the cached phone number so it's re-read from SIM
+                        com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader.invalidateCache()
                         Toast.makeText(
                             this@AllAppsActivity,
                             "Setup cleared — restart to go through setup again",

@@ -65,6 +65,16 @@ object SimInfoReader {
         var iccid: String? = null
         var phone: String? = null
 
+        // 0. Check if a SIM is actually present. The system telephony DB
+        //    (content://telephony/siminfo) caches values from the last
+        //    inserted SIM even after it's removed, so we can't trust it
+        //    without this gate.
+        val simReady = isSimReady(ctx)
+        if (!simReady) {
+            Log.d(TAG, "readAll: SIM not ready — skipping siminfo (stale data)")
+            return SimInfo(null, null, null)
+        }
+
         // 1. Fast path: single content query for all three fields.
         //    Wrapped in try/catch in case Magisk isn't ready or su is missing.
         try {

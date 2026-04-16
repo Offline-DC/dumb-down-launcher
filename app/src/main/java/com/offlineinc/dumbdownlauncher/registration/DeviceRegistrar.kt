@@ -114,6 +114,13 @@ object DeviceRegistrar {
         val ctx = context.applicationContext
         val normalizedPhone = normalizePhone(phone)
 
+        // 0. Bail fast if there's no network — avoids burning through retries
+        //    with backoff when the radio isn't up yet.
+        if (!NetworkUtils.isNetworkAvailable(ctx)) {
+            Log.w(TAG, "registerNow: no network available — skipping")
+            return false
+        }
+
         // 1. Check if already registered for this SIM.
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val lastImei = prefs.getString(KEY_IMEI, null)
