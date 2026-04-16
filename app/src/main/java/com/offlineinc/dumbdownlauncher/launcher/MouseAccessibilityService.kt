@@ -239,10 +239,13 @@ class MouseAccessibilityService : AccessibilityService() {
             relayPhone = phone
             relaySecret = pairing.sharedSecret
             appContext = context.applicationContext
-            ensureAccessibilityEnabled()
 
-            // Wait for a11y service on a background thread, then open the WS
+            // Ensure a11y + wait for binding on a background thread to avoid
+            // ANR — ensureAccessibilityEnabled() does blocking sleep loops and
+            // a synchronous `su -c` root shell call that can take 6+ seconds.
             Thread {
+                ensureAccessibilityEnabled()
+
                 val deadline = System.currentTimeMillis() + RELAY_A11Y_WAIT_MS
                 while (instance == null && System.currentTimeMillis() < deadline) {
                     try { Thread.sleep(200) } catch (_: InterruptedException) { break }

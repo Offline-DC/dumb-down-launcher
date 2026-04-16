@@ -107,7 +107,9 @@ class WebKeyboardService : Service() {
                 // Make app context available immediately so clipboard paste
                 // works even before the accessibility service binds.
                 MouseAccessibilityService.appContext = applicationContext
-                MouseAccessibilityService.ensureAccessibilityEnabled()
+                // ensureAccessibilityEnabled() is blocking (sleep loops + su shell)
+                // — run it in the background thread inside waitForAccessibilityThenRelay
+                // to avoid ANR on main thread.
                 waitForAccessibilityThenRelay(phone)
             }
             ACTION_STOP -> shutDown()
@@ -138,6 +140,7 @@ class WebKeyboardService : Service() {
      */
     private fun waitForAccessibilityThenRelay(phoneNumber: String) {
         Thread {
+            MouseAccessibilityService.ensureAccessibilityEnabled()
             val deadline = System.currentTimeMillis() + A11Y_WAIT_TIMEOUT_MS
             while (MouseAccessibilityService.instance == null &&
                    System.currentTimeMillis() < deadline) {
