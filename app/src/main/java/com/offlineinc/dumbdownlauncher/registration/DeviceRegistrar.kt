@@ -55,6 +55,13 @@ object DeviceRegistrar {
     // HOME process and stays alive, so a 10-second tick is cheap.
     private val POLL_INTERVAL_MS = TimeUnit.SECONDS.toMillis(10)
 
+    // Cold-boot quiet period. Delays the first SIM/root probe so the modem
+    // can finish its initialization without us hammering telephony APIs and
+    // root shell calls through the Magisk daemon. On an already-warm process
+    // (not-a-boot restart) this is wasted time, but registration is a
+    // once-per-SIM-change background task so there's no visible cost.
+    private val COLD_BOOT_QUIET_PERIOD_MS = TimeUnit.SECONDS.toMillis(30)
+
     private val JSON_TYPE = "application/json".toMediaType()
     private val inFlight = AtomicBoolean(false)
 
@@ -88,6 +95,20 @@ object DeviceRegistrar {
     // ---------------------------------------------------------------------
 
     private fun runBlocking(ctx: Context) {
+        // 0. Cold-boot quiet period. The launcher's onCreate fans out several
+        //    threads that all shell to root (swap setup, location grants,
+        //    OpenBubbles file, migrations). Kicking off SIM reads + HTTP
+        //    registration at the same time saturates the Magisk daemon and
+        //    interferes with modem init — users were seeing SIM registration
+        //    fail until they toggled airplane mode. Give the modem and su
+        //    daemon ~30s of breathing room before we touch either.
+        try {
+            Thread.sleep(COLD_BOOT_QUIET_PERIOD_MS)
+        } catch (ie: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return
+        }
+
         // 1. Wait for a SIM + phone number to appear. A cold boot on the TCL
         //    Flip Go can take ~30s to finish SIM initialization.
         val (imei, iccid, phone) = waitForSimAndPhone(ctx)

@@ -160,11 +160,19 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Called when the user first enters the quack screen (or regrants
-     * location permission). Uses whatever coarse location was prewarmed at
-     * boot — never blocks on a fresh fix.
+     * location permission). Uses the persisted location populated by the
+     * boot prewarm + 6-hourly refresh worker and fetches a fresh batch of
+     * quacks — never blocks on a fresh GPS fix, so opening the feed is
+     * always fast. If the persisted cache is empty (fresh install, hasn't
+     * had a fix yet), falls back to the full request flow via [loadFeed]
+     * which will kick off GPS / BeaconDB as needed.
      */
     fun startLocation() {
-        loadFeed()
+        if (readPersistedLocation() != null) {
+            refreshFromUser()
+        } else {
+            loadFeed()
+        }
     }
 
     /**
@@ -422,7 +430,12 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                 incrementPostsToday()
                 playHonk()
                 _state.value = _state.value.copy(isSubmitting = false, submitError = null)
-                loadFeed()
+                // We just used a cached location to post — there's no reason to
+                // re-run the full GPS/BeaconDB request flow now. refreshFromUser
+                // reads the persisted location directly and fetches posts,
+                // which avoids the 30s hard-timeout users saw on the loading
+                // screen right after pressing send.
+                refreshFromUser()
             } catch (e: Exception) {
                 Log.e(TAG, "submitPost: FAILED", e)
                 // Map API errors to inline compose-screen messages rather than full-screen errors

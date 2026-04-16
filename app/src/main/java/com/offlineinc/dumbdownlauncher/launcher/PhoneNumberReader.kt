@@ -165,12 +165,6 @@ object PhoneNumberReader {
         val handler = Handler(handlerThread.looper)
         val subManager = ctx.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
 
-        val listener = object : SubscriptionManager.OnSubscriptionsChangedListener() {
-            override fun onSubscriptionsChanged() {
-                if (isSimReadyNow(ctx)) latch.countDown()
-            }
-        }
-
         // Polling fallback — some MediaTek builds never deliver the callback.
         val pollInterval = 1_000L
         val poller = object : Runnable {
@@ -184,12 +178,18 @@ object PhoneNumberReader {
         }
 
         try {
-            // Register on our HandlerThread so the callback doesn't need the main
-            // looper. The single-arg addOnSubscriptionsChangedListener() uses the
-            // caller's Looper, and posting via `handler` ensures that's the
-            // HandlerThread we just started.
+            // Construct AND register the listener on the HandlerThread so its
+            // internal Handler binds to that thread's Looper — not the caller's.
+            // The OnSubscriptionsChangedListener constructor creates a Handler
+            // tied to the current thread's Looper, which crashes if the caller
+            // is a plain pool thread with no Looper.
             handler.post {
                 try {
+                    val listener = object : SubscriptionManager.OnSubscriptionsChangedListener() {
+                        override fun onSubscriptionsChanged() {
+                            if (isSimReadyNow(ctx)) latch.countDown()
+                        }
+                    }
                     subManager?.addOnSubscriptionsChangedListener(listener)
                 } catch (e: Exception) {
                     Log.w(TAG, "addOnSubscriptionsChangedListener failed: ${e.message}")
@@ -200,7 +200,8 @@ object PhoneNumberReader {
             latch.await(timeoutMs, TimeUnit.MILLISECONDS)
         } finally {
             handler.removeCallbacks(poller)
-            try { subManager?.removeOnSubscriptionsChangedListener(listener) } catch (_: Exception) {}
+            // Listener cleanup is handled by handlerThread.quitSafely() which
+            // tears down the looper and all associated callbacks/listeners.
             handlerThread.quitSafely()
         }
     }

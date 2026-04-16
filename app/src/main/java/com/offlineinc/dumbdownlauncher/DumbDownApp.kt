@@ -16,6 +16,20 @@ import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 
 class DumbDownApp : Application() {
+    companion object {
+        /**
+         * How long to wait after Application.onCreate before running one-time
+         * migrations. Chosen to let the modem finish SIM init (~20–30s on
+         * TCL/MediaTek), first-frame render, and WorkManager/accessibility
+         * setup all complete first. The migration thread then has the su
+         * daemon and disk largely to itself.
+         */
+        private const val MIGRATION_BOOT_DELAY_MS: Long = 30_000L
+
+        internal const val MIGRATIONS_PREFS = "migrations"
+        internal const val MIGRATION_SWAP_KEY = "create_swap_256m"
+    }
+
     override fun onCreate() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
@@ -67,11 +81,23 @@ class DumbDownApp : Application() {
         // older builds that check for it still work. Does NOT overwrite an existing file.
         Thread { ensureOpenBubblesDumbFile() }.start()
 
-        // One-time migrations that run once per version bump
-        Thread { runOneTimeMigrations() }.start()
+        // One-time migrations that run once per version bump.
+        // Deferred ~30s on cold boot so the first-time swap-file creation
+        // (9+ seconds of `dd`) and root commands don't compete with modem/SIM
+        // init, WorkManager startup, and first-frame rendering. Subsequent
+        // boots still pay the 30s wait on this background thread but it's
+        // invisible to the user — the loop short-circuits immediately when
+        // everything's already been applied.
+        Thread {
+            try { Thread.sleep(MIGRATION_BOOT_DELAY_MS) }
+            catch (ie: InterruptedException) { Thread.currentThread().interrupt(); return@Thread }
+            runOneTimeMigrations()
+        }.start()
 
         // Enable swap if the file exists — swap doesn't survive reboot, but as
-        // the HOME launcher our onCreate runs on every boot.
+        // the HOME launcher our onCreate runs on every boot. Internally defers
+        // to the create_swap_256m migration on first run to avoid racing its
+        // dd/mkswap/swapon sequence.
         Thread { enableSwapIfPresent() }.start()
 
         // Associate the device (IMEI + SIM + phone number) with the Offline API
@@ -172,7 +198,7 @@ class DumbDownApp : Application() {
      */
     private fun runOneTimeMigrations() {
         val tag = "DumbDownApp"
-        val prefs = getSharedPreferences("migrations", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences(MIGRATIONS_PREFS, Context.MODE_PRIVATE)
 
         val migrations = mapOf<String, () -> Unit>(
             // Delete the old "type_sync" notification channel that was used by the
@@ -187,19 +213,47 @@ class DumbDownApp : Application() {
             // Create a 256 MB swap file to give low-RAM devices more headroom
             // for memory-hungry apps (Uber Lite, WhatsApp, Chrome, etc.).
             // Removes any existing swap file first to avoid wasting space.
-            "create_swap_256m" to {
+            MIGRATION_SWAP_KEY to {
                 val swapTag = "SwapSetup"
                 val swapFile = "/data/swapfile"
                 val sizeMb = 256
+                val targetBytes = sizeMb.toLong() * 1024L * 1024L
                 try {
                     Log.i(swapTag, "━━━ Starting $sizeMb MB swap setup ━━━")
 
-                    // Disable + remove any existing swap file
+                    // Short-circuit: if a swap file at the right size already
+                    // exists (e.g. a previous install created it but the
+                    // migration key was cleared), just ensure swapon and exit.
+                    // Avoids a 9+ second `dd` that could block the su daemon
+                    // and re-trigger the cold-boot jank we just fixed.
+                    val statProc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "stat -c %s $swapFile 2>/dev/null || echo 0"))
+                    val existingBytes = statProc.inputStream.bufferedReader()
+                        .readText().trim().toLongOrNull() ?: 0L
+                    statProc.waitFor()
+                    if (existingBytes == targetBytes) {
+                        Log.i(swapTag, "Swap file already exists at target size ($sizeMb MB) — ensuring swapon and skipping recreate")
+                        val swapsProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat /proc/swaps"))
+                        val swaps = swapsProc.inputStream.bufferedReader().readText()
+                        swapsProc.waitFor()
+                        if (!swaps.contains(swapFile)) {
+                            val onProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "swapon $swapFile 2>&1"))
+                            val onOut = onProc.inputStream.bufferedReader().readText().trim()
+                            val onExit = onProc.waitFor()
+                            Log.i(swapTag, "swapon: exit=$onExit ${if (onOut.isNotEmpty()) "output=$onOut" else ""}")
+                        } else {
+                            Log.i(swapTag, "Swap already active")
+                        }
+                        logSwapStatus(swapTag)
+                        return@to
+                    }
+
+                    // Disable + remove any existing swap file (wrong size or missing)
                     val checkProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "test -f $swapFile && echo exists || echo missing"))
                     val checkOut = checkProc.inputStream.bufferedReader().readText().trim()
                     checkProc.waitFor()
                     if (checkOut == "exists") {
-                        Log.i(swapTag, "Old swap file found — disabling and removing")
+                        Log.i(swapTag, "Old swap file found (size=$existingBytes) — disabling and removing")
                         val offProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "swapoff $swapFile 2>&1"))
                         val offOut = offProc.inputStream.bufferedReader().readText().trim()
                         offProc.waitFor()
@@ -378,6 +432,18 @@ class DumbDownApp : Application() {
     private fun enableSwapIfPresent() {
         val tag = "SwapBoot"
         try {
+            // If the create_swap_256m migration hasn't been applied yet, leave
+            // swap setup entirely to that migration. It does the full
+            // dd → mkswap → swapon sequence and we'd otherwise race it,
+            // producing the misleading "swapon failed: No such file" error we
+            // saw after the v3 → v4 upgrade.
+            val migrationsApplied = getSharedPreferences(MIGRATIONS_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(MIGRATION_SWAP_KEY, false)
+            if (!migrationsApplied) {
+                Log.i(tag, "Swap-create migration not yet applied — deferring swapon to migration thread")
+                return
+            }
+
             val swapFile = "/data/swapfile"
             Log.i(tag, "━━━ Checking swap on boot ━━━")
 

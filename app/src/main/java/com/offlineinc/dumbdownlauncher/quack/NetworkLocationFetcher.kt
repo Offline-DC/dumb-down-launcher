@@ -122,9 +122,14 @@ object NetworkLocationFetcher {
             // Skip APs broadcasting random / null BSSIDs.
             .filter { it.BSSID != null && !it.BSSID.startsWith("00:00:00") }
             // Drop very stale results (>2 min) — not useful for current location.
+            // ScanResult.timestamp is "microseconds since boot" (elapsedRealtime
+            // domain), so we MUST compare it against SystemClock.elapsedRealtimeNanos(),
+            // not System.nanoTime(). The two clocks have unrelated epochs and
+            // drift during suspend, which made every scan result look stale and
+            // filtered out all 27 APs on a recent device.
             .filter {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                    val ageMs = (System.nanoTime() - it.timestamp * 1000L) / 1_000_000L
+                    val ageMs = (android.os.SystemClock.elapsedRealtimeNanos() - it.timestamp * 1000L) / 1_000_000L
                     ageMs in 0..120_000L
                 } else true
             }

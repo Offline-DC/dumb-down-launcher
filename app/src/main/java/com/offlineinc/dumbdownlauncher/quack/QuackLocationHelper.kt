@@ -90,8 +90,6 @@ class QuackLocationHelper(
                 Log.d(TAG, "Persisted location is fresh (< 2h) — delivering immediately")
                 delivered = true
                 handler.post { callback.onLocation(persisted.lat, persisted.lng) }
-                // Kick off providers quietly so the next open gets an even fresher fix
-                startProviders(quickFallback = null, staleFallback = null)
                 return
             }
         }
