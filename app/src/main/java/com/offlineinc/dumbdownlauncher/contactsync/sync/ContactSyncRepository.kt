@@ -27,6 +27,10 @@ class ContactSyncRepository(
 
     // Shared state between connect and sync phases
     private var connectedWs: WebSocket? = null
+    /** WebSocket that has been opened but hasn't received both_ready yet.
+     *  Tracked so disconnectWebSocket() can close it — without this,
+     *  navigating away before both_ready leaks a zombie WebSocket. */
+    private var pendingWs: WebSocket? = null
     private var peerCompleteLatch: CompletableDeferred<Unit>? = null
 
     /** True if a WebSocket is currently connected and ready for sync. */
@@ -49,6 +53,7 @@ class ContactSyncRepository(
         val ws = withTimeout(10 * 60 * 1000L) {
             suspendCancellableCoroutine { cont ->
                 var wsRef: WebSocket? = null
+                pendingWs = null  // clear any stale ref
                 wsRef = apiClient.connectSyncWebSocket(
                     flipPhoneNumber = phoneNumber,
                     onBothReady = {
@@ -85,14 +90,17 @@ class ContactSyncRepository(
                         if (cont.isActive) cont.resumeWithException(Exception(msg))
                     }
                 )
+                pendingWs = wsRef  // track so disconnectWebSocket() can close it pre-both_ready
                 cont.invokeOnCancellation {
                     Log.w(TAG, "[ContactSync] WS: cancelled (timeout?)")
                     wsRef?.close(1000, "cancelled")
+                    pendingWs = null
                 }
             }
         }
 
         connectedWs = ws
+        pendingWs = null  // promoted to connectedWs — no longer pending
         Log.i(TAG, "[ContactSync] connectAndWaitForReady: both devices connected")
     }
 
@@ -148,6 +156,8 @@ class ContactSyncRepository(
     }
 
     fun disconnectWebSocket() {
+        pendingWs?.close(1000, "cancelled")
+        pendingWs = null
         connectedWs?.close(1000, "cancelled")
         connectedWs = null
         peerCompleteLatch = null
