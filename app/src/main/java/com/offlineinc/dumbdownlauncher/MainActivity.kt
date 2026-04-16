@@ -251,8 +251,9 @@ class MainActivity : AppCompatActivity() {
                                 AllAppsActivity.invalidateCache()
                                 MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                 Log.d("ONBOARDING", "Intent choice: $choice linking=${PlatformPreferences.getLinkingChoice(this@MainActivity)}")
-                                if (choice == "none" && PlatformPreferences.getLinkingChoice(this@MainActivity) != true) {
-                                    // Not linking + super dumb — skip smart txt, show done screen
+                                if (choice == "none") {
+                                    // Super dumb — no smart txt, no mouse tutorial needed.
+                                    // Go straight to the "click ok to start using ur phone" done screen.
                                     markMouseTutorialDone()
                                     onboardingStep.value = "onboarding_complete"
                                 } else {
@@ -312,8 +313,10 @@ class MainActivity : AppCompatActivity() {
                                     onboardingStep.value = "launching_smarttxt"
                                     launchSmartTxtForPlatform(choice)
                                 } else {
-                                    Log.d("ONBOARDING", "Platform choice 'none' — going to home")
-                                    onboardingStep.value = null
+                                    // Super dumb — skip smart txt, show done screen
+                                    Log.d("ONBOARDING", "Platform choice 'none' — showing done screen")
+                                    markMouseTutorialDone()
+                                    onboardingStep.value = "onboarding_complete"
                                 }
                             }
                         )
