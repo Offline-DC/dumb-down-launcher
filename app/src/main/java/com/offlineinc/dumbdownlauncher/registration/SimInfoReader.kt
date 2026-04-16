@@ -91,6 +91,12 @@ object SimInfoReader {
             Log.w(TAG, "readAll: siminfo query failed: ${e.message}")
         }
 
+        // Normalize phone to E.164 — siminfo may store it without the '+' prefix,
+        // but the pairing backend requires E.164 for exact-match lookups.
+        if (phone != null) {
+            phone = PhoneNumberReader.formatE164(phone)
+        }
+
         if (imei != null && iccid != null && phone != null) {
             Log.i(TAG, "readAll: got all three from siminfo in one call")
             return SimInfo(imei, iccid, phone)
