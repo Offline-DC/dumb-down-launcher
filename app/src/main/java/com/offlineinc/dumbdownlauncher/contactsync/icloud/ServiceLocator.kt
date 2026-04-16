@@ -5,6 +5,7 @@ import com.offlineinc.dumbdownlauncher.contactsync.sync.ContactSyncApiClient
 import com.offlineinc.dumbdownlauncher.contactsync.sync.ContactSyncRepository
 import com.offlineinc.dumbdownlauncher.contactsync.sync.ContactSyncStore
 import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 object ServiceLocator {
     @Volatile private var store: ContactSyncStore? = null
@@ -19,7 +20,11 @@ object ServiceLocator {
 
     fun contactSyncApiClient(ctx: Context): ContactSyncApiClient {
         return apiClient ?: synchronized(this) {
-            apiClient ?: ContactSyncApiClient(OkHttpClient()).also { apiClient = it }
+            apiClient ?: ContactSyncApiClient(
+                OkHttpClient.Builder()
+                    .pingInterval(20, TimeUnit.SECONDS)
+                    .build()
+            ).also { apiClient = it }
         }
     }
 

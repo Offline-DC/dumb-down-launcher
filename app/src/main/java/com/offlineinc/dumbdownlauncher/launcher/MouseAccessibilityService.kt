@@ -325,6 +325,17 @@ class MouseAccessibilityService : AccessibilityService() {
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                     Log.i(RELAY_TAG, "🔌 WS closed: code=$code reason=\"$reason\"")
+                    // Server closed the socket (e.g. "re-paired" or "replaced").
+                    // Re-read credentials from the pairing store and reconnect
+                    // so the relay comes back up with the new shared secret.
+                    if (relayRunning && reason != "relay stopped") {
+                        Log.i(RELAY_TAG, "🔄 server-initiated close — reconnecting with fresh credentials")
+                        relayWebSocket = null
+                        val ctx = appContext ?: return
+                        val freshPairing = DeviceLinkReader.readPairing(ctx) ?: return
+                        relaySecret = freshPairing.sharedSecret
+                        relayHandler.postDelayed({ openRelaySocket(phoneNumber) }, 1_000)
+                    }
                 }
             })
         }
