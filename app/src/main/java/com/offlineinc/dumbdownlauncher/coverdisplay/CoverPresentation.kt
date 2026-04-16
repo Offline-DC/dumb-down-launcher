@@ -81,14 +81,20 @@ class CoverPresentation(context: Context, display: Display) :
     }
 
     override fun onStop() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        // Guard: dismiss() dispatches ON_DESTROY before super.dismiss(), and
+        // super.dismiss() re-enters onStop(). Skip if already destroyed.
+        if (lifecycleRegistry.currentState != Lifecycle.State.DESTROYED) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        }
         super.onStop()
     }
 
     override fun dismiss() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
-        vmStore.clear()
+        if (lifecycleRegistry.currentState != Lifecycle.State.DESTROYED) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+            vmStore.clear()
+        }
         super.dismiss()
     }
 }
