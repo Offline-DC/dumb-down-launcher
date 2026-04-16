@@ -197,7 +197,11 @@ class MouseAccessibilityService : AccessibilityService() {
 
         /**
          * Start (or restart) the encrypted WebSocket relay.
-         * Safe to call multiple times — tears down the old socket first.
+         * Safe to call multiple times — only tears down the old socket if the
+         * credentials (phone + secret) have actually changed.  When called
+         * from MainActivity.onCreate on a config change or back-navigation,
+         * the credentials are the same and the existing connection is kept
+         * alive so the companion doesn't see a disconnect/reconnect cycle.
          */
         fun startRelay(context: Context, phoneNumber: String?) {
             val pairing = DeviceLinkReader.readPairing(context)
@@ -211,15 +215,28 @@ class MouseAccessibilityService : AccessibilityService() {
                 return
             }
 
-            // Tear down any existing connection (e.g. re-pairing)
+            // If already running with the same credentials, nothing to do —
+            // avoids tearing down a healthy connection every time
+            // MainActivity.onCreate fires (back-press, config change, etc.).
+            if (relayRunning && relayPhone == phone && relaySecret == pairing.sharedSecret) {
+                Log.d(RELAY_TAG, "startRelay: already connected with same credentials — keeping existing connection")
+                return
+            }
+
+            // Tear down any existing connection (credentials changed, e.g. re-pairing)
             if (relayRunning) {
-                Log.i(RELAY_TAG, "startRelay: already running — restarting with fresh credentials")
+                Log.i(RELAY_TAG, "startRelay: credentials changed — restarting with fresh credentials")
                 relayHandler.removeCallbacksAndMessages(null)
                 relayWebSocket?.close(1000, "credential refresh")
                 relayWebSocket = null
                 relayReconnectCount = 0
             }
 
+            // Mark as running immediately to prevent a second startRelay call
+            // (e.g. from MainActivity.onCreate racing with onPaired) from
+            // spawning a duplicate a11y-wait thread before openRelaySocket runs.
+            relayRunning = true
+            relayPhone = phone
             relaySecret = pairing.sharedSecret
             appContext = context.applicationContext
             ensureAccessibilityEnabled()
@@ -253,8 +270,7 @@ class MouseAccessibilityService : AccessibilityService() {
         }
 
         private fun openRelaySocket(phoneNumber: String) {
-            relayRunning = true
-            relayPhone = phoneNumber
+            // relayRunning and relayPhone are already set by startRelay()
             val secret = relaySecret ?: return
 
             Log.i(RELAY_TAG, "━━━ openRelaySocket ━━━  phone=$phoneNumber  attempt=$relayReconnectCount")

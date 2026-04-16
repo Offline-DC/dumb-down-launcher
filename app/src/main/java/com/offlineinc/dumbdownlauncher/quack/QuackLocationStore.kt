@@ -29,13 +29,18 @@ object QuackLocationStore {
     }
 
     fun save(context: Context, lat: Double, lng: Double) {
+        // commit() instead of apply(): save() is always called from a
+        // background thread (BeaconDB, GPS listener, prewarm). Using commit()
+        // writes synchronously here and avoids queuing work that Android
+        // flushes on the main thread during Activity.onStop(), which on slow
+        // eMMC contributes to ANRs.
         context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putLong(KEY_LAT,  java.lang.Double.doubleToRawLongBits(lat))
             .putLong(KEY_LNG,  java.lang.Double.doubleToRawLongBits(lng))
             .putLong(KEY_TIME, System.currentTimeMillis())
-            .apply()
+            .commit()
         Log.d(TAG, "Saved location lat=$lat lng=$lng")
     }
 

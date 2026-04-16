@@ -75,10 +75,16 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
             postsToday = getPostsToday(),
             hasAcceptedRules = rulesAccepted,
         )
-        try {
-            honkPlayer = MediaPlayer.create(application, R.raw.honk)
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not load honk sound", e)
+        // MediaPlayer.create() is synchronous and reads from disk — move it off
+        // the main thread so it doesn't stall first-frame rendering when the
+        // eMMC is under pressure (e.g. right after an app update).
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val player = MediaPlayer.create(application, R.raw.honk)
+                withContext(Dispatchers.Main) { honkPlayer = player }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not load honk sound", e)
+            }
         }
     }
 

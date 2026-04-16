@@ -595,7 +595,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         val cmd = missing.joinToString(" && ") { "pm grant $pkg $it" }
-        Thread {
+        // Use the shared single-threaded boot executor so this su command
+        // doesn't compete with other boot-time su calls for eMMC I/O.
+        DumbDownApp.bootExecutor.execute {
             try {
                 ProcessBuilder("su", "-c", cmd)
                     .redirectErrorStream(true)
@@ -605,7 +607,7 @@ class MainActivity : AppCompatActivity() {
                 Log.w("MainActivity", "su grant failed: ${e.message}")
             }
             runOnUiThread(onDone)
-        }.start()
+        }
     }
 
     /**

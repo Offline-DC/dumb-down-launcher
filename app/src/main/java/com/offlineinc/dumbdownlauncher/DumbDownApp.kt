@@ -28,17 +28,51 @@ class DumbDownApp : Application() {
 
         internal const val MIGRATIONS_PREFS = "migrations"
         internal const val MIGRATION_SWAP_KEY = "create_swap_256m"
+
+        /**
+         * Single-threaded executor for ALL boot-time tasks that shell out to
+         * `su`. On low-RAM MediaTek/eMMC devices, concurrent `su` forks
+         * saturate the I/O bus and starve the main thread — causing ANRs
+         * even when the heavy work is nominally "in the background".
+         * Serialising the commands ensures only one `su` process hits the
+         * disk at a time, leaving enough I/O headroom for the UI to stay
+         * responsive.
+         */
+        internal val bootExecutor: java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+                Thread(r, "DumbDownBoot").apply { isDaemon = true }
+            }
     }
 
     override fun onCreate() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
-        // Self-grant location perms via `su pm grant` if the provisioning
+
+        // ── All su-heavy boot tasks are serialised on bootExecutor ──────────
+        // Previously these ran on separate Threads, causing 4–5 concurrent
+        // `su` forks that saturated the eMMC and starved the main thread.
+        // Now they run one-at-a-time in priority order:
+        //   1. Accessibility — needed for TypeSync and mouse
+        //   2. Location permission grant — needed before prewarm
+        //   3. Location prewarm — populates the quack cache
+        //   4. FlipMouse binary update
+        //   5. OpenBubbles dumb file
+        //   6. Swap enable (fast swapon, no dd)
+        //   7. (after 30s delay) One-time migrations incl. swap creation
+
+        // 1. Ensure the mouse accessibility service is bound at startup so
+        //    it's ready before the user toggles TypeSync for the first time.
+        MouseAccessibilityService.appContext = applicationContext
+        bootExecutor.execute {
+            MouseAccessibilityService.ensureAccessibilityEnabled()
+        }
+
+        // 2–3. Self-grant location perms via `su pm grant` if the provisioning
         // script never ran or a reinstall cleared them. Must happen BEFORE
-        // the prewarm so getLastKnownLocation() has permission to read. Runs
-        // on a background thread because `su` can block up to 1.5s per grant.
-        Thread {
+        // the prewarm so getLastKnownLocation() has permission to read.
+        // After granting, kick off a silent coarse-location prewarm.
+        bootExecutor.execute {
             LocationPermissionGranter.ensureGranted(this)
             // Boot-time prewarm: kick off a silent coarse-location read so the
             // persisted location cache is populated before the user opens
@@ -57,16 +91,14 @@ class DumbDownApp : Application() {
                     hardTimeoutMs = QuackLocationHelper.PREWARM_TIMEOUT_MS,
                 ).request()
             }
-        }.start()
+        }
+
         // Periodic 6-hour background refresh of the persisted location cache,
         // so the < 6 h freshness window is always satisfied without any UI work.
         QuackLocationRefreshWorker.schedule(this)
-        // Update FlipMouse (DumbMouse) binary if a newer version is bundled
-        Thread { FlipMouseUpdater.checkAndUpdate(this) }.start()
-        // Ensure the mouse accessibility service is bound at startup so it's
-        // ready before the user toggles TypeSync for the first time.
-        MouseAccessibilityService.appContext = applicationContext
-        Thread { MouseAccessibilityService.ensureAccessibilityEnabled() }.start()
+
+        // 4. Update FlipMouse (DumbMouse) binary if a newer version is bundled
+        bootExecutor.execute { FlipMouseUpdater.checkAndUpdate(this) }
 
         // Start a periodic watchdog that re-enables the a11y service whenever
         // it drops (e.g. Android kills it in the background).
@@ -77,28 +109,30 @@ class DumbDownApp : Application() {
         // ours immediately rather than waiting for the next watchdog tick.
         registerAccessibilityRecoveryListener()
 
-        // Ensure the OpenBubbles "dumb" activation file exists (blank) so that
-        // older builds that check for it still work. Does NOT overwrite an existing file.
-        Thread { ensureOpenBubblesDumbFile() }.start()
+        // 5. Ensure the OpenBubbles "dumb" activation file exists (blank) so
+        // that older builds that check for it still work. Does NOT overwrite
+        // an existing file.
+        bootExecutor.execute { ensureOpenBubblesDumbFile() }
 
-        // One-time migrations that run once per version bump.
+        // 6. Enable swap if the file exists — swap doesn't survive reboot,
+        // but as the HOME launcher our onCreate runs on every boot.
+        // Internally defers to the create_swap_256m migration on first run
+        // to avoid racing its dd/mkswap/swapon sequence.
+        bootExecutor.execute { enableSwapIfPresent() }
+
+        // 7. One-time migrations that run once per version bump.
         // Deferred ~30s on cold boot so the first-time swap-file creation
         // (9+ seconds of `dd`) and root commands don't compete with modem/SIM
         // init, WorkManager startup, and first-frame rendering. Subsequent
-        // boots still pay the 30s wait on this background thread but it's
-        // invisible to the user — the loop short-circuits immediately when
-        // everything's already been applied.
-        Thread {
+        // boots still pay the 30s wait but it's invisible to the user — the
+        // loop short-circuits immediately when everything's already been
+        // applied. Submitted to the same executor so it waits for earlier
+        // tasks to finish before sleeping, avoiding overlap.
+        bootExecutor.execute {
             try { Thread.sleep(MIGRATION_BOOT_DELAY_MS) }
-            catch (ie: InterruptedException) { Thread.currentThread().interrupt(); return@Thread }
+            catch (ie: InterruptedException) { Thread.currentThread().interrupt(); return@execute }
             runOneTimeMigrations()
-        }.start()
-
-        // Enable swap if the file exists — swap doesn't survive reboot, but as
-        // the HOME launcher our onCreate runs on every boot. Internally defers
-        // to the create_swap_256m migration on first run to avoid racing its
-        // dd/mkswap/swapon sequence.
-        Thread { enableSwapIfPresent() }.start()
+        }
 
         // Associate the device (IMEI + SIM + phone number) with the Offline API
         // on first boot, and re-associate whenever the phone number changes.
@@ -127,7 +161,7 @@ class DumbDownApp : Application() {
 
             if (!enabled || MouseAccessibilityService.instance == null) {
                 Log.w("DumbDownApp", "Accessibility state changed (enabled=$enabled, instance=${MouseAccessibilityService.instance != null}) — re-enabling service")
-                Thread { MouseAccessibilityService.ensureAccessibilityEnabled() }.start()
+                bootExecutor.execute { MouseAccessibilityService.ensureAccessibilityEnabled() }
             }
         }
     }
@@ -378,7 +412,11 @@ class DumbDownApp : Application() {
             try {
                 Log.d(tag, "Running migration: $key")
                 action()
-                prefs.edit().putBoolean(key, true).apply()
+                // commit() instead of apply(): this runs on the boot executor
+                // thread, so the synchronous write happens here — not queued
+                // for main-thread flush during Activity.onStop() which causes
+                // ANRs on slow eMMC.
+                prefs.edit().putBoolean(key, true).commit()
                 Log.d(tag, "Migration complete: $key")
             } catch (e: Exception) {
                 Log.w(tag, "Migration failed: $key — ${e.message}")
