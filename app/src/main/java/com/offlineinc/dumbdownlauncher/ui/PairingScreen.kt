@@ -28,6 +28,8 @@ import com.offlineinc.dumbdownlauncher.MainAppsGridActivity
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
+import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
+import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.ui.components.DumbButton
 import com.offlineinc.dumbdownlauncher.ui.components.DumbChipButton
@@ -48,7 +50,7 @@ private const val TAG = "PairingScreen"
  *  - PAIRING:     pairing API call in progress
  *  - PAIRED:      success, navigating forward
  */
-private enum class ScreenState { LOADING, ERROR, READY, PAIRING, PAIRED }
+private enum class ScreenState { LOADING, REGISTERING, REG_ERROR, ERROR, READY, PAIRING, PAIRED }
 
 /**
  * Full-screen pairing code entry — shown during onboarding before the
@@ -89,28 +91,49 @@ fun PairingScreen(
 
     var screenState by remember { mutableStateOf(ScreenState.LOADING) }
     var phoneNumber by remember { mutableStateOf<String?>(null) }
+    // Keep IMEI + ICCID around so we can pass them to registerNow and retry
+    // without re-reading via root shell.
+    var cachedImei by remember { mutableStateOf<String?>(null) }
+    var cachedIccid by remember { mutableStateOf<String?>(null) }
     var pairingCode by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // Retry-aware phone number reader — SIM may not be ready immediately,
-    // so retry with increasing delays before falling back to the #686# flow.
-    // Uses 5 attempts with back-off (1s, 2s, 3s, 4s) ≈ 10s total.
+    // Reads phone number, IMEI, and ICCID via SimInfoReader.readAll() — a
+    // single root shell call to content://telephony/siminfo that returns all
+    // three values. This replaces the old approach of 3 separate reads (each
+    // of which tried ~8 failing service-call commands before finding data).
     //
-    // IMPORTANT: readPhoneNumber() spawns `su` subprocesses (ProcessBuilder +
-    // waitFor), which would block the main thread and trigger an ANR
-    // ("launcher is not responding"). Always run it on Dispatchers.IO.
+    // Once the SIM info is read, registers the device with the backend BEFORE
+    // showing the phone number to the user.
+    //
+    // IMPORTANT: readAll() spawns a `su` subprocess (ProcessBuilder +
+    // waitFor), which would block the main thread and trigger an ANR.
+    // Always run on Dispatchers.IO.
     suspend fun readPhoneNumberWithRetry() {
         screenState = ScreenState.LOADING
         val maxAttempts = 5
         repeat(maxAttempts) { attempt ->
-            val result = withContext(Dispatchers.IO) { readPhoneNumber(ctx) }
-            if (result.first != null) {
-                phoneNumber = result.first
-                screenState = ScreenState.READY
+            val simInfo = withContext(Dispatchers.IO) {
+                SimInfoReader.readAll(ctx)
+            }
+            val phone = simInfo.phoneNumber
+            val imei = simInfo.imei
+            val iccid = simInfo.iccid
+
+            if (phone != null && !imei.isNullOrBlank() && !iccid.isNullOrBlank()) {
+                phoneNumber = phone
+                cachedImei = imei
+                cachedIccid = iccid
+
+                // Register the device before showing the number.
+                screenState = ScreenState.REGISTERING
+                val registered = withContext(Dispatchers.IO) {
+                    DeviceRegistrar.registerNow(ctx, imei, iccid, phone)
+                }
+                screenState = if (registered) ScreenState.READY else ScreenState.REG_ERROR
                 return
             }
             if (attempt == maxAttempts - 1) {
-                // All retries exhausted — show error with support number
                 screenState = ScreenState.ERROR
                 return
             }
@@ -120,13 +143,23 @@ fun PairingScreen(
         }
     }
 
+    // Guard against concurrent launches of readPhoneNumberWithRetry — both the
+    // ON_RESUME observer and the permissionsReady effect can fire close together.
+    var readInFlight by remember { mutableStateOf(false) }
+
+    fun launchReadIfIdle() {
+        if (readInFlight || phoneNumber != null || screenState != ScreenState.LOADING) return
+        readInFlight = true
+        scope.launch {
+            try { readPhoneNumberWithRetry() } finally { readInFlight = false }
+        }
+    }
+
     // On resume: kick off the retry loop only if still in the initial loading state.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && screenState == ScreenState.LOADING && phoneNumber == null) {
-                scope.launch { readPhoneNumberWithRetry() }
-            }
+            if (event == Lifecycle.Event.ON_RESUME) launchReadIfIdle()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -134,9 +167,7 @@ fun PairingScreen(
 
     // Re-read phone number once su permission grant completes
     LaunchedEffect(permissionsReady) {
-        if (permissionsReady && phoneNumber == null && screenState == ScreenState.LOADING) {
-            readPhoneNumberWithRetry()
-        }
+        if (permissionsReady) launchReadIfIdle()
     }
 
     LaunchedEffect(Unit) {
@@ -220,9 +251,29 @@ fun PairingScreen(
                         }
                     }
 
-                    ScreenState.LOADING, ScreenState.ERROR, ScreenState.PAIRING, ScreenState.PAIRED -> {
+                    ScreenState.LOADING, ScreenState.REGISTERING, ScreenState.ERROR, ScreenState.PAIRING, ScreenState.PAIRED -> {
                         // Consume OK in these states so it doesn't bubble to the skip button
                         if (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter) {
+                            return@onPreviewKeyEvent true
+                        }
+                    }
+
+                    ScreenState.REG_ERROR -> {
+                        // Let the user retry registration by pressing OK.
+                        // Uses cached IMEI/ICCID to avoid re-reading via root shell.
+                        if (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter) {
+                            val imei = cachedImei
+                            val iccid = cachedIccid
+                            val phone = phoneNumber
+                            if (imei != null && iccid != null && phone != null) {
+                                screenState = ScreenState.REGISTERING
+                                scope.launch {
+                                    val registered = withContext(Dispatchers.IO) {
+                                        DeviceRegistrar.registerNow(ctx, imei, iccid, phone)
+                                    }
+                                    screenState = if (registered) ScreenState.READY else ScreenState.REG_ERROR
+                                }
+                            }
                             return@onPreviewKeyEvent true
                         }
                     }
@@ -257,6 +308,38 @@ fun PairingScreen(
                         text = "reading phone number...",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
                         modifier = Modifier.padding(top = 16.dp)
+                    )
+                }
+
+                // ── Registering: phone number read, registering with backend ──
+                ScreenState.REGISTERING -> {
+                    BasicText(
+                        text = "registering device...",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                }
+
+                // ── Registration error — let user retry ─────────────
+                ScreenState.REG_ERROR -> {
+                    BasicText(
+                        text = "couldn't register device",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    BasicText(
+                        text = "check ur connection & press ok to retry",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    BasicText(
+                        text = "or call the dumb line for help:",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
+                        modifier = Modifier.padding(bottom = 2.dp)
+                    )
+                    BasicText(
+                        text = "404-716-3605",
+                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
                     )
                 }
 

@@ -90,6 +90,105 @@ object DeviceRegistrar {
         }, "DeviceRegistrar").start()
     }
 
+    /**
+     * Immediate, blocking registration for use from the pairing screen.
+     * Accepts pre-read SIM identifiers to avoid redundant root shell calls.
+     * Uses the single POST /api/v1/register endpoint (1 HTTP call instead of 4).
+     *
+     * Returns `true` if the device was successfully registered (or was
+     * already registered for this SIM). Thread-safe — can be called from
+     * [Dispatchers.IO] while [scheduleOnBoot] is also in progress.
+     *
+     * @param imei   IMEI read by caller (avoids re-reading via root shell).
+     * @param iccid  ICCID read by caller.
+     * @param phone  Phone number in E.164 format read by caller.
+     * @param maxRetries  Number of retries on failure (default 3, with 2s/4s/6s backoff).
+     */
+    fun registerNow(
+        context: Context,
+        imei: String,
+        iccid: String,
+        phone: String,
+        maxRetries: Int = 3,
+    ): Boolean {
+        val ctx = context.applicationContext
+        val normalizedPhone = normalizePhone(phone)
+
+        // 1. Check if already registered for this SIM.
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val lastImei = prefs.getString(KEY_IMEI, null)
+        val lastIccid = prefs.getString(KEY_ICCID, null)
+        val registeredAt = prefs.getLong(KEY_REGISTERED_AT, 0L)
+
+        if (registeredAt != 0L && lastImei == imei && lastIccid == iccid) {
+            Log.i(TAG, "registerNow: already registered for this SIM — nothing to do")
+            return true
+        }
+
+        // 2. Register via single combined endpoint, with retries.
+        // Strip the phone number to bare digits (no +1) for the phoneline key,
+        // matching the format the backend expects.
+        val pathPhone = normalizedPhone.removePrefix("+").removePrefix("1")
+        for (attempt in 1..maxRetries) {
+            Log.i(TAG, "registerNow: attempt $attempt/$maxRetries")
+            val ok = postRegister(imei, iccid, pathPhone)
+            if (ok) {
+                persist(prefs, imei, iccid, normalizedPhone)
+                Log.i(TAG, "registerNow: ✅ registered on attempt $attempt")
+                return true
+            }
+            if (attempt < maxRetries) {
+                val backoffMs = attempt * 2000L
+                Log.w(TAG, "registerNow: attempt $attempt failed — retrying in ${backoffMs}ms")
+                try {
+                    Thread.sleep(backoffMs)
+                } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+        }
+
+        Log.e(TAG, "registerNow: ⚠️ all $maxRetries attempts failed")
+        return false
+    }
+
+    /**
+     * Single POST to /api/v1/register — replaces the four separate PUT calls
+     * (phones, sims, phonelines, verify) with one round-trip.
+     */
+    private fun postRegister(imei: String, iccid: String, phoneNumber: String): Boolean {
+        return try {
+            val body = JSONObject()
+                .put("imei", imei)
+                .put("iccid", iccid)
+                .put("phone_number", phoneNumber)
+                .put("software_version", SOFTWARE_VERSION)
+            val req = Request.Builder()
+                .url("$API_BASE/register")
+                .post(body.toString().toRequestBody(JSON_TYPE))
+                .build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    Log.w(TAG, "register FAIL HTTP ${resp.code} body=${resp.body?.string()}")
+                    return false
+                }
+                val respBody = resp.body?.string() ?: "{}"
+                val json = JSONObject(respBody)
+                val registered = json.optBoolean("registered", false)
+                if (registered) {
+                    Log.i(TAG, "register ✔ HTTP ${resp.code}")
+                } else {
+                    Log.w(TAG, "register: server says not verified — $respBody")
+                }
+                registered
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "register IO error: ${e.message}")
+            false
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Main loop
     // ---------------------------------------------------------------------

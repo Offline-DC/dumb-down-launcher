@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.telephony.TelephonyManager
 import android.util.Log
+import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -39,6 +40,73 @@ object SimInfoReader {
      */
     private val IMEI_CALLS = listOf("1", "3", "4")
     private val ICCID_CALLS = listOf("11", "12")
+
+    /**
+     * Data class for the combined SIM info read — IMEI, ICCID, and phone number
+     * from a single `content://telephony/siminfo` query (one root shell call).
+     */
+    data class SimInfo(val imei: String?, val iccid: String?, val phoneNumber: String?)
+
+    /**
+     * Reads IMEI (stored as `imsi`), ICCID (`icc_id`), and phone number (`number`)
+     * from `content://telephony/siminfo` in a **single** root shell call.
+     *
+     * On TCL/MediaTek flip phones the `service call iphonesubinfo` commands all
+     * fail ("Attempt to get length of null array") and the getprop fallbacks are
+     * empty, so the siminfo content provider is the only source that works — and
+     * it has all three values. Calling this first avoids ~8 failed `su -c` round
+     * trips that take 10-15 seconds.
+     *
+     * Falls back to the individual [readImei]/[readIccid] methods if the combined
+     * query fails.
+     */
+    fun readAll(ctx: Context): SimInfo {
+        var imei: String? = null
+        var iccid: String? = null
+        var phone: String? = null
+
+        // 1. Fast path: single content query for all three fields.
+        //    Wrapped in try/catch in case Magisk isn't ready or su is missing.
+        try {
+            val raw = runSu("content query --uri content://telephony/siminfo --projection imsi,icc_id,number")
+            if (raw != null) {
+                imei = extractField(raw, "imsi")
+                    ?.takeIf { IMEI_REGEX.matches(it) || (it.isNotBlank() && it.all(Char::isDigit)) }
+                iccid = extractField(raw, "icc_id")
+                    ?.takeIf { ICCID_REGEX.matches(it) }
+                phone = extractField(raw, "number")
+                    ?.takeIf { it.isNotBlank() && it.any(Char::isDigit) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "readAll: siminfo query failed: ${e.message}")
+        }
+
+        if (imei != null && iccid != null && phone != null) {
+            Log.i(TAG, "readAll: got all three from siminfo in one call")
+            return SimInfo(imei, iccid, phone)
+        }
+        Log.d(TAG, "readAll: siminfo partial (imei=${imei != null} iccid=${iccid != null} phone=${phone != null}) — filling gaps")
+
+        // 2. Fill in any missing values via the individual fallback chains.
+        //    Each of these tries TelephonyManager → service calls → getprops, etc.
+        if (imei == null) imei = readImei(ctx)
+        if (iccid == null) iccid = readIccid(ctx)
+        if (phone == null) {
+            // PhoneNumberReader tries Settings.Secure, siminfo, SubscriptionManager,
+            // and TelephonyManager.getLine1Number.
+            val (p, _) = PhoneNumberReader.read(ctx)
+            phone = p
+        }
+
+        return SimInfo(imei, iccid, phone)
+    }
+
+    /** Extract a named field from `content query` output like "Row: 0 field=value, ..." */
+    private fun extractField(raw: String, field: String): String? {
+        val match = Regex("""$field=([^,}\s]+)""").find(raw) ?: return null
+        val v = match.groupValues[1].trim().trim('\r', '\n')
+        return if (v.isBlank() || v.equals("NULL", ignoreCase = true) || v == "null") null else v
+    }
 
     /** Returns the device IMEI (or serial as last resort) or null if none available. */
     fun readImei(ctx: Context): String? {
