@@ -25,16 +25,20 @@ fun HomeRoute(
     val ctx = LocalContext.current
     val ui by vm.ui.collectAsState()
 
-    // Reset state and reconnect on every resume (not just first composition)
+    // Reset state and reconnect on every resume (not just first composition).
+    // Use `Unit` as the key (not lifecycleOwner) so the effect runs exactly
+    // once per composition — prevents a dispose/re-register cycle that was
+    // causing two rapid ON_RESUME → disconnect → connect sequences, resulting
+    // in duplicate WebSocket connections on the server.
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(Unit) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 // Re-read pairing data — the user may have
                 // unpaired and re-paired, giving a new sharedSecret.
                 DeviceLinkReader.readAndCache(ctx)
 
-                // Don't reset if a sync is actively running
+                // Don't reset if a sync is actively running or already connecting
                 if (!vm.isSyncing) {
                     vm.resetForReconnect()
                     vm.refreshStatus(ctx)

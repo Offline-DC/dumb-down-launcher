@@ -131,7 +131,10 @@ class HomeViewModel : ViewModel() {
     }
 
     fun connectWebSocket(ctx: Context) {
-        if (connectJob?.isActive == true) return
+        if (connectJob?.isActive == true) {
+            Log.d(TAG, "[ContactSync] connectWebSocket: job already active — skipping")
+            return
+        }
         Log.i(TAG, "[ContactSync] connectWebSocket: starting")
         _ui.update {
             it.copy(
