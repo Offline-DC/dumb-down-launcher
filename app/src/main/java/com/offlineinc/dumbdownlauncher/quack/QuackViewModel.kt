@@ -130,6 +130,20 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(postsToday = current + 1)
     }
 
+    /**
+     * Re-read the daily quack count from SharedPreferences and update the UI
+     * state. This must be called whenever the user re-enters the quack screen
+     * or attempts to compose/send, because the ViewModel can survive across
+     * day boundaries (launcher apps stay in memory), and the cached
+     * [QuackUiState.postsToday] would otherwise remain stale until force-stop.
+     */
+    private fun refreshPostsToday() {
+        val fresh = getPostsToday()
+        if (fresh != _state.value.postsToday) {
+            _state.value = _state.value.copy(postsToday = fresh)
+        }
+    }
+
     val postsRemaining: Int
         get() = (MAX_POSTS_PER_DAY - _state.value.postsToday).coerceAtLeast(0)
 
@@ -168,6 +182,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
      * which will kick off GPS / BeaconDB as needed.
      */
     fun startLocation() {
+        refreshPostsToday()
         if (readPersistedLocation() != null) {
             refreshFromUser()
         } else {
@@ -316,6 +331,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun enterCompose() {
+        refreshPostsToday()
         if (_state.value.hasAcceptedRules) {
             _state.value = _state.value.copy(mode = QuackMode.COMPOSE, composeText = "", submitError = null)
         } else {
@@ -380,6 +396,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun submitPost() {
+        refreshPostsToday()
         val s = _state.value
         val text = s.composeText.trim()
         Log.d(TAG, "submitPost: text='$text' isSubmitting=${s.isSubmitting}")

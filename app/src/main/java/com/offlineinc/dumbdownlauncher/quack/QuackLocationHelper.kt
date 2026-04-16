@@ -211,6 +211,12 @@ class QuackLocationHelper(
         if (delivered) return
         Log.d(TAG, "startGpsFallback: netAvail=$netAvail gpsAvail=$gpsAvail")
 
+        // Ensure location permission is granted before touching LocationManager.
+        // On rooted TCL/MediaTek hardware the granter shells out `su pm grant`
+        // which is synchronous and takes ~1s. This covers fresh installs,
+        // OTA resets, and dev reinstalls that wipe grants.
+        LocationPermissionGranter.ensureGranted(appContext)
+
         // Request network first — responds in <1s vs 5+ for GPS; both race, first wins
         if (netAvail) lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, netListener)
         if (gpsAvail) lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,     MIN_TIME_MS, MIN_DIST_M, gpsListener)

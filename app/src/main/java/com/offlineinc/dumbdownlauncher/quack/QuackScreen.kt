@@ -256,25 +256,28 @@ private fun FeedScreen(
             .background(DumbTheme.Colors.Black)
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                // Consume both KeyDown and KeyUp for handled keys so that
+                // no stale KeyUp / repeat leaks into the next screen after
+                // a mode transition (e.g. feed → rules → compose).
+                val isDown = event.type == KeyEventType.KeyDown
                 when (event.key) {
                     Key.DirectionUp -> {
-                        viewModel.moveSelection(-1); true
+                        if (isDown) viewModel.moveSelection(-1); true
                     }
                     Key.DirectionDown -> {
-                        viewModel.moveSelection(1); true
+                        if (isDown) viewModel.moveSelection(1); true
                     }
                     Key.SoftLeft -> {
-                        viewModel.enterCompose(); true
+                        if (isDown) viewModel.enterCompose(); true
                     }
                     Key.DirectionCenter -> {
-                        viewModel.refreshFromUser(); true
+                        if (isDown) viewModel.refreshFromUser(); true
                     }
                     Key.SoftRight -> {
-                        viewModel.showRules(); true
+                        if (isDown) viewModel.showRules(); true
                     }
                     Key.Back -> {
-                        onBack(); true
+                        if (isDown) onBack(); true
                     }
                     else -> false
                 }
@@ -371,18 +374,21 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
             .background(DumbTheme.Colors.Black)
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val isDown = event.type == KeyEventType.KeyDown
                 when (event.key) {
                     Key.SoftRight -> {
-                        // Only accept on a fresh press (repeatCount == 0).
-                        // Held-down keys arrive as repeats and are consumed
-                        // but ignored — prevents accept→home→back-to-rules.
-                        val repeat = event.nativeKeyEvent.repeatCount
-                        if (!accepted && repeat == 0) { viewModel.acceptRules(); true }
-                        else if (!accepted) true   // consume repeats
-                        else false
+                        // Only accept on a fresh KeyDown (repeatCount == 0).
+                        // Always consume both KeyDown repeats AND KeyUp so
+                        // nothing leaks to the compose screen that appears
+                        // after acceptance.
+                        if (isDown && !accepted && event.nativeKeyEvent.repeatCount == 0) {
+                            viewModel.acceptRules()
+                        }
+                        true
                     }
-                    Key.Back, Key.SoftLeft -> { viewModel.exitRules(); true }
+                    Key.Back, Key.SoftLeft -> {
+                        if (isDown) viewModel.exitRules(); true
+                    }
                     else -> false
                 }
             }
@@ -480,13 +486,13 @@ private fun ComposeScreen(
                 .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH)
                 .focusRequester(focusRequester)
                 .onPreviewKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    val isDown = event.type == KeyEventType.KeyDown
                     when (event.key) {
                         Key.SoftLeft -> {
-                            viewModel.submitPost(); true
+                            if (isDown) viewModel.submitPost(); true
                         }
                         Key.Back, Key.SoftRight -> {
-                            viewModel.exitCompose(); true
+                            if (isDown) viewModel.exitCompose(); true
                         }
                         else -> false
                     }
@@ -544,10 +550,10 @@ private fun ErrorScreen(
             .background(DumbTheme.Colors.Black)
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val isDown = event.type == KeyEventType.KeyDown
                 when (event.key) {
-                    Key.DirectionCenter -> { viewModel.retry(); true }
-                    Key.Back, Key.SoftLeft -> { onBack(); true }
+                    Key.DirectionCenter -> { if (isDown) viewModel.retry(); true }
+                    Key.Back, Key.SoftLeft -> { if (isDown) onBack(); true }
                     else -> false
                 }
             }
