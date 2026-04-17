@@ -423,6 +423,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         val ctx = getApplication<Application>()
         if (newMuted) {
             QuackMondayAlarmReceiver.cancelAlarm(ctx)
+            QuackFirstQuackWorker.cancel(ctx)
         } else {
             QuackMondayAlarmReceiver.scheduleNext(ctx)
         }

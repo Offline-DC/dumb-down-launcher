@@ -58,7 +58,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     private val _state = MutableStateFlow(WeatherUiState())
     val state: StateFlow<WeatherUiState> = _state
 
-    /** Epoch millis of the last successful fetch — used for the 5-min staleness check. */
+    /** Epoch millis of the last successful fetch — used for the 30-min staleness check. */
     private var lastFetchedAt: Long = 0L
 
     /**
@@ -98,13 +98,13 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Silent refresh — re-fetches weather data without showing loading state.
      * Called by onResume for background updates when returning to the weather
-     * screen. Skips the fetch if the last successful load was < 5 minutes ago.
+     * screen. Skips the fetch if the last successful load was < 30 minutes ago.
      */
     fun refreshWeather() {
         if (_state.value.mode != WeatherMode.DISPLAY) return
         val elapsed = System.currentTimeMillis() - lastFetchedAt
         if (elapsed < REFRESH_COOLDOWN_MS) {
-            Log.d(TAG, "refreshWeather: skipping — last fetch ${elapsed / 1000}s ago (< 5min)")
+            Log.d(TAG, "refreshWeather: skipping — last fetch ${elapsed / 1000}s ago (< 30min)")
             return
         }
         viewModelScope.launch {

@@ -103,6 +103,7 @@ class SnakeGameView @JvmOverloads constructor(
     private val foodGlowPaint = Paint().apply {
         color = Color.rgb(255, 200, 200)
         style = Paint.Style.FILL
+        alpha = 60
     }
 
     private val textPaint = Paint().apply {
@@ -132,6 +133,21 @@ class SnakeGameView @JvmOverloads constructor(
         textSize = 18f
         isAntiAlias = true
         textAlign = Paint.Align.LEFT
+    }
+
+    private val gameOverPaint = Paint().apply {
+        color = Color.rgb(255, 80, 80)
+        textSize = 32f
+        isFakeBoldText = true
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+
+    private val newBestPaint = Paint().apply {
+        color = Color.rgb(255, 220, 0)
+        textSize = 18f
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
     }
 
     private val borderPaint = Paint().apply {
@@ -351,7 +367,7 @@ class SnakeGameView @JvmOverloads constructor(
         val r  = cellSize / 2f - 2f
 
         // Glow
-        canvas.drawCircle(cx, cy, r + 2f, foodGlowPaint.apply { alpha = 60 })
+        canvas.drawCircle(cx, cy, r + 2f, foodGlowPaint)
         // Food dot
         canvas.drawCircle(cx, cy, r, foodPaint)
     }
@@ -391,27 +407,13 @@ class SnakeGameView @JvmOverloads constructor(
         val cx = width / 2f
         val cy = height / 2f
 
-        val redPaint = Paint().apply {
-            color = Color.rgb(255, 80, 80)
-            textSize = 32f
-            isFakeBoldText = true
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-        }
-        canvas.drawText("GAME OVER", cx, cy - 55f, redPaint)
+        canvas.drawText("GAME OVER", cx, cy - 55f, gameOverPaint)
 
         canvas.drawText("Score: $score", cx, cy - 10f, textPaint)
 
-        val hiPaint = if (score >= highScore && score > 0) {
-            Paint().apply {
-                color = Color.rgb(255, 220, 0)
-                textSize = 18f
-                isAntiAlias = true
-                textAlign = Paint.Align.CENTER
-            }
-        } else smallTextPaint
-
-        val hiLabel = if (score >= highScore && score > 0) "NEW BEST: $highScore" else "Best: $highScore"
+        val isNewBest = score >= highScore && score > 0
+        val hiPaint = if (isNewBest) newBestPaint else smallTextPaint
+        val hiLabel = if (isNewBest) "NEW BEST: $highScore" else "Best: $highScore"
         canvas.drawText(hiLabel, cx, cy + 20f, hiPaint)
 
         canvas.drawText("Press OK to play again", cx, cy + 55f, dimTextPaint)
