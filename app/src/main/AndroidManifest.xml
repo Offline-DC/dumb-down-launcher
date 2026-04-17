@@ -92,7 +92,7 @@
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <activity
-            android:name=".weather.WeatherActivity"
+            android:name=".snake.SnakeActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:theme="@style/Theme.DumbDownLauncher" />
@@ -135,15 +135,6 @@
             <intent-filter>
                 <action android:name="com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK" />
                 <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
-            </intent-filter>
-        </receiver>
-
-        <!-- Monday 9 AM Eastern quack reminder alarm -->
-        <receiver
-            android:name=".quack.QuackMondayAlarmReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.offlineinc.dumbdownlauncher.QUACK_MONDAY" />
             </intent-filter>
         </receiver>
 

@@ -56,8 +56,8 @@ fun QuackScreen(
     ) {
         when (state.mode) {
             QuackMode.LOADING -> {
-                if (state.isInitialLoad) LoadingScreen(onBack)
-                else MiniLoadingScreen(onBack)
+                if (state.isInitialLoad) LoadingScreen()
+                else MiniLoadingScreen()
             }
             QuackMode.FEED    -> FeedScreen(state, viewModel, onBack)
             QuackMode.RULES   -> RulesScreen(state, viewModel)
@@ -74,7 +74,7 @@ fun QuackScreen(
  * Each frame is a 12×12 grid drawn with chunky square pixels.
  */
 @Composable
-private fun LoadingScreen(onBack: () -> Unit) {
+private fun LoadingScreen() {
     var frame by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -87,15 +87,7 @@ private fun LoadingScreen(onBack: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(DumbTheme.Colors.Black)
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.Back -> { onBack(); true }
-                    else -> false
-                }
-            }
-            .focusable(),
+            .background(DumbTheme.Colors.Black),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -123,7 +115,7 @@ private fun LoadingScreen(onBack: () -> Unit) {
  * Simplified loading screen — just the dots, no duck. Used for refreshes after submit.
  */
 @Composable
-private fun MiniLoadingScreen(onBack: () -> Unit) {
+private fun MiniLoadingScreen() {
     var frame by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -136,15 +128,7 @@ private fun MiniLoadingScreen(onBack: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(DumbTheme.Colors.Black)
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.Back -> { onBack(); true }
-                    else -> false
-                }
-            }
-            .focusable(),
+            .background(DumbTheme.Colors.Black),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -381,7 +365,6 @@ private fun PostRow(post: QuackPost, selected: Boolean, ageTick: Int = 0) {
 private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
     val focusRequester = remember { FocusRequester() }
     val accepted = state.hasAcceptedRules
-    val muted = state.notificationsMuted
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
@@ -394,14 +377,12 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
                 val isDown = event.type == KeyEventType.KeyDown
                 when (event.key) {
                     Key.SoftRight -> {
-                        if (isDown && event.nativeKeyEvent.repeatCount == 0) {
-                            if (!accepted) {
-                                // Accept rules on first visit
-                                viewModel.acceptRules()
-                            } else {
-                                // Toggle mute/unmute for quack notifications
-                                viewModel.toggleMute()
-                            }
+                        // Only accept on a fresh KeyDown (repeatCount == 0).
+                        // Always consume both KeyDown repeats AND KeyUp so
+                        // nothing leaks to the compose screen that appears
+                        // after acceptance.
+                        if (isDown && !accepted && event.nativeKeyEvent.repeatCount == 0) {
+                            viewModel.acceptRules()
                         }
                         true
                     }
@@ -445,7 +426,7 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
         SoftKeyBar(
             leftLabel = "back",
             centerLabel = null,
-            rightLabel = if (!accepted) "accept" else if (muted) "unmute" else "mute",
+            rightLabel = if (accepted) null else "accept",
         )
     }
 }

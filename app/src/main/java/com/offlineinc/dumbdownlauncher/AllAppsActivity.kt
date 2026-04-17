@@ -64,6 +64,8 @@ class AllAppsActivity : AppCompatActivity() {
             "com.mediatek.calendarimporter",  // MTK calendar importer
             // SIM tool kit
             "com.android.stk",
+            // Snake — now built into the launcher as a virtual app
+            "com.snake",
         )
 
         private val bgExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -142,6 +144,14 @@ class AllAppsActivity : AppCompatActivity() {
                 ))
             }
 
+            // Snake — always available as a built-in game
+            appItems.add(AppItem(
+                packageName = SNAKE,
+                label = "snake",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+
             // Show smart txt when platform is chosen (iOS → OpenBubbles, Android → Google Messages)
             val platform = PlatformPreferences.getChoice(context)
             val smartTxtPkg = when (platform) {
@@ -157,17 +167,6 @@ class AllAppsActivity : AppCompatActivity() {
                     launchComponent = null,
                 ))
             }
-
-            // Weather is always visible
-            val weatherIcon = androidx.core.content.ContextCompat.getDrawable(
-                context, R.drawable.ic_weather_app
-            ) ?: pm.defaultActivityIcon
-            appItems.add(AppItem(
-                packageName = WEATHER,
-                label = "weather",
-                icon = weatherIcon,
-                launchComponent = null,
-            ))
 
             if (!pairingStore.hideSmartTxt) {
                 appItems.add(AppItem(
@@ -298,16 +297,16 @@ class AllAppsActivity : AppCompatActivity() {
                         )
                         overridePendingTransition(0, 0)
                     }
-                    CONTACT_SYNC -> {
+                    SNAKE -> {
                         startActivity(
-                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.snake.SnakeActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         )
                         overridePendingTransition(0, 0)
                     }
-                    WEATHER -> {
+                    CONTACT_SYNC -> {
                         startActivity(
-                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.weather.WeatherActivity::class.java)
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         )
                         overridePendingTransition(0, 0)

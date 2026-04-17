@@ -111,24 +111,14 @@ class ContactSyncActivity : AppCompatActivity() {
      * skip button — but only when skip is NOT already focused. This lets
      * the default Compose focus traversal handle Down/Back from skip
      * back to the content below.
-     *
-     * Also intercept Back to ensure we always finish() cleanly back to
-     * AllAppsActivity rather than landing on a stale activity in the stack.
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (!isSkipFocused) {
-                        skipFocusRequester?.let {
-                            try { it.requestFocus(); return true } catch (_: Throwable) {}
-                        }
-                    }
-                }
-                KeyEvent.KEYCODE_BACK -> {
-                    finish()
-                    return true
-                }
+        if (event.action == KeyEvent.ACTION_DOWN
+            && event.keyCode == KeyEvent.KEYCODE_DPAD_UP
+            && !isSkipFocused
+        ) {
+            skipFocusRequester?.let {
+                try { it.requestFocus(); return true } catch (_: Throwable) {}
             }
         }
         return super.dispatchKeyEvent(event)

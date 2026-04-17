@@ -21,9 +21,6 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.TimeZone
 
-private const val NOTIF_PREFS = "quack_prefs"
-private const val KEY_MUTED = "notifications_muted"
-
 private const val TAG = "QuackViewModel"
 
 data class QuackPost(
@@ -45,7 +42,6 @@ data class QuackUiState(
     val postsToday: Int = 0,
     val isInitialLoad: Boolean = true,
     val hasAcceptedRules: Boolean = false,
-    val notificationsMuted: Boolean = false,
 )
 
 class QuackViewModel(application: Application) : AndroidViewModel(application) {
@@ -72,14 +68,12 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     private var rulesFromCompose = false
 
     init {
-        val prefs = getApplication<Application>()
+        val rulesAccepted = getApplication<Application>()
             .getSharedPreferences(RULES_PREFS, Context.MODE_PRIVATE)
-        val rulesAccepted = prefs.getBoolean(KEY_RULES_ACCEPTED, false)
-        val muted = prefs.getBoolean(KEY_MUTED, false)
+            .getBoolean(KEY_RULES_ACCEPTED, false)
         _state.value = _state.value.copy(
             postsToday = getPostsToday(),
             hasAcceptedRules = rulesAccepted,
-            notificationsMuted = muted,
         )
         // MediaPlayer.create() is synchronous and reads from disk — move it off
         // the main thread so it doesn't stall first-frame rendering when the
@@ -271,11 +265,8 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     /** Read the persisted location (any age up to STALE_MAX_AGE_MS). Non-blocking. */
-    private fun readPersistedLocation(): Pair<Double, Double>? {
-        val p = QuackLocationStore.load(getApplication()) ?: return null
-        if (p.ageMs >= QuackLocationStore.STALE_MAX_AGE_MS) return null
-        return p.lat to p.lng
-    }
+    private fun readPersistedLocation(): Pair<Double, Double>? =
+        QuackLocationStore.loadIfUsable(getApplication())
 
     fun loadFeed() {
         _state.value = _state.value.copy(mode = QuackMode.LOADING)
@@ -311,6 +302,39 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                     mode = QuackMode.ERROR,
                     errorMessage = friendly,
                 )
+            }
+        }
+    }
+
+    /**
+     * Called when the user returns to the quack screen (Activity.onResume).
+     * Refreshes posts silently — no loading spinner, no location re-fetch —
+     * and snaps focus to the most recent quack (index 0) once loaded.
+     * No-ops if the feed isn't currently displayed (e.g. still on the
+     * loading or rules screen from onCreate).
+     */
+    fun onResumeRefresh() {
+        refreshPostsToday()
+        if (_state.value.mode != QuackMode.FEED) return
+        // Bail early if no persisted location yet — avoids a wasteful
+        // API call with null coordinates on the very first resume before
+        // startLocation() has completed.
+        if (readPersistedLocation() == null) return
+        viewModelScope.launch {
+            try {
+                val posts = withContext(Dispatchers.IO) {
+                    val loc = readPersistedLocation()
+                    val arr = QuackApiClient.fetchPosts(loc?.first, loc?.second)
+                    parsePosts(arr)
+                }
+                if (_state.value.mode == QuackMode.FEED) {
+                    _state.value = _state.value.copy(
+                        posts = posts,
+                        selectedIndex = 0,
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "onResumeRefresh: silent fail", e)
             }
         }
     }
@@ -387,31 +411,6 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(mode = QuackMode.FEED, submitError = null)
     }
 
-    /**
-     * Toggle mute/unmute for weekly quack notifications.
-     * Muting cancels the Monday alarm, any active polling worker, and
-     * dismisses any visible quack notification. Unmuting re-arms the alarm.
-     */
-    fun toggleMute() {
-        val app = getApplication<Application>()
-        val nowMuted = !_state.value.notificationsMuted
-        app.getSharedPreferences(RULES_PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(KEY_MUTED, nowMuted)
-            .apply()
-        _state.value = _state.value.copy(notificationsMuted = nowMuted)
-        if (nowMuted) {
-            QuackMondayAlarmReceiver.cancelAlarm(app)
-            QuackFirstQuackWorker.cancel(app)
-            QuackNotificationManager.cancel(app, QuackNotificationManager.NOTIFICATION_ID_BE_FIRST)
-            QuackNotificationManager.cancel(app, QuackNotificationManager.NOTIFICATION_ID_SOMEBODY_QUACKED)
-            Log.d(TAG, "Quack notifications muted")
-        } else {
-            QuackMondayAlarmReceiver.scheduleNext(app)
-            Log.d(TAG, "Quack notifications unmuted")
-        }
-    }
-
     fun updateComposeText(text: String) {
         if (text.length <= 140) {
             _state.value = _state.value.copy(composeText = text)
@@ -483,13 +482,6 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                 Log.d(TAG, "submitPost: SUCCESS — $result")
                 incrementPostsToday()
                 playHonk()
-                // Cancel Monday polling so the user doesn't get "somebody
-                // quacked" triggered by their own post.
-                QuackFirstQuackWorker.cancel(getApplication())
-                QuackNotificationManager.cancel(
-                    getApplication(),
-                    QuackNotificationManager.NOTIFICATION_ID_BE_FIRST,
-                )
                 _state.value = _state.value.copy(isSubmitting = false, submitError = null)
                 // We just used a cached location to post — there's no reason to
                 // re-run the full GPS/BeaconDB request flow now. refreshFromUser

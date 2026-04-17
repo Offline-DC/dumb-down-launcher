@@ -47,7 +47,7 @@ const val GOOGLE_MESSAGES = "__GOOGLE_MESSAGES__"
 const val CHECK_UPDATES = "__CHECK_UPDATES__"
 const val CONTACT_SYNC = "__CONTACT_SYNC__"
 const val QUACK = "__QUACK__"
-const val WEATHER = "__WEATHER__"
+const val SNAKE = "__SNAKE__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",

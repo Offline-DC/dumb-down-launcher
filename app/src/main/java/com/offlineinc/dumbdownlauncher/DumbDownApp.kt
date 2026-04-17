@@ -12,7 +12,6 @@ import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationRefreshWorker
-import com.offlineinc.dumbdownlauncher.quack.QuackMondayAlarmReceiver
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 
@@ -94,18 +93,9 @@ class DumbDownApp : Application() {
             }
         }
 
-        // Periodic 2-hour background refresh of the persisted location cache,
-        // so the < 3 h freshness window is always satisfied without any UI work.
+        // Periodic 6-hour background refresh of the persisted location cache,
+        // so the < 6 h freshness window is always satisfied without any UI work.
         QuackLocationRefreshWorker.schedule(this)
-
-        // Weekly Monday 9 AM Eastern quack notification. Idempotent — the
-        // PendingIntent deduplicates via FLAG_UPDATE_CURRENT. Respects the
-        // user's mute preference on the quack rules screen.
-        val quackMuted = getSharedPreferences("quack_prefs", Context.MODE_PRIVATE)
-            .getBoolean("notifications_muted", false)
-        if (!quackMuted) {
-            QuackMondayAlarmReceiver.scheduleNext(this)
-        }
 
         // 4. Update FlipMouse (DumbMouse) binary if a newer version is bundled
         bootExecutor.execute { FlipMouseUpdater.checkAndUpdate(this) }
@@ -245,6 +235,43 @@ class DumbDownApp : Application() {
         val prefs = getSharedPreferences(MIGRATIONS_PREFS, Context.MODE_PRIVATE)
 
         val migrations = mapOf<String, () -> Unit>(
+            // Uninstall the standalone snake APK now that snake is built into
+            // the launcher. Defensive: silently ignores if already uninstalled
+            // or if the package was never present. Uses `pm uninstall` which
+            // does NOT require root — the launcher is signed with the platform
+            // key, so shell-level uninstall works. Falls back to `su` if needed.
+            "uninstall_snake_apk" to {
+                try {
+                    val pkg = "com.snake"
+                    // Quick check: is the package even installed?
+                    val checkProc = Runtime.getRuntime().exec(arrayOf("pm", "list", "packages", pkg))
+                    val checkOut = checkProc.inputStream.bufferedReader().readText().trim()
+                    checkProc.errorStream.bufferedReader().readText() // drain stderr to avoid pipe deadlock
+                    checkProc.waitFor()
+                    if (!checkOut.contains("package:$pkg")) {
+                        Log.d(tag, "Snake APK not installed — nothing to uninstall")
+                    } else {
+                        Log.d(tag, "Uninstalling standalone snake APK ($pkg)")
+                        val proc = Runtime.getRuntime().exec(arrayOf("pm", "uninstall", pkg))
+                        val out = proc.inputStream.bufferedReader().readText().trim()
+                        proc.errorStream.bufferedReader().readText() // drain stderr
+                        val exit = proc.waitFor()
+                        if (exit != 0) {
+                            // Retry with root
+                            val suProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "pm uninstall $pkg"))
+                            val suOut = suProc.inputStream.bufferedReader().readText().trim()
+                            suProc.errorStream.bufferedReader().readText() // drain stderr
+                            val suExit = suProc.waitFor()
+                            Log.d(tag, "Snake APK uninstall (su): exit=$suExit $suOut")
+                        } else {
+                            Log.d(tag, "Snake APK uninstalled: $out")
+                        }
+                        AllAppsActivity.invalidateCache()
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Snake APK uninstall failed (non-critical): ${e.message}")
+                }
+            },
             // Delete the old "type_sync" notification channel that was used by the
             // now-removed WebKeyboardService foreground service.
             "delete_type_sync_channel" to {

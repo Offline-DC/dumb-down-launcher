@@ -2,9 +2,17 @@ package com.offlineinc.dumbdownlauncher.weather
 
 import android.app.Application
 import android.util.Log
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Air
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.FilterDrama
+import androidx.compose.material.icons.filled.Thunderstorm
+import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.WbCloudy
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.offlineinc.dumbdownlauncher.R
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,10 +20,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.URL
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 private const val TAG = "WeatherViewModel"
 
@@ -28,15 +36,14 @@ data class WeatherUiState(
     val highTemp: Int = 0,
     val lowTemp: Int = 0,
     val condition: String = "",
-    val iconRes: Int = R.drawable.ic_weather_sunny,
-    val updatedAt: String = "",
+    val icon: ImageVector = Icons.Filled.WbSunny,
     // Today's summary — built from daily weather_code + precipitation
     val todaySummary: String = "",
     // Tomorrow
     val tomorrowHigh: Int = 0,
     val tomorrowLow: Int = 0,
     val tomorrowCondition: String = "",
-    val tomorrowIconRes: Int = R.drawable.ic_weather_sunny,
+    val tomorrowIcon: ImageVector = Icons.Filled.WbSunny,
     // Error
     val errorMessage: String = "",
 )
@@ -45,6 +52,9 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
     private val _state = MutableStateFlow(WeatherUiState())
     val state: StateFlow<WeatherUiState> = _state
+
+    /** Epoch millis of the last successful fetch — used for the 5-min staleness check. */
+    private var lastFetchedAt: Long = 0L
 
     /**
      * Load weather using the location saved by Quack's location system.
@@ -55,7 +65,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         _state.value = _state.value.copy(mode = WeatherMode.LOADING)
         viewModelScope.launch {
             try {
-                val loc = readPersistedLocation()
+                val loc = QuackLocationStore.loadIfUsable(getApplication())
                 if (loc == null) {
                     Log.w(TAG, "No persisted location available")
                     _state.value = _state.value.copy(
@@ -68,6 +78,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                 val weather = withContext(Dispatchers.IO) {
                     fetchWeatherData(loc.first, loc.second)
                 }
+                lastFetchedAt = System.currentTimeMillis()
                 _state.value = weather.copy(mode = WeatherMode.DISPLAY)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch weather", e)
@@ -81,20 +92,26 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Silent refresh — re-fetches weather data without showing loading state.
-     * Called by the soft-right "refresh" key and by onResume for background
-     * updates when returning to the weather screen.
+     * Called by onResume for background updates when returning to the weather
+     * screen. Skips the fetch if the last successful load was < 5 minutes ago.
      */
     fun refreshWeather() {
         if (_state.value.mode != WeatherMode.DISPLAY) return
+        val elapsed = System.currentTimeMillis() - lastFetchedAt
+        if (elapsed < REFRESH_COOLDOWN_MS) {
+            Log.d(TAG, "refreshWeather: skipping — last fetch ${elapsed / 1000}s ago (< 5min)")
+            return
+        }
         viewModelScope.launch {
             try {
-                val loc = readPersistedLocation() ?: return@launch
+                val loc = QuackLocationStore.loadIfUsable(getApplication()) ?: return@launch
                 Log.d(TAG, "refreshWeather: silent refresh for lat=${loc.first} lng=${loc.second}")
                 val weather = withContext(Dispatchers.IO) {
                     fetchWeatherData(loc.first, loc.second)
                 }
                 // Only update if still on display
                 if (_state.value.mode == WeatherMode.DISPLAY) {
+                    lastFetchedAt = System.currentTimeMillis()
                     _state.value = weather.copy(mode = WeatherMode.DISPLAY)
                 }
             } catch (e: Exception) {
@@ -104,14 +121,8 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun readPersistedLocation(): Pair<Double, Double>? {
-        val p = QuackLocationStore.load(getApplication()) ?: return null
-        if (p.ageMs >= QuackLocationStore.STALE_MAX_AGE_MS) return null
-        return p.lat to p.lng
-    }
-
     private fun fetchWeatherData(latitude: Double, longitude: Double): WeatherUiState {
-        val url = buildString {
+        val urlStr = buildString {
             append("https://api.open-meteo.com/v1/forecast")
             append("?latitude=$latitude")
             append("&longitude=$longitude")
@@ -123,7 +134,26 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             append("&timezone=auto")
         }
 
-        val json = URL(url).readText()
+        val conn = URL(urlStr).openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 30_000
+        try {
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val errBody = try {
+                    conn.errorStream?.let { BufferedReader(InputStreamReader(it)).readText() } ?: ""
+                } catch (_: Exception) { "" }
+                throw Exception("Weather API failed ($code): $errBody")
+            }
+            val json = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+            return parseWeatherResponse(json)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun parseWeatherResponse(json: String): WeatherUiState {
         val root = JSONObject(json)
         val current = root.getJSONObject("current")
         val daily = root.getJSONObject("daily")
@@ -145,26 +175,17 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         val tomorrowCode = daily.getJSONArray("weather_code").getInt(1)
         val tomorrowWind = daily.getJSONArray("wind_speed_10m_max").getDouble(1)
 
-        val condition = weatherCodeToDescription(code, wind)
-        val iconRes = weatherCodeToIcon(code, wind)
-        val updated = SimpleDateFormat("h:mm a", Locale.US).format(Date())
-
-        val todaySummary = buildDaySummary(todayCode, todayPrecip, todayWind, highTemp, lowTemp)
-        val tomorrowCondition = weatherCodeToDescription(tomorrowCode, tomorrowWind)
-        val tomorrowIconRes = weatherCodeToIcon(tomorrowCode, tomorrowWind)
-
         return WeatherUiState(
             temp = temp,
             highTemp = highTemp,
             lowTemp = lowTemp,
-            condition = condition,
-            iconRes = iconRes,
-            updatedAt = updated,
-            todaySummary = todaySummary,
+            condition = weatherCodeToDescription(code, wind),
+            icon = weatherCodeToIcon(code, wind),
+            todaySummary = buildDaySummary(todayCode, todayPrecip, todayWind, highTemp, lowTemp),
             tomorrowHigh = tomorrowHigh,
             tomorrowLow = tomorrowLow,
-            tomorrowCondition = tomorrowCondition,
-            tomorrowIconRes = tomorrowIconRes,
+            tomorrowCondition = weatherCodeToDescription(tomorrowCode, tomorrowWind),
+            tomorrowIcon = weatherCodeToIcon(tomorrowCode, tomorrowWind),
         )
     }
 
@@ -226,6 +247,8 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     }
 
     companion object {
+        private const val REFRESH_COOLDOWN_MS = 5 * 60 * 1000L // 5 minutes
+
         fun weatherCodeToDescription(code: Int, wind: Double): String {
             val windy = if (wind > 20) " & Windy" else ""
             return when (code) {
@@ -242,19 +265,17 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        fun weatherCodeToIcon(code: Int, wind: Double): Int {
-            if (wind > 25 && code < 45) {
-                return R.drawable.ic_weather_windy
-            }
+        fun weatherCodeToIcon(code: Int, wind: Double): ImageVector {
+            if (wind > 25 && code < 45) return Icons.Filled.Air
             return when (code) {
-                0, 1 -> R.drawable.ic_weather_sunny
-                2 -> R.drawable.ic_weather_partly_cloudy
-                3 -> R.drawable.ic_weather_cloudy
-                45, 48 -> R.drawable.ic_weather_fog
-                51, 53, 55, 61, 63, 65, 80, 81, 82 -> R.drawable.ic_weather_rain
-                71, 73, 75, 77, 85, 86 -> R.drawable.ic_weather_snow
-                95, 96, 99 -> R.drawable.ic_weather_thunderstorm
-                else -> R.drawable.ic_weather_cloudy
+                0, 1 -> Icons.Filled.WbSunny
+                2 -> Icons.Filled.FilterDrama       // partly cloudy
+                3 -> Icons.Filled.Cloud
+                45, 48 -> Icons.Filled.WbCloudy     // fog — cloudy with haze
+                51, 53, 55, 61, 63, 65, 80, 81, 82 -> Icons.Filled.WaterDrop
+                71, 73, 75, 77, 85, 86 -> Icons.Filled.Cloud  // snow — cloud icon
+                95, 96, 99 -> Icons.Filled.Thunderstorm
+                else -> Icons.Filled.Cloud
             }
         }
     }

@@ -20,7 +20,7 @@ object QuackLocationStore {
     private const val KEY_TIME = "saved_at"
 
     /** How old our persisted location can be before we treat it as stale. */
-    const val FRESH_MAX_AGE_MS  = 3 * 60 * 60 * 1000L       // 3 hours — headroom over 2h refresh
+    const val FRESH_MAX_AGE_MS  = 2 * 60 * 60 * 1000L       // 2 hours — deliver instantly
     const val STALE_MAX_AGE_MS  = 7 * 24 * 60 * 60 * 1000L  // 7 days — use as hard-timeout fallback
 
     data class StoredLocation(val lat: Double, val lng: Double, val savedAt: Long) {
@@ -61,5 +61,16 @@ object QuackLocationStore {
         val lng = java.lang.Double.longBitsToDouble(prefs.getLong(KEY_LNG, 0))
         val savedAt = prefs.getLong(KEY_TIME, 0)
         return StoredLocation(lat, lng, savedAt)
+    }
+
+    /**
+     * Load the persisted location if it's not too stale (< [STALE_MAX_AGE_MS]).
+     * Shared by QuackViewModel and WeatherViewModel to avoid duplicating
+     * the same null-check + age-check logic.
+     */
+    fun loadIfUsable(context: Context): Pair<Double, Double>? {
+        val p = load(context) ?: return null
+        if (p.ageMs >= STALE_MAX_AGE_MS) return null
+        return p.lat to p.lng
     }
 }
