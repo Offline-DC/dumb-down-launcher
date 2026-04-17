@@ -2,10 +2,7 @@ package com.offlineinc.dumbdownlauncher.weather
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,21 +12,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -37,19 +29,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.offlineinc.dumbdownlauncher.ui.SoftKeyBar
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
-
-// ── Colors matching the standalone weather app ──────────────────────────
-private val WeatherPink = Color(0xFFFE7DF3)
-private val WeatherDim = Color(0xFF888888)
-private val WeatherDivider = Color(0xFF333344)
-private val ForecastBg = Color(0xFF252540)
-private val ForecastSelectedBorder = Color(0xFFF9F594)
 
 @Composable
 fun WeatherScreen(
@@ -64,9 +47,9 @@ fun WeatherScreen(
             .background(DumbTheme.Colors.Black)
     ) {
         when (state.mode) {
-            WeatherMode.LOADING -> WeatherLoadingScreen(onBack)
-            WeatherMode.DISPLAY -> WeatherDisplayScreen(state, viewModel, onBack)
-            WeatherMode.ERROR   -> WeatherErrorScreen(state, onBack)
+            WeatherMode.LOADING -> LoadingScreen(onBack)
+            WeatherMode.DISPLAY -> DisplayScreen(state, viewModel, onBack)
+            WeatherMode.ERROR   -> ErrorScreen(state, viewModel, onBack)
         }
     }
 }
@@ -74,11 +57,16 @@ fun WeatherScreen(
 // ── Loading ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun WeatherLoadingScreen(onBack: () -> Unit) {
+private fun LoadingScreen(onBack: () -> Unit) {
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(DumbTheme.Colors.Black)
+            .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
@@ -87,12 +75,18 @@ private fun WeatherLoadingScreen(onBack: () -> Unit) {
                 }
             }
             .focusable(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
     ) {
+        Spacer(Modifier.height(DumbTheme.Spacing.ScreenPaddingV))
         BasicText(
-            text = "loading weather…",
-            style = DumbTheme.Text.Body.copy(color = DumbTheme.Colors.Gray),
+            text = "weather",
+            style = DumbTheme.Text.PageTitle.copy(color = DumbTheme.Colors.Yellow),
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+        )
+        Spacer(Modifier.height(8.dp))
+        BasicText(
+            text = "loading…",
+            style = DumbTheme.Text.Body,
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
         )
     }
 }
@@ -100,29 +94,54 @@ private fun WeatherLoadingScreen(onBack: () -> Unit) {
 // ── Error ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun WeatherErrorScreen(state: WeatherUiState, onBack: () -> Unit) {
+private fun ErrorScreen(
+    state: WeatherUiState,
+    viewModel: WeatherViewModel,
+    onBack: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(DumbTheme.Colors.Black)
+            .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val isDown = event.type == KeyEventType.KeyDown
                 when (event.key) {
-                    Key.Back -> { onBack(); true }
+                    Key.DirectionCenter -> { if (isDown) viewModel.loadWeather(); true }
+                    Key.Back, Key.SoftLeft -> { if (isDown) onBack(); true }
                     else -> false
                 }
             }
             .focusable(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
     ) {
+        Spacer(Modifier.height(DumbTheme.Spacing.ScreenPaddingV))
+        BasicText(
+            text = "weather",
+            style = DumbTheme.Text.PageTitle.copy(color = DumbTheme.Colors.Yellow),
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+        )
+        Spacer(Modifier.height(8.dp))
         BasicText(
             text = state.errorMessage,
-            style = DumbTheme.Text.Body.copy(
-                color = DumbTheme.Colors.Yellow,
-                textAlign = TextAlign.Center,
-            ),
+            style = DumbTheme.Text.Body.copy(color = DumbTheme.Colors.Red),
             modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+        )
+        Spacer(Modifier.height(16.dp))
+        BasicText(
+            text = "press ok to retry\npress back to exit",
+            style = DumbTheme.Text.Subtitle,
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+        )
+
+        Spacer(Modifier.weight(1f))
+
+        SoftKeyBar(
+            leftLabel = "back",
+            centerLabel = "retry",
         )
     }
 }
@@ -130,196 +149,149 @@ private fun WeatherErrorScreen(state: WeatherUiState, onBack: () -> Unit) {
 // ── Main weather display ────────────────────────────────────────────────
 
 @Composable
-private fun WeatherDisplayScreen(
+private fun DisplayScreen(
     state: WeatherUiState,
     viewModel: WeatherViewModel,
     onBack: () -> Unit,
 ) {
-    val listState = rememberLazyListState()
+    val focusRequester = remember { FocusRequester() }
 
-    // Scroll to selected forecast item
-    LaunchedEffect(state.selectedForecastIndex) {
-        if (state.forecasts.isNotEmpty()) {
-            listState.animateScrollToItem(state.selectedForecastIndex)
-        }
-    }
-
-    // Determine what to show in the top display based on forecast selection
-    val displayForecast = state.forecasts.getOrNull(state.selectedForecastIndex)
-    val displayTemp = displayForecast?.temp ?: state.temp
-    val displayCondition = if (displayForecast != null) {
-        if (displayForecast.isNow) "Now: ${displayForecast.condition}"
-        else "${displayForecast.hour}: ${displayForecast.condition}"
-    } else {
-        state.condition
-    }
-    val displayIcon = displayForecast?.iconRes ?: state.iconRes
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(DumbTheme.Colors.Black)
-            .padding(12.dp)
+            .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
-                    Key.DirectionLeft -> {
-                        viewModel.moveForecastSelection(-1); true
-                    }
-                    Key.DirectionRight -> {
-                        viewModel.moveForecastSelection(1); true
-                    }
-                    Key.Back -> {
-                        onBack(); true
-                    }
+                    Key.Back -> { onBack(); true }
+                    Key.SoftRight -> { viewModel.refreshWeather(); true }
                     else -> false
                 }
             }
             .focusable(),
     ) {
-        // Updated time
+        Spacer(Modifier.height(DumbTheme.Spacing.ScreenPaddingV))
+
+        // Title
         BasicText(
-            text = "Updated: ${state.updatedAt}",
-            style = TextStyle(
-                fontFamily = DumbTheme.BioRhyme,
-                fontSize = 11.sp,
-                color = WeatherDim,
-            ),
-            modifier = Modifier.padding(top = 8.dp),
+            text = "weather",
+            style = DumbTheme.Text.PageTitle.copy(color = DumbTheme.Colors.Yellow),
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
         )
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(8.dp))
 
-        // Current weather section - centered
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        // Current conditions: icon + temp + high/low
+        Row(
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Weather icon
             Image(
-                painter = painterResource(id = displayIcon),
-                contentDescription = "Weather icon",
-                modifier = Modifier.size(64.dp),
+                painter = painterResource(id = state.iconRes),
+                contentDescription = state.condition,
+                modifier = Modifier.size(48.dp),
             )
-
-            // Temperature row: current temp + high/low
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = 4.dp),
-            ) {
-                // Current temperature
-                BasicText(
-                    text = "${displayTemp}°F",
-                    style = TextStyle(
-                        fontFamily = DumbTheme.BioRhyme,
-                        fontSize = 48.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = DumbTheme.Colors.White,
-                    ),
-                )
-
-                Spacer(Modifier.width(12.dp))
-
-                // High / Low stacked
-                Column {
-                    BasicText(
-                        text = "H: ${state.highTemp}°",
-                        style = TextStyle(
-                            fontFamily = DumbTheme.BioRhyme,
-                            fontSize = 14.sp,
-                            color = DumbTheme.Colors.Gray,
-                        ),
-                    )
-                    BasicText(
-                        text = "L: ${state.lowTemp}°",
-                        style = TextStyle(
-                            fontFamily = DumbTheme.BioRhyme,
-                            fontSize = 14.sp,
-                            color = DumbTheme.Colors.Gray,
-                        ),
-                    )
-                }
-            }
-
-            // Condition text
+            Spacer(Modifier.width(12.dp))
             BasicText(
-                text = displayCondition,
-                style = TextStyle(
-                    fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 18.sp,
-                    color = WeatherPink,
+                text = "${state.temp}°F",
+                style = DumbTheme.Text.PageTitle.copy(
+                    fontSize = 36.sp,
+                    color = DumbTheme.Colors.White,
                 ),
             )
-        }
-
-        // Divider
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(WeatherDivider),
-        )
-
-        // Forecast label
-        BasicText(
-            text = "Forecast",
-            style = TextStyle(
-                fontFamily = DumbTheme.BioRhyme,
-                fontSize = 14.sp,
-                color = DumbTheme.Colors.Gray,
-            ),
-            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp),
-        )
-
-        // Hourly forecast row
-        LazyRow(
-            state = listState,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            itemsIndexed(state.forecasts) { index, forecast ->
-                ForecastItem(
-                    forecast = forecast,
-                    isSelected = index == state.selectedForecastIndex,
+            Spacer(Modifier.width(12.dp))
+            Column {
+                BasicText(
+                    text = "H: ${state.highTemp}°",
+                    style = DumbTheme.Text.Hint,
+                )
+                BasicText(
+                    text = "L: ${state.lowTemp}°",
+                    style = DumbTheme.Text.Hint,
                 )
             }
         }
-    }
-}
 
-// ── Forecast item ───────────────────────────────────────────────────────
-
-@Composable
-private fun ForecastItem(
-    forecast: HourlyForecast,
-    isSelected: Boolean,
-) {
-    val shape = RoundedCornerShape(4.dp)
-    Column(
-        modifier = Modifier
-            .clip(shape)
-            .background(ForecastBg)
-            .then(
-                if (isSelected) Modifier.border(1.dp, ForecastSelectedBorder, shape)
-                else Modifier
-            )
-            .padding(6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+        // Condition label — subtle
         BasicText(
-            text = forecast.hour,
-            style = TextStyle(
-                fontFamily = DumbTheme.BioRhyme,
-                fontSize = 12.sp,
-                color = DumbTheme.Colors.Gray,
+            text = state.condition,
+            style = DumbTheme.Text.Subtitle,
+            modifier = Modifier.padding(
+                horizontal = DumbTheme.Spacing.ScreenPaddingH,
+                vertical = 4.dp,
             ),
         )
-        Spacer(Modifier.height(2.dp))
-        Image(
-            painter = painterResource(id = forecast.iconRes),
-            contentDescription = forecast.condition,
-            modifier = Modifier.size(32.dp),
+
+        // Divider
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH, vertical = 6.dp)
+                .height(1.dp)
+                .background(Color(0xFF333333))
+        )
+
+        // Today's summary
+        BasicText(
+            text = state.todaySummary,
+            style = DumbTheme.Text.BodySmall,
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+        )
+
+        Spacer(Modifier.weight(1f))
+
+        // Divider before tomorrow
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH)
+                .height(1.dp)
+                .background(Color(0xFF333333))
+        )
+
+        // Tomorrow — subtle, pushed to bottom
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                text = "tomorrow",
+                style = DumbTheme.Text.Label,
+            )
+            Spacer(Modifier.width(8.dp))
+            Image(
+                painter = painterResource(id = state.tomorrowIconRes),
+                contentDescription = state.tomorrowCondition,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            BasicText(
+                text = state.tomorrowCondition,
+                style = DumbTheme.Text.Label,
+            )
+            Spacer(Modifier.width(6.dp))
+            BasicText(
+                text = "${state.tomorrowHigh}° / ${state.tomorrowLow}°",
+                style = DumbTheme.Text.Label,
+            )
+        }
+
+        // Updated time
+        BasicText(
+            text = "updated ${state.updatedAt}",
+            style = DumbTheme.Text.Label,
+            modifier = Modifier
+                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH)
+                .padding(bottom = 2.dp),
+        )
+
+        SoftKeyBar(
+            rightLabel = "refresh",
         )
     }
 }

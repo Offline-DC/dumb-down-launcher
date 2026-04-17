@@ -48,6 +48,14 @@ class QuackActivity : AppCompatActivity() {
         requestLocationPermission()
     }
 
+    override fun onResume() {
+        super.onResume()
+        overridePendingTransition(0, 0)
+        // Silently refresh posts when returning to the quack screen
+        // so the feed is always up to date when the user navigates back.
+        viewModel.refreshFeed()
+    }
+
     private fun requestLocationPermission() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             viewModel.startLocation()

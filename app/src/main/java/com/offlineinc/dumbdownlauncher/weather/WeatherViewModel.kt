@@ -14,7 +14,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -22,24 +21,23 @@ private const val TAG = "WeatherViewModel"
 
 enum class WeatherMode { LOADING, DISPLAY, ERROR }
 
-data class HourlyForecast(
-    val hour: String,
-    val temp: Int,
-    val iconRes: Int,
-    val condition: String,
-    val isNow: Boolean = false,
-)
-
 data class WeatherUiState(
     val mode: WeatherMode = WeatherMode.LOADING,
+    // Current conditions
     val temp: Int = 0,
     val highTemp: Int = 0,
     val lowTemp: Int = 0,
     val condition: String = "",
     val iconRes: Int = R.drawable.ic_weather_sunny,
     val updatedAt: String = "",
-    val forecasts: List<HourlyForecast> = emptyList(),
-    val selectedForecastIndex: Int = 0,
+    // Today's summary — built from daily weather_code + precipitation
+    val todaySummary: String = "",
+    // Tomorrow
+    val tomorrowHigh: Int = 0,
+    val tomorrowLow: Int = 0,
+    val tomorrowCondition: String = "",
+    val tomorrowIconRes: Int = R.drawable.ic_weather_sunny,
+    // Error
     val errorMessage: String = "",
 )
 
@@ -81,18 +79,35 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /** Read the persisted location from QuackLocationStore. */
+    /**
+     * Silent refresh — re-fetches weather data without showing loading state.
+     * Called by the soft-right "refresh" key and by onResume for background
+     * updates when returning to the weather screen.
+     */
+    fun refreshWeather() {
+        if (_state.value.mode != WeatherMode.DISPLAY) return
+        viewModelScope.launch {
+            try {
+                val loc = readPersistedLocation() ?: return@launch
+                Log.d(TAG, "refreshWeather: silent refresh for lat=${loc.first} lng=${loc.second}")
+                val weather = withContext(Dispatchers.IO) {
+                    fetchWeatherData(loc.first, loc.second)
+                }
+                // Only update if still on display
+                if (_state.value.mode == WeatherMode.DISPLAY) {
+                    _state.value = weather.copy(mode = WeatherMode.DISPLAY)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshWeather: silent fail", e)
+                // Silent — don't disrupt the user
+            }
+        }
+    }
+
     private fun readPersistedLocation(): Pair<Double, Double>? {
         val p = QuackLocationStore.load(getApplication()) ?: return null
         if (p.ageMs >= QuackLocationStore.STALE_MAX_AGE_MS) return null
         return p.lat to p.lng
-    }
-
-    fun moveForecastSelection(delta: Int) {
-        val s = _state.value
-        if (s.forecasts.isEmpty()) return
-        val newIdx = (s.selectedForecastIndex + delta).coerceIn(0, s.forecasts.size - 1)
-        _state.value = s.copy(selectedForecastIndex = newIdx)
     }
 
     private fun fetchWeatherData(latitude: Double, longitude: Double): WeatherUiState {
@@ -101,8 +116,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             append("?latitude=$latitude")
             append("&longitude=$longitude")
             append("&current=temperature_2m,weather_code,wind_speed_10m")
-            append("&hourly=temperature_2m,weather_code")
-            append("&daily=temperature_2m_max,temperature_2m_min")
+            append("&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,wind_speed_10m_max")
             append("&temperature_unit=fahrenheit")
             append("&wind_speed_unit=mph")
             append("&forecast_days=2")
@@ -112,66 +126,32 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         val json = URL(url).readText()
         val root = JSONObject(json)
         val current = root.getJSONObject("current")
-        val hourly = root.getJSONObject("hourly")
         val daily = root.getJSONObject("daily")
 
         val temp = current.getDouble("temperature_2m").toInt()
         val code = current.getInt("weather_code")
         val wind = current.getDouble("wind_speed_10m")
 
+        // Today (index 0)
         val highTemp = daily.getJSONArray("temperature_2m_max").getDouble(0).toInt()
         val lowTemp = daily.getJSONArray("temperature_2m_min").getDouble(0).toInt()
+        val todayCode = daily.getJSONArray("weather_code").getInt(0)
+        val todayPrecip = daily.getJSONArray("precipitation_sum").getDouble(0)
+        val todayWind = daily.getJSONArray("wind_speed_10m_max").getDouble(0)
+
+        // Tomorrow (index 1)
+        val tomorrowHigh = daily.getJSONArray("temperature_2m_max").getDouble(1).toInt()
+        val tomorrowLow = daily.getJSONArray("temperature_2m_min").getDouble(1).toInt()
+        val tomorrowCode = daily.getJSONArray("weather_code").getInt(1)
+        val tomorrowWind = daily.getJSONArray("wind_speed_10m_max").getDouble(1)
 
         val condition = weatherCodeToDescription(code, wind)
         val iconRes = weatherCodeToIcon(code, wind)
         val updated = SimpleDateFormat("h:mm a", Locale.US).format(Date())
 
-        // Parse hourly forecast
-        val hourlyTimes = hourly.getJSONArray("time")
-        val hourlyTemps = hourly.getJSONArray("temperature_2m")
-        val hourlyCodes = hourly.getJSONArray("weather_code")
-
-        val forecasts = mutableListOf<HourlyForecast>()
-        val timeFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US)
-        val displayFormat = SimpleDateFormat("h a", Locale.US)
-        val nowTimeFormat = SimpleDateFormat("h:mm", Locale.US)
-
-        // "Now" as the first item
-        val nowLabel = nowTimeFormat.format(Date())
-        forecasts.add(HourlyForecast(nowLabel, temp, iconRes, condition, isNow = true))
-
-        // Find current hour index
-        val now = Calendar.getInstance()
-        val currentHour = now.get(Calendar.HOUR_OF_DAY)
-        var startIndex = 0
-        for (i in 0 until hourlyTimes.length()) {
-            val timeStr = hourlyTimes.getString(i)
-            val parsedTime = timeFormat.parse(timeStr)
-            if (parsedTime != null) {
-                val cal = Calendar.getInstance()
-                cal.time = parsedTime
-                if (cal.get(Calendar.HOUR_OF_DAY) == currentHour) {
-                    startIndex = i + 1
-                    break
-                }
-            }
-        }
-
-        // Next 12 hours
-        for (i in startIndex until minOf(startIndex + 12, hourlyTimes.length())) {
-            val time = timeFormat.parse(hourlyTimes.getString(i))
-            val hourLabel = if (time != null) displayFormat.format(time) else "${i}h"
-            val hourTemp = hourlyTemps.getDouble(i).toInt()
-            val hourCode = hourlyCodes.getInt(i)
-            val hourCondition = weatherCodeToDescription(hourCode, 0.0)
-            forecasts.add(
-                HourlyForecast(
-                    hourLabel, hourTemp,
-                    weatherCodeToIcon(hourCode, 0.0),
-                    hourCondition, isNow = false,
-                )
-            )
-        }
+        val todaySummary = buildDaySummary(todayCode, todayPrecip, todayWind, highTemp, lowTemp)
+        val tomorrowCondition = weatherCodeToDescription(tomorrowCode, tomorrowWind)
+        val tomorrowIconRes = weatherCodeToIcon(tomorrowCode, tomorrowWind)
 
         return WeatherUiState(
             temp = temp,
@@ -180,9 +160,62 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             condition = condition,
             iconRes = iconRes,
             updatedAt = updated,
-            forecasts = forecasts,
-            selectedForecastIndex = 0,
+            todaySummary = todaySummary,
+            tomorrowHigh = tomorrowHigh,
+            tomorrowLow = tomorrowLow,
+            tomorrowCondition = tomorrowCondition,
+            tomorrowIconRes = tomorrowIconRes,
         )
+    }
+
+    /**
+     * Build a short text summary for today's conditions using the daily
+     * weather code, precipitation total, and wind max.
+     */
+    private fun buildDaySummary(code: Int, precipMm: Double, windMax: Double, high: Int, low: Int): String {
+        val parts = mutableListOf<String>()
+
+        // Main condition from daily weather code
+        val mainCondition = when (code) {
+            0    -> "clear skies today"
+            1    -> "mostly clear today"
+            2    -> "partly cloudy today"
+            3    -> "overcast today"
+            45, 48 -> "foggy today"
+            51, 53, 55 -> "light drizzle expected"
+            61   -> "light rain expected"
+            63   -> "rain expected"
+            65   -> "heavy rain expected"
+            71   -> "light snow expected"
+            73   -> "snow expected"
+            75   -> "heavy snow expected"
+            77   -> "snow grains expected"
+            80, 81, 82 -> "rain showers expected"
+            85, 86 -> "snow showers expected"
+            95   -> "thunderstorms expected"
+            96, 99 -> "thunderstorms with hail expected"
+            else -> "mixed conditions today"
+        }
+        parts.add(mainCondition)
+
+        // Precipitation detail
+        if (precipMm > 0) {
+            val inches = precipMm / 25.4
+            if (inches >= 0.5) {
+                parts.add("%.1f\" of precipitation".format(inches))
+            } else if (inches >= 0.1) {
+                parts.add("light precipitation")
+            }
+        }
+
+        // Wind detail
+        if (windMax > 25) {
+            parts.add("windy, gusts up to ${windMax.toInt()} mph")
+        } else if (windMax > 15) {
+            parts.add("breezy")
+        }
+
+        return parts.joinToString(". ") + "."
     }
 
     private fun friendlyError(e: Exception): String = when {

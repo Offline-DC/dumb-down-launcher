@@ -159,10 +159,13 @@ class AllAppsActivity : AppCompatActivity() {
             }
 
             // Weather is always visible
+            val weatherIcon = androidx.core.content.ContextCompat.getDrawable(
+                context, R.drawable.ic_weather_app
+            ) ?: pm.defaultActivityIcon
             appItems.add(AppItem(
                 packageName = WEATHER,
                 label = "weather",
-                icon = pm.defaultActivityIcon,
+                icon = weatherIcon,
                 launchComponent = null,
             ))
 
