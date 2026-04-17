@@ -158,6 +158,14 @@ class AllAppsActivity : AppCompatActivity() {
                 ))
             }
 
+            // Weather is always visible
+            appItems.add(AppItem(
+                packageName = WEATHER,
+                label = "weather",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+
             if (!pairingStore.hideSmartTxt) {
                 appItems.add(AppItem(
                     packageName = DEVICE_SETUP,
@@ -290,6 +298,13 @@ class AllAppsActivity : AppCompatActivity() {
                     CONTACT_SYNC -> {
                         startActivity(
                             Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
+                    WEATHER -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.weather.WeatherActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         )
                         overridePendingTransition(0, 0)

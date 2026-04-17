@@ -91,6 +91,12 @@
             android:launchMode="singleTop"
             android:theme="@style/Theme.DumbDownLauncher" />
 
+        <activity
+            android:name=".weather.WeatherActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
         <service
             android:name=".MouseAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

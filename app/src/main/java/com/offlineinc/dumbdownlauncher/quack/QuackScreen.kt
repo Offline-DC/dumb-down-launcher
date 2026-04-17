@@ -56,8 +56,8 @@ fun QuackScreen(
     ) {
         when (state.mode) {
             QuackMode.LOADING -> {
-                if (state.isInitialLoad) LoadingScreen()
-                else MiniLoadingScreen()
+                if (state.isInitialLoad) LoadingScreen(onBack)
+                else MiniLoadingScreen(onBack)
             }
             QuackMode.FEED    -> FeedScreen(state, viewModel, onBack)
             QuackMode.RULES   -> RulesScreen(state, viewModel)
@@ -74,7 +74,7 @@ fun QuackScreen(
  * Each frame is a 12×12 grid drawn with chunky square pixels.
  */
 @Composable
-private fun LoadingScreen() {
+private fun LoadingScreen(onBack: () -> Unit) {
     var frame by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -87,7 +87,15 @@ private fun LoadingScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(DumbTheme.Colors.Black),
+            .background(DumbTheme.Colors.Black)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.Back -> { onBack(); true }
+                    else -> false
+                }
+            }
+            .focusable(),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -115,7 +123,7 @@ private fun LoadingScreen() {
  * Simplified loading screen — just the dots, no duck. Used for refreshes after submit.
  */
 @Composable
-private fun MiniLoadingScreen() {
+private fun MiniLoadingScreen(onBack: () -> Unit) {
     var frame by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -128,7 +136,15 @@ private fun MiniLoadingScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(DumbTheme.Colors.Black),
+            .background(DumbTheme.Colors.Black)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.Back -> { onBack(); true }
+                    else -> false
+                }
+            }
+            .focusable(),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
