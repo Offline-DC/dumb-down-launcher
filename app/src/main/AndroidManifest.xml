@@ -138,6 +138,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- Monday 9 AM Eastern quack reminder alarm -->
+        <receiver
+            android:name=".quack.QuackMondayAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.QUACK_MONDAY" />
+            </intent-filter>
+        </receiver>
+
         <!-- Receives star-key long-press broadcast from FlipMouse daemon -->
         <receiver
             android:name=".TypeSyncToggleReceiver"

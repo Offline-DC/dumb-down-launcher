@@ -381,6 +381,7 @@ private fun PostRow(post: QuackPost, selected: Boolean, ageTick: Int = 0) {
 private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
     val focusRequester = remember { FocusRequester() }
     val accepted = state.hasAcceptedRules
+    val muted = state.notificationsMuted
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
@@ -393,12 +394,14 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
                 val isDown = event.type == KeyEventType.KeyDown
                 when (event.key) {
                     Key.SoftRight -> {
-                        // Only accept on a fresh KeyDown (repeatCount == 0).
-                        // Always consume both KeyDown repeats AND KeyUp so
-                        // nothing leaks to the compose screen that appears
-                        // after acceptance.
-                        if (isDown && !accepted && event.nativeKeyEvent.repeatCount == 0) {
-                            viewModel.acceptRules()
+                        if (isDown && event.nativeKeyEvent.repeatCount == 0) {
+                            if (!accepted) {
+                                // Accept rules on first visit
+                                viewModel.acceptRules()
+                            } else {
+                                // Toggle mute/unmute for quack notifications
+                                viewModel.toggleMute()
+                            }
                         }
                         true
                     }
@@ -442,7 +445,7 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
         SoftKeyBar(
             leftLabel = "back",
             centerLabel = null,
-            rightLabel = if (accepted) null else "accept",
+            rightLabel = if (!accepted) "accept" else if (muted) "unmute" else "mute",
         )
     }
 }

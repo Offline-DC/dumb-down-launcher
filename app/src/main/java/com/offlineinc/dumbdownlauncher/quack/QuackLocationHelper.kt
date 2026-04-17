@@ -87,7 +87,7 @@ class QuackLocationHelper(
         if (persisted != null) {
             Log.d(TAG, "Persisted location: age=${persisted.ageMinutes}min lat=${persisted.lat} lng=${persisted.lng}")
             if (persisted.ageMs < QuackLocationStore.FRESH_MAX_AGE_MS) {
-                Log.d(TAG, "Persisted location is fresh (< 2h) — delivering immediately")
+                Log.d(TAG, "Persisted location is fresh (< ${QuackLocationStore.FRESH_MAX_AGE_MS / 3_600_000}h) — delivering immediately")
                 delivered = true
                 handler.post { callback.onLocation(persisted.lat, persisted.lng) }
                 return

@@ -16,7 +16,7 @@ private const val TAG = "QuackLocRefreshWorker"
 
 /**
  * Periodic background worker that re-acquires the user's coarse location
- * every 6 hours so the persisted [QuackLocationStore] cache stays fresh
+ * every 2 hours so the persisted [QuackLocationStore] cache stays fresh
  * even when the user hasn't opened the quack screen recently.
  *
  * The worker drives [QuackLocationHelper] with the long [PREWARM_TIMEOUT_MS]
@@ -63,16 +63,23 @@ class QuackLocationRefreshWorker(
     }
 
     companion object {
-        private const val WORK_NAME = "quack_location_refresh"
-        private const val INTERVAL_HOURS = 6L
+        // Name changed from "quack_location_refresh" to pick up the 6h→2h
+        // interval change on existing installs. WorkManager's KEEP policy
+        // ignores interval changes for existing work names, so a new name
+        // forces re-creation while the old work auto-expires.
+        private const val WORK_NAME = "quack_location_refresh_2h"
+        private const val INTERVAL_HOURS = 2L
 
         fun schedule(context: Context) {
+            // Cancel the old 6h work name so it doesn't keep running alongside
+            WorkManager.getInstance(context).cancelUniqueWork("quack_location_refresh")
+
             val request = PeriodicWorkRequestBuilder<QuackLocationRefreshWorker>(
                 INTERVAL_HOURS, TimeUnit.HOURS,
             ).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                // KEEP so we don't reset the 6-hour clock on every app start
+                // KEEP so we don't reset the 2-hour clock on every app start
                 ExistingPeriodicWorkPolicy.KEEP,
                 request,
             )

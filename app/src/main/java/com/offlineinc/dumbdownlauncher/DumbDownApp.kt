@@ -12,6 +12,7 @@ import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationRefreshWorker
+import com.offlineinc.dumbdownlauncher.quack.QuackMondayAlarmReceiver
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 
@@ -93,9 +94,18 @@ class DumbDownApp : Application() {
             }
         }
 
-        // Periodic 6-hour background refresh of the persisted location cache,
-        // so the < 6 h freshness window is always satisfied without any UI work.
+        // Periodic 2-hour background refresh of the persisted location cache,
+        // so the < 3 h freshness window is always satisfied without any UI work.
         QuackLocationRefreshWorker.schedule(this)
+
+        // Weekly Monday 9 AM Eastern quack notification. Idempotent — the
+        // PendingIntent deduplicates via FLAG_UPDATE_CURRENT. Respects the
+        // user's mute preference on the quack rules screen.
+        val quackMuted = getSharedPreferences("quack_prefs", Context.MODE_PRIVATE)
+            .getBoolean("notifications_muted", false)
+        if (!quackMuted) {
+            QuackMondayAlarmReceiver.scheduleNext(this)
+        }
 
         // 4. Update FlipMouse (DumbMouse) binary if a newer version is bundled
         bootExecutor.execute { FlipMouseUpdater.checkAndUpdate(this) }

@@ -20,7 +20,7 @@ object QuackLocationStore {
     private const val KEY_TIME = "saved_at"
 
     /** How old our persisted location can be before we treat it as stale. */
-    const val FRESH_MAX_AGE_MS  = 2 * 60 * 60 * 1000L       // 2 hours — deliver instantly
+    const val FRESH_MAX_AGE_MS  = 3 * 60 * 60 * 1000L       // 3 hours — headroom over 2h refresh
     const val STALE_MAX_AGE_MS  = 7 * 24 * 60 * 60 * 1000L  // 7 days — use as hard-timeout fallback
 
     data class StoredLocation(val lat: Double, val lng: Double, val savedAt: Long) {

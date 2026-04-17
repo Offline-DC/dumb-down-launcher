@@ -21,6 +21,9 @@ import org.json.JSONObject
 import java.util.Calendar
 import java.util.TimeZone
 
+private const val NOTIF_PREFS = "quack_prefs"
+private const val KEY_MUTED = "notifications_muted"
+
 private const val TAG = "QuackViewModel"
 
 data class QuackPost(
@@ -42,6 +45,7 @@ data class QuackUiState(
     val postsToday: Int = 0,
     val isInitialLoad: Boolean = true,
     val hasAcceptedRules: Boolean = false,
+    val notificationsMuted: Boolean = false,
 )
 
 class QuackViewModel(application: Application) : AndroidViewModel(application) {
@@ -68,12 +72,14 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     private var rulesFromCompose = false
 
     init {
-        val rulesAccepted = getApplication<Application>()
+        val prefs = getApplication<Application>()
             .getSharedPreferences(RULES_PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_RULES_ACCEPTED, false)
+        val rulesAccepted = prefs.getBoolean(KEY_RULES_ACCEPTED, false)
+        val muted = prefs.getBoolean(KEY_MUTED, false)
         _state.value = _state.value.copy(
             postsToday = getPostsToday(),
             hasAcceptedRules = rulesAccepted,
+            notificationsMuted = muted,
         )
         // MediaPlayer.create() is synchronous and reads from disk — move it off
         // the main thread so it doesn't stall first-frame rendering when the
@@ -381,6 +387,31 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(mode = QuackMode.FEED, submitError = null)
     }
 
+    /**
+     * Toggle mute/unmute for weekly quack notifications.
+     * Muting cancels the Monday alarm, any active polling worker, and
+     * dismisses any visible quack notification. Unmuting re-arms the alarm.
+     */
+    fun toggleMute() {
+        val app = getApplication<Application>()
+        val nowMuted = !_state.value.notificationsMuted
+        app.getSharedPreferences(RULES_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_MUTED, nowMuted)
+            .apply()
+        _state.value = _state.value.copy(notificationsMuted = nowMuted)
+        if (nowMuted) {
+            QuackMondayAlarmReceiver.cancelAlarm(app)
+            QuackFirstQuackWorker.cancel(app)
+            QuackNotificationManager.cancel(app, QuackNotificationManager.NOTIFICATION_ID_BE_FIRST)
+            QuackNotificationManager.cancel(app, QuackNotificationManager.NOTIFICATION_ID_SOMEBODY_QUACKED)
+            Log.d(TAG, "Quack notifications muted")
+        } else {
+            QuackMondayAlarmReceiver.scheduleNext(app)
+            Log.d(TAG, "Quack notifications unmuted")
+        }
+    }
+
     fun updateComposeText(text: String) {
         if (text.length <= 140) {
             _state.value = _state.value.copy(composeText = text)
@@ -452,6 +483,13 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                 Log.d(TAG, "submitPost: SUCCESS — $result")
                 incrementPostsToday()
                 playHonk()
+                // Cancel Monday polling so the user doesn't get "somebody
+                // quacked" triggered by their own post.
+                QuackFirstQuackWorker.cancel(getApplication())
+                QuackNotificationManager.cancel(
+                    getApplication(),
+                    QuackNotificationManager.NOTIFICATION_ID_BE_FIRST,
+                )
                 _state.value = _state.value.copy(isSubmitting = false, submitError = null)
                 // We just used a cached location to post — there's no reason to
                 // re-run the full GPS/BeaconDB request flow now. refreshFromUser
