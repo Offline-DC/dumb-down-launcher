@@ -117,7 +117,7 @@ class QuackMondayAlarmReceiver : BroadcastReceiver() {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_LAST_FIRED_WEEK, key)
-                .commit()
+                .apply()
         }
     }
 

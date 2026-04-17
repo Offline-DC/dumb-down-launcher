@@ -174,11 +174,12 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         val todayPrecip = daily.getJSONArray("precipitation_sum").getDouble(0)
         val todayWind = daily.getJSONArray("wind_speed_10m_max").getDouble(0)
 
-        // Tomorrow (index 1)
-        val tomorrowHigh = daily.getJSONArray("temperature_2m_max").getDouble(1).toInt()
-        val tomorrowLow = daily.getJSONArray("temperature_2m_min").getDouble(1).toInt()
-        val tomorrowCode = daily.getJSONArray("weather_code").getInt(1)
-        val tomorrowWind = daily.getJSONArray("wind_speed_10m_max").getDouble(1)
+        // Tomorrow (index 1) — guard against API returning fewer than 2 days
+        val hasTomorrow = daily.getJSONArray("temperature_2m_max").length() > 1
+        val tomorrowHigh = if (hasTomorrow) daily.getJSONArray("temperature_2m_max").getDouble(1).toInt() else highTemp
+        val tomorrowLow = if (hasTomorrow) daily.getJSONArray("temperature_2m_min").getDouble(1).toInt() else lowTemp
+        val tomorrowCode = if (hasTomorrow) daily.getJSONArray("weather_code").getInt(1) else todayCode
+        val tomorrowWind = if (hasTomorrow) daily.getJSONArray("wind_speed_10m_max").getDouble(1) else todayWind
 
         val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
         val updatedAt = timeFormat.format(Date())
@@ -256,7 +257,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     }
 
     companion object {
-        private const val REFRESH_COOLDOWN_MS = 5 * 60 * 1000L // 5 minutes
+        private const val REFRESH_COOLDOWN_MS = 30 * 60 * 1000L // 30 minutes
 
         fun weatherCodeToDescription(code: Int, wind: Double): String {
             val windy = if (wind > 20) " & Windy" else ""

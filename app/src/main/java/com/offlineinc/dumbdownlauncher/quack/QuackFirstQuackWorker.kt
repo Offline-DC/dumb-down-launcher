@@ -55,7 +55,7 @@ class QuackFirstQuackWorker(
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putLong(KEY_ALARM_FIRED_AT, System.currentTimeMillis())
-                .commit()
+                .apply()
         }
 
         private fun alarmFiredAt(context: Context): Long {

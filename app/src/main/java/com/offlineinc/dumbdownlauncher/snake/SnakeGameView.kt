@@ -238,8 +238,10 @@ class SnakeGameView @JvmOverloads constructor(
             return
         }
 
-        // Self collision (ignore tail since it will move)
-        if (snake.dropLast(1).contains(newHead)) {
+        // Self collision (ignore tail since it will move).
+        // Check all segments except the last (tail) without allocating a new list.
+        val selfCollision = (0 until snake.size - 1).any { snake.elementAt(it) == newHead }
+        if (selfCollision) {
             endGame()
             return
         }
