@@ -11,8 +11,8 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.offlineinc.dumbdownlauncher.CONTACT_SYNC
 import com.offlineinc.dumbdownlauncher.DEVICE_SETUP
@@ -20,6 +20,7 @@ import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
 import com.offlineinc.dumbdownlauncher.QUACK
 import com.offlineinc.dumbdownlauncher.SNAKE
+import com.offlineinc.dumbdownlauncher.WEATHER
 import com.offlineinc.dumbdownlauncher.R
 
 /**
@@ -53,7 +54,7 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     CONTACT_SYNC                      to Icons.Filled.Settings,
     DEVICE_SETUP                      to Icons.Filled.Link,
     CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
-    SNAKE                             to Icons.Filled.SportsEsports,
+    WEATHER                           to Icons.Filled.WbSunny,
 )
 
 /**
@@ -63,4 +64,5 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
  */
 val appDrawableResIcons: Map<String, Int> = mapOf(
     QUACK to R.drawable.ic_duck,
+    SNAKE to R.drawable.ic_snake,
 )

@@ -24,6 +24,9 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private const val TAG = "WeatherViewModel"
 
@@ -44,6 +47,8 @@ data class WeatherUiState(
     val tomorrowLow: Int = 0,
     val tomorrowCondition: String = "",
     val tomorrowIcon: ImageVector = Icons.Filled.WbSunny,
+    // Last update time (human-readable)
+    val updatedAt: String = "",
     // Error
     val errorMessage: String = "",
 )
@@ -175,6 +180,9 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         val tomorrowCode = daily.getJSONArray("weather_code").getInt(1)
         val tomorrowWind = daily.getJSONArray("wind_speed_10m_max").getDouble(1)
 
+        val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
+        val updatedAt = timeFormat.format(Date())
+
         return WeatherUiState(
             temp = temp,
             highTemp = highTemp,
@@ -186,6 +194,7 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
             tomorrowLow = tomorrowLow,
             tomorrowCondition = weatherCodeToDescription(tomorrowCode, tomorrowWind),
             tomorrowIcon = weatherCodeToIcon(tomorrowCode, tomorrowWind),
+            updatedAt = updatedAt,
         )
     }
 

@@ -3,9 +3,13 @@ package com.offlineinc.dumbdownlauncher.snake
 import android.graphics.Color
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * Hosts the Snake game within the launcher app.
@@ -19,6 +23,12 @@ class SnakeActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Full screen — hide status bar and navigation
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         window.statusBarColor = 0xFF000000.toInt()
 
         // Keep screen on while playing
@@ -42,6 +52,28 @@ class SnakeActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Back button pauses during gameplay instead of exiting
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            return when (snakeGameView.currentState) {
+                GameState.PLAYING -> {
+                    snakeGameView.pauseGame()
+                    true
+                }
+                GameState.PAUSED -> {
+                    // Second back press while paused → exit
+                    finish()
+                    overridePendingTransition(0, 0)
+                    true
+                }
+                // START and GAME_OVER → normal back (exit)
+                else -> {
+                    finish()
+                    overridePendingTransition(0, 0)
+                    true
+                }
+            }
+        }
+
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> {
                 snakeGameView.handleKey(Direction.UP)

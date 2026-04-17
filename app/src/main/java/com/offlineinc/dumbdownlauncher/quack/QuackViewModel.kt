@@ -42,6 +42,7 @@ data class QuackUiState(
     val postsToday: Int = 0,
     val isInitialLoad: Boolean = true,
     val hasAcceptedRules: Boolean = false,
+    val notificationsMuted: Boolean = false,
 )
 
 class QuackViewModel(application: Application) : AndroidViewModel(application) {
@@ -53,6 +54,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_COUNT = "post_count"
         private const val RULES_PREFS = "quack_prefs"
         private const val KEY_RULES_ACCEPTED = "rules_accepted"
+        private const val KEY_NOTIFICATIONS_MUTED = "notifications_muted"
         // Surfaced when QuackLocationHelper can't deliver any fix (cold GPS,
         // no Network provider, no persisted/system cache). Distinct from
         // "no posts in your area" so the user knows it's a location problem.
@@ -68,12 +70,14 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     private var rulesFromCompose = false
 
     init {
-        val rulesAccepted = getApplication<Application>()
+        val prefs = getApplication<Application>()
             .getSharedPreferences(RULES_PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_RULES_ACCEPTED, false)
+        val rulesAccepted = prefs.getBoolean(KEY_RULES_ACCEPTED, false)
+        val muted = prefs.getBoolean(KEY_NOTIFICATIONS_MUTED, false)
         _state.value = _state.value.copy(
             postsToday = getPostsToday(),
             hasAcceptedRules = rulesAccepted,
+            notificationsMuted = muted,
         )
         // MediaPlayer.create() is synchronous and reads from disk — move it off
         // the main thread so it doesn't stall first-frame rendering when the
@@ -405,6 +409,24 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
 
     fun exitRules() {
         _state.value = _state.value.copy(mode = QuackMode.FEED)
+    }
+
+    fun toggleNotificationsMuted() {
+        val newMuted = !_state.value.notificationsMuted
+        getApplication<Application>()
+            .getSharedPreferences(RULES_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_NOTIFICATIONS_MUTED, newMuted)
+            .apply()
+        _state.value = _state.value.copy(notificationsMuted = newMuted)
+        // If muting, cancel the alarm. If unmuting, re-schedule it.
+        val ctx = getApplication<Application>()
+        if (newMuted) {
+            QuackMondayAlarmReceiver.cancelAlarm(ctx)
+        } else {
+            QuackMondayAlarmReceiver.scheduleNext(ctx)
+        }
+        Log.d(TAG, "Notifications ${if (newMuted) "muted" else "unmuted"}")
     }
 
     fun exitCompose() {

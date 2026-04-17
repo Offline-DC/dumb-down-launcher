@@ -86,9 +86,13 @@ class QuackFirstQuackWorker(
             val posts = QuackApiClient.fetchPosts(loc.lat, loc.lng)
             Log.d(TAG, "doWork: fetched ${posts.length()} posts")
             if (posts.length() > 0) {
-                QuackNotificationManager.notifySomebodyQuacked(applicationContext)
+                val muted = applicationContext.getSharedPreferences("quack_prefs", Context.MODE_PRIVATE)
+                    .getBoolean("notifications_muted", false)
+                if (!muted) {
+                    QuackNotificationManager.notifySomebodyQuacked(applicationContext)
+                }
                 cancel(applicationContext)
-                Log.i(TAG, "doWork: somebody quacked — notified and cancelled polling")
+                Log.i(TAG, "doWork: somebody quacked — ${if (muted) "muted" else "notified"} and cancelled polling")
             }
             Result.success()
         } catch (e: Exception) {

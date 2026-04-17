@@ -124,6 +124,15 @@ class QuackMondayAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         Log.i(TAG, "Monday alarm fired")
 
+        // Respect the user's mute preference from the rulez page
+        val muted = context.getSharedPreferences("quack_prefs", Context.MODE_PRIVATE)
+            .getBoolean("notifications_muted", false)
+        if (muted) {
+            Log.i(TAG, "Notifications muted — skipping, rescheduling")
+            scheduleNext(context)
+            return
+        }
+
         // Record the fire timestamp for the 24h polling cutoff
         QuackFirstQuackWorker.recordAlarmFired(context)
         markFiredThisWeek(context)

@@ -386,6 +386,10 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
                         }
                         true
                     }
+                    Key.DirectionCenter -> {
+                        if (isDown) viewModel.toggleNotificationsMuted()
+                        true
+                    }
                     Key.Back, Key.SoftLeft -> {
                         if (isDown) viewModel.exitRules(); true
                     }
@@ -420,6 +424,25 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
                     .padding(bottom = 12.dp),
             )
         }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Mute toggle
+        val muteLabel = if (state.notificationsMuted) "notifications: off" else "notifications: on"
+        BasicText(
+            text = muteLabel,
+            style = DumbTheme.Text.Subtitle.copy(
+                color = if (state.notificationsMuted) DumbTheme.Colors.Red else DumbTheme.Colors.Green,
+            ),
+            modifier = Modifier
+                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH)
+                .padding(bottom = 4.dp),
+        )
+        BasicText(
+            text = "press ok to toggle",
+            style = DumbTheme.Text.Label,
+            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+        )
 
         Spacer(Modifier.weight(1f))
 

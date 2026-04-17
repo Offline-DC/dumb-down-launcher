@@ -218,8 +218,12 @@ class QuackLocationHelper(
         LocationPermissionGranter.ensureGranted(appContext)
 
         // Request network first — responds in <1s vs 5+ for GPS; both race, first wins
-        if (netAvail) lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, netListener)
-        if (gpsAvail) lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,     MIN_TIME_MS, MIN_DIST_M, gpsListener)
+        try {
+            if (netAvail) lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, netListener)
+            if (gpsAvail) lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,     MIN_TIME_MS, MIN_DIST_M, gpsListener)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Location permission not granted despite ensureGranted — falling back", e)
+        }
         // Passive provider piggybacks on other apps' requests at zero battery cost
         try { lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, MIN_TIME_MS, MIN_DIST_M, passiveListener) } catch (_: Exception) {}
 

@@ -46,6 +46,9 @@ class SnakeGameView @JvmOverloads constructor(
     private var highScore = prefs.getInt("high_score", 0)
     private var gameState = GameState.START
 
+    /** Exposed read-only so the Activity can check state for back-button handling. */
+    val currentState: GameState get() = gameState
+
     // ── Speed ─────────────────────────────────────────────────────────────────
     private val baseDelayMs = 250L      // starting speed
     private val minDelayMs = 80L        // fastest speed
@@ -365,7 +368,8 @@ class SnakeGameView @JvmOverloads constructor(
 
         val cy = height / 2f
         canvas.drawText("PAUSED", width / 2f, cy, textPaint)
-        canvas.drawText("Press OK to resume", width / 2f, cy + 32f, dimTextPaint)
+        canvas.drawText("Press OK to resume", width / 2f, cy + 28f, dimTextPaint)
+        canvas.drawText("Press Back to exit", width / 2f, cy + 48f, dimTextPaint)
     }
 
     private fun drawStartScreen(canvas: Canvas) {

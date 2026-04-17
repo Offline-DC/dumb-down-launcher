@@ -28,7 +28,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.ui.SoftKeyBar
@@ -190,7 +190,7 @@ private fun DisplayScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Image(
-                painter = painterResource(id = state.iconRes),
+                painter = rememberVectorPainter(state.icon),
                 contentDescription = state.condition,
                 modifier = Modifier.size(48.dp),
             )
@@ -265,7 +265,7 @@ private fun DisplayScreen(
             )
             Spacer(Modifier.width(8.dp))
             Image(
-                painter = painterResource(id = state.tomorrowIconRes),
+                painter = rememberVectorPainter(state.tomorrowIcon),
                 contentDescription = state.tomorrowCondition,
                 modifier = Modifier.size(20.dp),
             )

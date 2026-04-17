@@ -152,6 +152,14 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
+            // Weather — always available as a built-in app
+            appItems.add(AppItem(
+                packageName = WEATHER,
+                label = "weather",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+
             // Show smart txt when platform is chosen (iOS → OpenBubbles, Android → Google Messages)
             val platform = PlatformPreferences.getChoice(context)
             val smartTxtPkg = when (platform) {
@@ -304,6 +312,13 @@ class AllAppsActivity : AppCompatActivity() {
                         )
                         overridePendingTransition(0, 0)
                     }
+                    WEATHER -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.weather.WeatherActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
                     CONTACT_SYNC -> {
                         startActivity(
                             Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.contactsync.ContactSyncActivity::class.java)
@@ -448,6 +463,11 @@ class AllAppsActivity : AppCompatActivity() {
                         cachedApps = cachedApps?.filter { it.packageName != QUACK }
                     }
                 }
+
+                // Re-sort so dynamically added items appear in alphabetical order
+                val sorted = items.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+                items.clear()
+                items.addAll(sorted)
             }
         }
     }
