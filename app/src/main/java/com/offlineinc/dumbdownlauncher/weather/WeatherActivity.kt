@@ -74,10 +74,6 @@ class WeatherActivity : AppCompatActivity() {
                     viewModel = viewModel,
                     onBack = { finish() },
                 )
-
-                LaunchedEffect(Unit) {
-                    requestLocationAndLoad()
-                }
             }
         }
     }
@@ -85,10 +81,14 @@ class WeatherActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         overridePendingTransition(0, 0)
-        // Silently refresh weather data when returning to this screen
-        // (e.g. after pressing back from another app and coming back).
-        // Only fires if we're already on the display screen.
-        viewModel.refreshWeather()
+        if (!WeatherLocationConsentStore.hasConsented(this)) return
+        // First open or returning after consent: kick off initial load.
+        // Returning later: silent refresh (only fires if already on display).
+        if (viewModel.state.value.mode == WeatherMode.LOADING) {
+            requestLocationAndLoad()
+        } else {
+            viewModel.refreshWeather()
+        }
     }
 
     private fun requestLocationAndLoad() {

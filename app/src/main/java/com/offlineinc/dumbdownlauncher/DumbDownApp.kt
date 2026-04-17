@@ -97,6 +97,15 @@ class DumbDownApp : Application() {
         // so the < 6 h freshness window is always satisfied without any UI work.
         QuackLocationRefreshWorker.schedule(this)
 
+        // Schedule the Monday 9am quack reminder alarm (no-ops if muted).
+        // As the HOME launcher our onCreate runs on every boot, so this
+        // ensures the alarm is always registered even after a reboot.
+        val quackMuted = getSharedPreferences("quack_prefs", Context.MODE_PRIVATE)
+            .getBoolean("notifications_muted", false)
+        if (!quackMuted) {
+            com.offlineinc.dumbdownlauncher.quack.QuackMondayAlarmReceiver.scheduleNext(this)
+        }
+
         // 4. Update FlipMouse (DumbMouse) binary if a newer version is bundled
         bootExecutor.execute { FlipMouseUpdater.checkAndUpdate(this) }
 

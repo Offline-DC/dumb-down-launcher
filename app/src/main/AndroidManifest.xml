@@ -83,12 +83,14 @@
             android:name=".contactsync.ContactSyncActivity"
             android:exported="false"
             android:launchMode="singleTop"
+            android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <activity
             android:name=".quack.QuackActivity"
             android:exported="false"
             android:launchMode="singleTop"
+            android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <activity
@@ -101,6 +103,7 @@
             android:name=".weather.WeatherActivity"
             android:exported="false"
             android:launchMode="singleTop"
+            android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <service
@@ -150,6 +153,15 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.offlineinc.dumbdownlauncher.TOGGLE_TYPESYNC" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Monday 9am Eastern quack reminder alarm -->
+        <receiver
+            android:name=".quack.QuackMondayAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.QUACK_MONDAY" />
             </intent-filter>
         </receiver>
 

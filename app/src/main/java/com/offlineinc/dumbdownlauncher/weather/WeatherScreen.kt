@@ -29,6 +29,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.ui.SoftKeyBar
@@ -167,7 +168,6 @@ private fun DisplayScreen(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
                     Key.Back -> { onBack(); true }
-                    Key.SoftRight -> { viewModel.refreshWeather(); true }
                     else -> false
                 }
             }
@@ -198,7 +198,7 @@ private fun DisplayScreen(
             BasicText(
                 text = "${state.temp}°F",
                 style = DumbTheme.Text.PageTitle.copy(
-                    fontSize = 36.sp,
+                    fontSize = 42.sp,
                     color = DumbTheme.Colors.White,
                 ),
             )
@@ -206,23 +206,25 @@ private fun DisplayScreen(
             Column {
                 BasicText(
                     text = "H: ${state.highTemp}°",
-                    style = DumbTheme.Text.Hint,
+                    style = DumbTheme.Text.Body.copy(color = DumbTheme.Colors.Gray),
                 )
                 BasicText(
                     text = "L: ${state.lowTemp}°",
-                    style = DumbTheme.Text.Hint,
+                    style = DumbTheme.Text.Body.copy(color = DumbTheme.Colors.Gray),
                 )
             }
         }
 
-        // Condition label — subtle
+        // Condition label — centered
         BasicText(
             text = state.condition,
-            style = DumbTheme.Text.Subtitle,
-            modifier = Modifier.padding(
-                horizontal = DumbTheme.Spacing.ScreenPaddingH,
-                vertical = 4.dp,
+            style = DumbTheme.Text.Body.copy(
+                color = DumbTheme.Colors.Gray,
+                textAlign = TextAlign.Center,
             ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH, vertical = 4.dp),
         )
 
         // Divider
@@ -281,17 +283,5 @@ private fun DisplayScreen(
             )
         }
 
-        // Updated time
-        BasicText(
-            text = "updated ${state.updatedAt}",
-            style = DumbTheme.Text.Label,
-            modifier = Modifier
-                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH)
-                .padding(bottom = 2.dp),
-        )
-
-        SoftKeyBar(
-            rightLabel = "refresh",
-        )
     }
 }

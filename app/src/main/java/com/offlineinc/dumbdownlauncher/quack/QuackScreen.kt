@@ -377,17 +377,13 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
                 val isDown = event.type == KeyEventType.KeyDown
                 when (event.key) {
                     Key.SoftRight -> {
-                        // Only accept on a fresh KeyDown (repeatCount == 0).
-                        // Always consume both KeyDown repeats AND KeyUp so
-                        // nothing leaks to the compose screen that appears
-                        // after acceptance.
-                        if (isDown && !accepted && event.nativeKeyEvent.repeatCount == 0) {
-                            viewModel.acceptRules()
+                        if (isDown && event.nativeKeyEvent.repeatCount == 0) {
+                            if (!accepted) {
+                                viewModel.acceptRules()
+                            } else {
+                                viewModel.toggleNotificationsMuted()
+                            }
                         }
-                        true
-                    }
-                    Key.DirectionCenter -> {
-                        if (isDown) viewModel.toggleNotificationsMuted()
                         true
                     }
                     Key.Back, Key.SoftLeft -> {
@@ -425,31 +421,14 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
             )
         }
 
-        Spacer(Modifier.height(8.dp))
-
-        // Mute toggle
-        val muteLabel = if (state.notificationsMuted) "notifications: off" else "notifications: on"
-        BasicText(
-            text = muteLabel,
-            style = DumbTheme.Text.Subtitle.copy(
-                color = if (state.notificationsMuted) DumbTheme.Colors.Red else DumbTheme.Colors.Green,
-            ),
-            modifier = Modifier
-                .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH)
-                .padding(bottom = 4.dp),
-        )
-        BasicText(
-            text = "press ok to toggle",
-            style = DumbTheme.Text.Label,
-            modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
-        )
-
         Spacer(Modifier.weight(1f))
 
         SoftKeyBar(
             leftLabel = "back",
             centerLabel = null,
-            rightLabel = if (accepted) null else "accept",
+            rightLabel = if (!accepted) "accept"
+                         else if (state.notificationsMuted) "unmute"
+                         else "mute",
         )
     }
 }
