@@ -323,17 +323,22 @@ fun PairingScreen(
                 // ── Registration error — let user retry ─────────────
                 ScreenState.REG_ERROR -> {
                     BasicText(
-                        text = "couldn't register device",
+                        text = "failed to connect to network",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.White,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                    )
+                    BasicText(
+                        text = "did u register ur sim?",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
                     BasicText(
-                        text = "check ur connection & press ok to retry",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    BasicText(
-                        text = "or call the dumb line for help:",
+                        text = "press ok to retry or call us for help:",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
                         modifier = Modifier.padding(bottom = 2.dp)
                     )
