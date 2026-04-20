@@ -16,6 +16,7 @@ import android.view.KeyEvent
 import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.offlineinc.dumbdownlauncher.launcher.ResetWarningOverlay
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
@@ -467,8 +468,15 @@ class MouseAccessibilityService : AccessibilityService() {
                 try {
                     ProcessBuilder(
                         "su", "-c",
-                        // Write the service ID fresh — Android watches this key and
-                        // rebinds any newly-listed services within a few seconds.
+                        // Delete then re-insert the service ID so the ContentObserver
+                        // always fires — a plain `put` with the same value is a no-op
+                        // and may not trigger the accessibility manager to rebind.
+                        // This is especially important after `am force-stop` clears
+                        // the stopped flag: the earlier settings write (while the app
+                        // was stopped) was observed but couldn't bind; by the time the
+                        // watchdog runs the app is live, but the setting hasn't changed,
+                        // so the manager won't retry without this delete+put cycle.
+                        "settings delete secure enabled_accessibility_services && " +
                         "settings put secure enabled_accessibility_services $A11Y_SERVICE_ID && " +
                         "settings put secure accessibility_enabled 1"
                     ).redirectErrorStream(true).start().waitFor()
@@ -765,6 +773,38 @@ class MouseAccessibilityService : AccessibilityService() {
 
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: pkg=$pkg className=$className")
+
+            // ── Factory-reset warning overlay ──────────────────────────────
+            // We only show the warning on the specific Reset options page that
+            // lists BOTH "Factory data reset" and "Network settings reset" as
+            // menu items — that combination uniquely identifies the screen and
+            // is robust to TCL-specific class name variations.
+            if (pkg == "com.android.settings") {
+                Log.d("RESET_WARN", "Settings event: class=$className — checking page content")
+                if (isResetOptionsScreen()) {
+                    Log.d("RESET_WARN", "Factory-reset page confirmed — showing warning overlay")
+                    ResetWarningOverlay.show(this)
+                } else {
+                    if (ResetWarningOverlay.isShowing) {
+                        Log.d("RESET_WARN", "Navigated away from reset page — hiding overlay")
+                    }
+                    // User navigated away from the reset page — clear the dismissed
+                    // flag so the overlay can appear again next time they visit.
+                    ResetWarningOverlay.clearDismissed()
+                    ResetWarningOverlay.hide()
+                }
+            } else if (pkg != packageName && (ResetWarningOverlay.isShowing || ResetWarningOverlay.userDismissed)) {
+                // User navigated to a genuinely different app — dismiss and clear
+                // the dismissed flag so the overlay shows fresh next Settings visit.
+                // We explicitly skip our own package here because adding the
+                // overlay window itself fires a WINDOW_STATE_CHANGED event for
+                // com.offlineinc.dumbdownlauncher, which would otherwise
+                // immediately call hide() and create an infinite show/hide loop.
+                ResetWarningOverlay.clearDismissed()
+                ResetWarningOverlay.hide()
+            }
+            // ── end reset warning ──────────────────────────────────────────
+
             if (className == "com.android.mms.ui.ConversationList" || className == "com.android.dialer") {
                 handlePackage(pkg, className)
                 return
@@ -774,6 +814,31 @@ class MouseAccessibilityService : AccessibilityService() {
                 return
             }
             handlePackage(pkg, className)
+        }
+    }
+
+    /**
+     * Returns true when the currently visible Settings screen is the factory-
+     * reset confirmation page, identified by the phrase
+     * "This will delete all data from internal storage, including:" appearing
+     * in the accessibility tree.  Using page content makes this robust across
+     * TCL-specific Settings builds and locale-independent class names.
+     */
+    private fun isResetOptionsScreen(): Boolean {
+        return try {
+            val root = rootInActiveWindow
+            if (root == null) {
+                Log.d("RESET_WARN", "isResetOptionsScreen: rootInActiveWindow is null")
+                return false
+            }
+            val needle = "This will delete all data from internal storage, including:"
+            val matches = root.findAccessibilityNodeInfosByText(needle)
+            Log.d("RESET_WARN", "isResetOptionsScreen: found ${matches.size} node(s) matching needle")
+            root.recycle()
+            matches.isNotEmpty()
+        } catch (e: Exception) {
+            Log.w("RESET_WARN", "isResetOptionsScreen: exception — ${e.message}")
+            false
         }
     }
 
