@@ -374,6 +374,11 @@ class MainActivity : AppCompatActivity() {
             MouseAccessibilityService.forceDisable(this)
         }
         overridePendingTransition(0, 0)
+        // Re-read the mute preference from SharedPreferences so the home screen
+        // badge reflects any toggle the user made in NotificationsActivity.
+        // NotificationsActivity owns its own DndMuteManager instance and only
+        // updates its own StateFlow, so we must refresh ours on every resume.
+        dndMuteManager.refreshFromSystem()
         if (PlatformPreferences.consumeShowDialog(this)) {
             // "device setup" from AllAppsActivity re-runs the full flow from the very beginning
             // so the user can change any of their choices (linking preference, messaging app, etc.).
