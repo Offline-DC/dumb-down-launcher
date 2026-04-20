@@ -333,7 +333,7 @@ fun PairingScreen(
                             .padding(bottom = 6.dp)
                     )
                     BasicText(
-                        text = "did u register ur sim?",
+                        text = "did u activate ur sim?",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
