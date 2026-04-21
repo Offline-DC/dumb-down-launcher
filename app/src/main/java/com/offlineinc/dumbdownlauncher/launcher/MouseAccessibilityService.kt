@@ -431,6 +431,19 @@ class MouseAccessibilityService : AccessibilityService() {
          */
         @Volatile var a11yKnownDown = false
 
+        // ── WhatsApp phone-entry → companion-mode redirect ───────────────
+        // When the user lands on WhatsApp's phone-number entry page we
+        // silently launch RegisterAsCompanionActivity instead, so their
+        // other devices don't get logged out. The cooldown prevents a
+        // redirect storm from back-to-back WINDOW_STATE_CHANGED events
+        // for the same page (the keyboard opening, re-layout, etc.).
+        private const val WA_COMPANION_PKG = "com.whatsapp"
+        private const val WA_COMPANION_CLASS =
+            "com.whatsapp.companionmode.registration.ui.RegisterAsCompanionActivity"
+        private const val WA_REDIRECT_COOLDOWN_MS = 2_500L
+
+        @Volatile private var lastWaCompanionRedirectMs: Long = 0L
+
         /** How long to wait for Android to bind the service after a settings toggle (ms). */
         private const val INITIAL_BIND_GRACE_MS = 3000L
 
@@ -805,6 +818,35 @@ class MouseAccessibilityService : AccessibilityService() {
             }
             // ── end reset warning ──────────────────────────────────────────
 
+            // ── WhatsApp phone-entry → companion-mode redirect ─────────────
+            // When the user lands on WhatsApp's phone-number entry page
+            // (com.whatsapp.registration.app.phonenumberentry.RegisterPhone
+            // in current builds), silently launch the companion-mode
+            // registration activity instead. Entering a phone number logs
+            // other devices out of WhatsApp, which is almost never what the
+            // user wants on this device — linking as a companion preserves
+            // the primary session.
+            //
+            // IME events are excluded (e.g. pkg=com.iqqijni.dvt912key,
+            // className=android.inputmethodservice.*) so the keyboard
+            // opening on top of the phone field doesn't count as "left the
+            // page".
+            val isImeEvent = className.contains("InputMethod", ignoreCase = true)
+                || className.contains("SoftInput", ignoreCase = true)
+            if (pkg == "com.whatsapp" && !isImeEvent) {
+                val isPhoneEntryClass = className.contains("phonenumberentry", ignoreCase = true)
+                val matchesPhoneEntryText = isWhatsAppPhoneEntryScreen()
+                val isPhonePage = isPhoneEntryClass || matchesPhoneEntryText
+                Log.d(
+                    "WA_COMPANION_REDIRECT",
+                    "WhatsApp event: class=$className isPhoneEntryClass=$isPhoneEntryClass textMatch=$matchesPhoneEntryText",
+                )
+                if (isPhonePage) {
+                    redirectToWhatsAppCompanion()
+                }
+            }
+            // ── end WhatsApp redirect ──────────────────────────────────────
+
             if (className == "com.android.mms.ui.ConversationList" || className == "com.android.dialer") {
                 handlePackage(pkg, className)
                 return
@@ -838,6 +880,97 @@ class MouseAccessibilityService : AccessibilityService() {
             matches.isNotEmpty()
         } catch (e: Exception) {
             Log.w("RESET_WARN", "isResetOptionsScreen: exception — ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Launches WhatsApp's companion-mode registration activity in place of
+     * the phone-number entry page. Uses the root shell's `am start` because
+     * RegisterAsCompanionActivity is not exported, so a regular
+     * [startActivity] from our app's uid would raise a SecurityException.
+     *
+     * Activities launched via `am start` run under the target app's uid, so
+     * WhatsApp sees the same caller identity it would if the user had
+     * tapped through its own "Link a device as a companion" flow.
+     *
+     * Protected by a short cooldown ([WA_REDIRECT_COOLDOWN_MS]) because the
+     * phone-entry page emits multiple WINDOW_STATE_CHANGED events in quick
+     * succession (FrameLayout → Main → EULA → RegisterPhone → keyboard),
+     * and we don't want to fire `am start` four times per visit.
+     */
+    private fun redirectToWhatsAppCompanion() {
+        val now = android.os.SystemClock.uptimeMillis()
+        val elapsed = now - lastWaCompanionRedirectMs
+        if (elapsed < WA_REDIRECT_COOLDOWN_MS) {
+            Log.d(
+                "WA_COMPANION_REDIRECT",
+                "redirect suppressed — last attempt ${elapsed}ms ago (cooldown ${WA_REDIRECT_COOLDOWN_MS}ms)",
+            )
+            return
+        }
+        lastWaCompanionRedirectMs = now
+        Log.i("WA_COMPANION_REDIRECT", "redirecting to $WA_COMPANION_PKG/$WA_COMPANION_CLASS")
+
+        shellExecutor.execute {
+            try {
+                val proc = ProcessBuilder(
+                    "su", "-c",
+                    // --activity-clear-top + --activity-single-top: if the
+                    // companion activity is already in WhatsApp's task, bring
+                    // it forward and clear anything above it (including the
+                    // phone-entry page) so back-press doesn't return the user
+                    // to RegisterPhone and re-trigger this redirect.
+                    "am start --activity-clear-top --activity-single-top " +
+                        "-n $WA_COMPANION_PKG/$WA_COMPANION_CLASS"
+                ).redirectErrorStream(true).start()
+                val output = proc.inputStream.bufferedReader().readText()
+                val exit = proc.waitFor()
+                if (exit != 0) {
+                    Log.w(
+                        "WA_COMPANION_REDIRECT",
+                        "am start exited $exit — output: ${output.trim()}",
+                    )
+                } else {
+                    Log.i("WA_COMPANION_REDIRECT", "am start ok: ${output.trim()}")
+                }
+            } catch (t: Throwable) {
+                Log.e("WA_COMPANION_REDIRECT", "am start failed: ${t.message}", t)
+            }
+        }
+    }
+
+    /**
+     * Returns true when the currently visible WhatsApp screen is the phone-
+     * number entry page, identified by the headline "Enter your phone
+     * number" appearing in the accessibility tree.
+     *
+     * We intentionally do NOT require a body-text match: the body paragraph
+     * ("WhatsApp will need to verify your phone number. Carrier charges may
+     * apply. What's my number?") contains a clickable span which causes the
+     * accessibility tree to split the paragraph across multiple nodes, so
+     * `findAccessibilityNodeInfosByText` never returns a hit for the full
+     * substring. The class-name check in [onAccessibilityEvent] is the
+     * primary signal; this text match is a secondary fallback for WhatsApp
+     * builds where the class path differs.
+     */
+    private fun isWhatsAppPhoneEntryScreen(): Boolean {
+        return try {
+            val root = rootInActiveWindow
+            if (root == null) {
+                Log.d("WA_PHONE_WARN", "isWhatsAppPhoneEntryScreen: rootInActiveWindow is null")
+                return false
+            }
+            val header = "Enter your phone number"
+            val headerMatches = root.findAccessibilityNodeInfosByText(header)
+            Log.d(
+                "WA_PHONE_WARN",
+                "isWhatsAppPhoneEntryScreen: header=${headerMatches.size}",
+            )
+            root.recycle()
+            headerMatches.isNotEmpty()
+        } catch (e: Exception) {
+            Log.w("WA_PHONE_WARN", "isWhatsAppPhoneEntryScreen: exception — ${e.message}")
             false
         }
     }
