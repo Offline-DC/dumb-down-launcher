@@ -434,13 +434,24 @@ class MouseAccessibilityService : AccessibilityService() {
         // ── WhatsApp phone-entry → companion-mode redirect ───────────────
         // When the user lands on WhatsApp's phone-number entry page we
         // silently launch RegisterAsCompanionActivity instead, so their
-        // other devices don't get logged out. The cooldown prevents a
-        // redirect storm from back-to-back WINDOW_STATE_CHANGED events
-        // for the same page (the keyboard opening, re-layout, etc.).
+        // other devices don't get logged out.
+        //
+        // The cooldown serves two purposes:
+        //   1. Suppresses the redirect storm from back-to-back
+        //      WINDOW_STATE_CHANGED events for the same page (the keyboard
+        //      opening, FrameLayout re-layout, etc.).
+        //   2. Prevents a back-button loop: `am start --activity-clear-top`
+        //      only clears activities above the target *if it's already in
+        //      the task*. On first launch it isn't, so companion gets
+        //      stacked on top of RegisterPhone. If the user then presses
+        //      Back to exit WhatsApp, RegisterPhone reappears underneath
+        //      and would re-trigger the redirect. 15 s comfortably covers
+        //      a back-press-out sequence without penalising the user who
+        //      genuinely revisits the page much later.
         private const val WA_COMPANION_PKG = "com.whatsapp"
         private const val WA_COMPANION_CLASS =
             "com.whatsapp.companionmode.registration.ui.RegisterAsCompanionActivity"
-        private const val WA_REDIRECT_COOLDOWN_MS = 2_500L
+        private const val WA_REDIRECT_COOLDOWN_MS = 15_000L
 
         @Volatile private var lastWaCompanionRedirectMs: Long = 0L
 
