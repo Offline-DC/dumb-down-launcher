@@ -51,6 +51,7 @@ fun NotificationRow(
             style = TextStyle(
                 color = if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.Gray,
                 fontSize = 14.sp,
+                lineHeight = 24.sp,
                 fontFamily = fontFamily
             ),
             maxLines = 2

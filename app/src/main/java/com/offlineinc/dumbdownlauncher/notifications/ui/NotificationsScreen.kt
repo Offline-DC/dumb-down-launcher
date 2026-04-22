@@ -26,10 +26,12 @@ import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.notifications.model.NotificationItem
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
-private val Yellow = Color(0xFFFFD400)
-private val Black = Color(0xFF000000)
-private val White = Color(0xFFFFFFFF)
-private val Gray = Color(0xFFAAAAAA)
+// Local aliases pointing at the central theme so the rest of this file
+// can stay pithy. Update DumbTheme.Colors if you need to change these.
+private val Yellow = DumbTheme.Colors.Yellow
+private val Black = DumbTheme.Colors.Black
+private val White = DumbTheme.Colors.White
+private val Gray = DumbTheme.Colors.Gray
 
 /**
  * Focus zones (top → bottom):

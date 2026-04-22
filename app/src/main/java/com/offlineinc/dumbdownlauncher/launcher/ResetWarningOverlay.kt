@@ -70,7 +70,7 @@ object ResetWarningOverlay {
             // ── Title ─────────────────────────────────────────────────────
             container.addView(TextView(context).apply {
                 text = "⚠  heads up"
-                setTextColor(Color.parseColor("#FFD400"))           // Dumb yellow
+                setTextColor(Color.parseColor("#FAF594"))           // Dumb yellow
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 gravity = Gravity.CENTER
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -89,7 +89,7 @@ object ResetWarningOverlay {
             container.addView(Button(context).apply {
                 text = "got it"
                 setTextColor(Color.BLACK)
-                setBackgroundColor(Color.parseColor("#FFD400"))
+                setBackgroundColor(Color.parseColor("#FAF594"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 setPadding(dp(context, 24), dp(context, 6), dp(context, 24), dp(context, 6))
                 setOnClickListener {

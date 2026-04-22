@@ -23,7 +23,7 @@ object DumbTheme {
 
     @Immutable
     object Colors {
-        val Yellow = Color(0xFFFFD400)   // Brand highlight / selection
+        val Yellow = Color(0xFFFAF594)   // Brand highlight / selection (#FAF594)
         val Black  = Color(0xFF000000)   // Background
         val White  = Color(0xFFFFFFFF)   // Primary text
         val Gray   = Color(0xFFAAAAAA)   // Secondary / hint text
@@ -31,9 +31,31 @@ object DumbTheme {
         val Green  = Color(0xFF00AA00)   // Positive / success accents
     }
 
-    // ── Font ─────────────────────────────────────────────────────────────
+    // ── Fonts ────────────────────────────────────────────────────────────
+    //
+    // Two-family system matching the Dumb Dumb apps:
+    //  • [Header] — Cheltenham Extra Condensed Bold, used for titles and
+    //    other display text.
+    //  • [Body]   — Helvetica Now Text Black, used for body copy, buttons,
+    //    labels, and everywhere else.
 
-    val BioRhyme: FontFamily = FontFamily(Font(R.font.bio_rhyme))
+    /** Display / header font — Cheltenham Extra Condensed Bold. */
+    val Header: FontFamily = FontFamily(Font(R.font.cheltenham_extra_condensed_bold))
+
+    /** Body copy font — Helvetica Now Text Black. */
+    val Body: FontFamily = FontFamily(Font(R.font.helvetica_now_text_black))
+
+    /**
+     * Legacy alias. The launcher previously used BioRhyme as its only font;
+     * many call sites still reference [DumbTheme.BioRhyme] directly. It now
+     * points at [Body] so existing usages automatically pick up the new
+     * Helvetica body font without touching every file.
+     */
+    @Deprecated(
+        "Use DumbTheme.Header for titles or DumbTheme.Body for body copy.",
+        ReplaceWith("DumbTheme.Body")
+    )
+    val BioRhyme: FontFamily = Body
 
     // ── Text styles ──────────────────────────────────────────────────────
     //
@@ -45,76 +67,76 @@ object DumbTheme {
     object Text {
         /** Large page title — 20 sp, white.  "link ur smart phone", etc. */
         val PageTitle = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = Header,
             fontSize = 20.sp,
             color = Colors.White
         )
 
         /** Section / card title — 18 sp, white. */
         val Title = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = Header,
             fontSize = 18.sp,
             color = Colors.White
         )
 
         /** Primary body copy — 16 sp, white. */
         val Body = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 16.sp,
             color = Colors.White
         )
 
         /** Secondary body / instructions — 14 sp, white. */
         val BodySmall = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 14.sp,
             color = Colors.White
         )
 
         /** Subtitle / description — 13 sp, gray. */
         val Subtitle = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 13.sp,
             color = Colors.Gray
         )
 
         /** Hint / helper text — 12 sp, gray. */
         val Hint = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 12.sp,
             color = Colors.Gray
         )
 
         /** Small labels — 11 sp, gray. Used for skip buttons, etc. */
         val Label = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 11.sp,
             color = Colors.Gray
         )
 
         /** Large list item labels — 24 sp, no default color. */
         val AppLabel = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = Header,
             fontSize = 24.sp
         )
 
         /** Primary button text — 16 sp, black (on yellow bg). */
         val Button = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 16.sp,
             color = Colors.Black
         )
 
         /** Small / secondary button text — 13 sp, white. */
         val ButtonSmall = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 13.sp,
             color = Colors.White
         )
 
         /** 14 sp, no default color. General-purpose reusable size. */
         val Small = TextStyle(
-            fontFamily = BioRhyme,
+            fontFamily = DumbTheme.Body,
             fontSize = 14.sp
         )
     }
