@@ -410,7 +410,7 @@ fun BootRegistrationScreen(
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
                     BasicText(
-                        text = try restarting ur phone",
+                        text = "try restarting ur phone",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
