@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
@@ -32,13 +33,21 @@ private const val TAG = "DeviceRegistration"
 
 /**
  * Screen states:
- *  - LOADING      reading SIM info (phone #, IMEI, ICCID) in background
- *  - REGISTERING  POST /api/v1/register in-flight
- *  - REG_ERROR    registration failed — pressing OK retries
- *  - ERROR        couldn't read SIM after N retries — show support number
- *  - DONE         phone # known + backend returned 2xx — forward to caller
+ *  - LOADING         reading SIM info (phone #, IMEI, ICCID) in background
+ *  - REGISTERING     POST /api/v1/register in-flight
+ *  - CHECKING_BUNDLE GET /contact-sync/bundle-flags in-flight — looks up
+ *                    hideAudioBundle/hideSmartTxt from the Gigs plan tier
+ *                    attached to this SIM's subscription and persists them
+ *                    to [PairingStore] before finishing setup. On failure
+ *                    we still advance to DONE: the bootup refresh (30s
+ *                    after launch) will re-attempt the lookup, and the
+ *                    safe default is "don't hide anything" which just
+ *                    over-shows the upsell rather than breaking UX.
+ *  - REG_ERROR       registration failed — pressing OK retries
+ *  - ERROR           couldn't read SIM after N retries — show support number
+ *  - DONE            phone # known + backend returned 2xx — forward to caller
  */
-private enum class RegState { LOADING, REGISTERING, REG_ERROR, ERROR, DONE }
+private enum class RegState { LOADING, REGISTERING, CHECKING_BUNDLE, REG_ERROR, ERROR, DONE }
 
 /**
  * Reads SIM info and registers the device with the backend. Shown after
@@ -73,7 +82,36 @@ fun DeviceRegistrationScreen(
     var cachedIccid by remember { mutableStateOf<String?>(null) }
 
     /**
-     * One pass: read SIM info with retries, then POST /register.
+     * Best-effort bundle-flag fetch. Runs on Dispatchers.IO, swallows all
+     * errors — we never want this to block the user's forward progress,
+     * because the MainActivity bootup refresh (30s after launch) will pick
+     * up anything we miss here. Flags are persisted to [PairingStore] so
+     * subsequent activities see them immediately.
+     */
+    suspend fun fetchBundleFlags(phone: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                val api = PairingApiClient(okhttp3.OkHttpClient())
+                val result = api.getBundleFlags(phone)
+                val store = PairingStore(ctx)
+                store.hideAudioBundle = result.hideAudioBundle
+                store.hideSmartTxt = result.hideSmartTxt
+                Log.i(
+                    TAG,
+                    "bundle-flags: planId=${result.planId} tier=${result.tier} " +
+                        "hideAudioBundle=${result.hideAudioBundle} hideSmartTxt=${result.hideSmartTxt}"
+                )
+            } catch (e: Exception) {
+                // 404 (no gigs row yet) is common right after activation —
+                // don't alarm the user. Bootup refresh will retry.
+                Log.w(TAG, "bundle-flags fetch failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * One pass: read SIM info with retries, POST /register, then GET the
+     * bundle flags.
      *
      * IMPORTANT: readAll() spawns a `su` subprocess (ProcessBuilder +
      * waitFor), which would block the main thread and trigger an ANR.
@@ -103,6 +141,13 @@ fun DeviceRegistrationScreen(
                     DeviceRegistrar.registerNow(ctx, imei, iccid, phone, force = true)
                 }
                 if (registered) {
+                    // Successful registration → look up the bundle flags
+                    // derived from the Gigs plan tier so the rest of the
+                    // launcher knows whether to hide the audio-bundle
+                    // upsell / smart-txt flow. Failures here are logged
+                    // and ignored; we still finish setup.
+                    state = RegState.CHECKING_BUNDLE
+                    fetchBundleFlags(phone)
                     state = RegState.DONE
                 } else {
                     state = RegState.REG_ERROR
@@ -202,7 +247,17 @@ fun DeviceRegistrationScreen(
                                     val registered = withContext(Dispatchers.IO) {
                                         DeviceRegistrar.registerNow(ctx, imei, iccid, phone, force = true)
                                     }
-                                    state = if (registered) RegState.DONE else RegState.REG_ERROR
+                                    if (registered) {
+                                        // Same post-register flow as runOnce:
+                                        // show "checking bundle..." while we
+                                        // fetch Gigs-plan-derived flags, then
+                                        // finish.
+                                        state = RegState.CHECKING_BUNDLE
+                                        fetchBundleFlags(phone)
+                                        state = RegState.DONE
+                                    } else {
+                                        state = RegState.REG_ERROR
+                                    }
                                 }
                             }
                             return@onPreviewKeyEvent true
@@ -211,7 +266,7 @@ fun DeviceRegistrationScreen(
 
                     // In the other states, swallow OK so it doesn't bubble
                     // to the skip button.
-                    RegState.LOADING, RegState.REGISTERING, RegState.ERROR, RegState.DONE -> {
+                    RegState.LOADING, RegState.REGISTERING, RegState.CHECKING_BUNDLE, RegState.ERROR, RegState.DONE -> {
                         if (event.key == Key.Enter ||
                             event.key == Key.NumPadEnter ||
                             event.key == Key.DirectionCenter) {
@@ -245,10 +300,12 @@ fun DeviceRegistrationScreen(
             )
 
             when (state) {
-                // Two-step status — gives the user a sense of forward motion
-                // instead of a mystery 2-second spinner. LOADING covers the
-                // SIM read, REGISTERING covers the POST /register round trip.
-                RegState.LOADING, RegState.REGISTERING -> {
+                // Three-step status — gives the user a sense of forward
+                // motion instead of a mystery multi-second spinner.
+                //   LOADING         SIM read
+                //   REGISTERING     POST /api/v1/register
+                //   CHECKING_BUNDLE GET /contact-sync/bundle-flags
+                RegState.LOADING, RegState.REGISTERING, RegState.CHECKING_BUNDLE -> {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.padding(top = 16.dp)
@@ -256,10 +313,11 @@ fun DeviceRegistrationScreen(
                         DumbSpinner()
                         Spacer(Modifier.height(8.dp))
                         BasicText(
-                            text = if (state == RegState.LOADING) {
-                                "reading ur sim..."
-                            } else {
-                                "activating ur phone..."
+                            text = when (state) {
+                                RegState.LOADING -> "reading ur sim..."
+                                RegState.REGISTERING -> "activating ur phone..."
+                                RegState.CHECKING_BUNDLE -> "checking bundle..."
+                                else -> ""
                             },
                             style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
                         )

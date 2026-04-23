@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
+import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
+import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -185,6 +187,12 @@ object DeviceRegistrar {
                 .url("$API_BASE/register")
                 .post(body.toString().toRequestBody(JSON_TYPE))
                 .build()
+            // Mirrors the PairingAPI one-liner ("HTTP GET <url>") so device
+            // logs show the same shape for every outbound HTTP call. The
+            // body is logged too (distinct Log.d) so a tail of DeviceRegistrar
+            // shows exactly what request hit the backend.
+            Log.d(TAG, "HTTP ${req.method} ${req.url}")
+            Log.d(TAG, "register request body=$body")
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     Log.w(TAG, "register FAIL HTTP ${resp.code} body=${resp.body?.string()}")
@@ -261,6 +269,49 @@ object DeviceRegistrar {
             else -> {
                 Log.i(TAG, "No change since last registration — nothing to do")
             }
+        }
+
+        // 4. Refresh the Gigs-plan-derived bundle flags
+        //    (hideAudioBundle / hideSmartTxt) once network + SIM are up and
+        //    device registration has run. Uses the same 30s-quiet-period
+        //    timing as /register so we don't stack round-trips with the
+        //    modem coming online.
+        //
+        //    Runs on every boot — even when registration itself was a no-op —
+        //    because the user's Gigs plan can change between boots (upgrade /
+        //    downgrade) and the launcher shouldn't keep stale flags. The
+        //    device-setup screen also re-fetches these during its explicit
+        //    "checking bundle..." step; this is just the passive refresh.
+        refreshBundleFlags(ctx, phone)
+    }
+
+    /**
+     * Fetch `/contact-sync/bundle-flags` for this phone number and persist
+     * the resulting `hideAudioBundle` / `hideSmartTxt` flags into
+     * [PairingStore]. Best-effort — all exceptions are swallowed so a
+     * transient backend or network error never blocks registration.
+     *
+     * Visible for unit testing and for the Device Setup screen to call
+     * directly if it wants to chain off registration without going through
+     * its own PairingApiClient instance.
+     */
+    fun refreshBundleFlags(ctx: Context, phone: String) {
+        try {
+            val api = PairingApiClient(http)
+            val result = api.getBundleFlags(phone)
+            val store = PairingStore(ctx)
+            store.hideAudioBundle = result.hideAudioBundle
+            store.hideSmartTxt = result.hideSmartTxt
+            Log.i(
+                TAG,
+                "refreshBundleFlags ✔ planId=${result.planId} tier=${result.tier} " +
+                    "hideAudioBundle=${result.hideAudioBundle} hideSmartTxt=${result.hideSmartTxt}"
+            )
+        } catch (e: Exception) {
+            // 404 (no gigs row yet / brand-new activation) is expected for
+            // devices that haven't had the Gigs webhook fire. The next boot
+            // will try again.
+            Log.w(TAG, "refreshBundleFlags: skipped (${e.message})")
         }
     }
 
@@ -381,6 +432,8 @@ object DeviceRegistrar {
     private fun verifyPhoneRecord(imei: String, iccid: String): Boolean {
         return try {
             val req = Request.Builder().url("$API_BASE/phones/$imei").get().build()
+            // Same one-liner format as PairingAPI so device logs line up.
+            Log.d(TAG, "HTTP ${req.method} ${req.url}")
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     Log.w(TAG, "verify: HTTP ${resp.code}")
@@ -435,6 +488,9 @@ object DeviceRegistrar {
                 .url(url)
                 .put(body.toString().toRequestBody(JSON_TYPE))
                 .build()
+            // Same one-liner format as PairingAPI so device logs line up.
+            Log.d(TAG, "HTTP ${req.method} ${req.url}")
+            Log.d(TAG, "$label request body=$body")
             http.newCall(req).execute().use { resp ->
                 val ok = resp.isSuccessful
                 if (ok) {
