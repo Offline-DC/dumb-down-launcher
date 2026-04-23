@@ -1,6 +1,5 @@
 package com.offlineinc.dumbdownlauncher.weather
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -24,13 +22,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -221,35 +217,18 @@ private fun DisplayScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Row 1 — icon + hero temperature. fillMaxWidth + Arrangement.Center
-            // keeps the pair horizontally centered as a unit.
-            Row(
+            // Row 1 — hero temperature, centered.
+            BasicText(
+                text = "${state.temp}°F",
+                // Hero temperature — Helvetica, 52sp.
+                style = DumbTheme.Text.PageTitle.copy(
+                    fontFamily = DumbTheme.Body,
+                    fontSize = 52.sp,
+                    color = DumbTheme.Colors.White,
+                    textAlign = TextAlign.Center,
+                ),
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Image(
-                    painter = rememberVectorPainter(state.icon),
-                    contentDescription = state.condition,
-                    // Muted yellow — full-saturation was competing with the
-                    // temperature for attention. Alpha keeps the icon legible
-                    // without pulling the eye away from the hero number.
-                    colorFilter = ColorFilter.tint(
-                        DumbTheme.Colors.Yellow.copy(alpha = 0.55f)
-                    ),
-                    modifier = Modifier.size(56.dp),
-                )
-                Spacer(Modifier.width(12.dp))
-                BasicText(
-                    text = "${state.temp}°F",
-                    // Hero temperature — Helvetica, 52sp.
-                    style = DumbTheme.Text.PageTitle.copy(
-                        fontFamily = DumbTheme.Body,
-                        fontSize = 52.sp,
-                        color = DumbTheme.Colors.White,
-                    ),
-                )
-            }
+            )
 
             Spacer(Modifier.height(4.dp))
 
