@@ -206,7 +206,7 @@ fun HomeScreen(
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 20.dp),
+                .padding(top = 60.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             HomeClockDisplay(
@@ -265,7 +265,7 @@ private fun PreviewHomeScreen() {
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 20.dp),
+                .padding(top = 60.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             HomeClockDisplay(timeText = "9:41", dateText = "sun, mar 15")
@@ -297,7 +297,7 @@ private fun PreviewHomeScreenDndOn() {
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 20.dp),
+                .padding(top = 60.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             HomeClockDisplay(timeText = "2:30", dateText = "mon, mar 16")

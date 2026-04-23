@@ -3,6 +3,7 @@ package com.offlineinc.dumbdownlauncher.weather
 import android.app.Application
 import android.util.Log
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.FilterDrama
@@ -278,12 +279,20 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
         fun weatherCodeToIcon(code: Int, wind: Double): ImageVector {
             if (wind > 25 && code < 45) return Icons.Filled.Air
             return when (code) {
+                // Clear / mainly clear → sun
                 0, 1 -> Icons.Filled.WbSunny
-                2 -> Icons.Filled.FilterDrama       // partly cloudy
+                // Partly cloudy → sun behind a cloud
+                2 -> Icons.Filled.WbCloudy
+                // Overcast → plain cloud
                 3 -> Icons.Filled.Cloud
-                45, 48 -> Icons.Filled.WbCloudy     // fog — cloudy with haze
+                // Fog / haze → cloud (was WbCloudy which has a misleading sun
+                // glyph; fog should read as "no sun, grey sky")
+                45, 48 -> Icons.Filled.FilterDrama
+                // Drizzle & rain → water drop
                 51, 53, 55, 61, 63, 65, 80, 81, 82 -> Icons.Filled.WaterDrop
-                71, 73, 75, 77, 85, 86 -> Icons.Filled.Cloud  // snow — cloud icon
+                // Snow → snowflake (was Cloud, indistinguishable from overcast)
+                71, 73, 75, 77, 85, 86 -> Icons.Filled.AcUnit
+                // Thunderstorm
                 95, 96, 99 -> Icons.Filled.Thunderstorm
                 else -> Icons.Filled.Cloud
             }

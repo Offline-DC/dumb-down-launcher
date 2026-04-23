@@ -32,6 +32,7 @@ import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import android.net.Uri
+import com.offlineinc.dumbdownlauncher.ui.DeviceRegistrationScreen
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
 import com.offlineinc.dumbdownlauncher.ui.IntentChoiceScreen
@@ -57,7 +58,15 @@ val WEB_APP_URLS = mapOf(
 class MainActivity : AppCompatActivity() {
     private lateinit var dndMuteManager: DndMuteManager
     private lateinit var controller: LauncherController
-    /** Onboarding step: "linking" → "intent" → ["pairing" → "contactsync" →] "mousetutorial" → null */
+    /**
+     * Onboarding step machine:
+     *   linking → registering → [pairing → contactsync →] intent → mousetutorial → null
+     *
+     * `registering` runs for every user (regardless of linking choice) so every
+     * device ends up registered with the backend — see [DeviceRegistrationScreen].
+     * Linking=yes also runs `pairing` afterwards; linking=no skips straight to
+     * `intent` (messaging-platform picker).
+     */
     private val onboardingStep = mutableStateOf<String?>(null)
     /** Flips to true once su permission grant finishes (or was unnecessary). */
     private val permissionsReady = mutableStateOf(false)
@@ -97,25 +106,34 @@ class MainActivity : AppCompatActivity() {
         // "none" (super dumb) is a valid choice — no smart text, no pairing needed.
         // "skipped" is the legacy value for users who tapped skip on the old pairing screen.
         val validPlatforms = setOf("ios", "android", "skipped", "none")
+        // Any already-paired user must have been registered during the old pairing
+        // flow, so treat pairing as an implicit registration success for legacy
+        // users who don't have the `deviceRegistered` flag set.
+        val isRegistered = pairingStore.deviceRegistered || pairingStore.isPaired
         // New users: neither linking nor platform chosen yet
-        val needsLinking  = linkingChoice == null && !pairingStore.isPaired
+        val needsLinking     = linkingChoice == null && !pairingStore.isPaired
+        // Linking choice made but device not yet registered — run the
+        // standalone DeviceRegistrationScreen before anything else.
+        val needsRegistering = linkingChoice != null && !isRegistered
         // Linking=yes → pair first, intent comes after contactsync
-        val needsPairing  = linkingChoice == true && !pairingStore.isPaired
+        val needsPairing     = linkingChoice == true && !pairingStore.isPaired
         // Need to pick messaging platform (after pairing+contactsync if linked,
         // or right after linking=no, or backwards-compat for old paired users)
-        val needsIntent   = platformChoice !in validPlatforms && !needsLinking && !needsPairing
+        val needsIntent      = platformChoice !in validPlatforms &&
+                               !needsLinking && !needsRegistering && !needsPairing
 
         // Backwards-compat: existing users who already completed pairing + platform
         // before the mouse tutorial was added should not be forced through it on update.
-        if (!needsLinking && !needsPairing && !needsIntent && !isMouseTutorialDone()) {
+        if (!needsLinking && !needsRegistering && !needsPairing && !needsIntent && !isMouseTutorialDone()) {
             Log.d("ONBOARDING", "Existing user detected — auto-marking mouse tutorial done")
             markMouseTutorialDone()
         }
 
         onboardingStep.value = when {
-            needsLinking  -> "linking"      // brand-new users: are you linking?
-            needsPairing  -> "pairing"      // linking=yes: pair the phone first
-            needsIntent   -> "intent"       // pick imessage / google messages / none
+            needsLinking     -> "linking"       // brand-new users: are you linking?
+            needsRegistering -> "registering"   // read SIM + register w/ backend
+            needsPairing     -> "pairing"       // linking=yes: pair the phone
+            needsIntent      -> "intent"        // pick imessage / google messages / none
             !isMouseTutorialDone() -> "mousetutorial"
             else -> null
         }
@@ -239,9 +257,33 @@ class MainActivity : AppCompatActivity() {
                             onChoose = { willLink ->
                                 PlatformPreferences.saveLinkingChoice(this@MainActivity, willLink)
                                 Log.d("ONBOARDING", "Linking choice: $willLink")
-                                // Linking=yes → pair first, intent comes after contactsync.
-                                // Linking=no  → pick messaging platform next.
-                                onboardingStep.value = if (willLink) "pairing" else "intent"
+                                // Every pass through Device Setup re-runs registration so
+                                // the backend gets a fresh record with the current SIM /
+                                // phone number. The backend's /api/v1/register is
+                                // idempotent, so re-registering with the same IMEI/ICCID
+                                // is safe. nextStepAfterRegistration() routes past the
+                                // subsequent steps (pairing / intent / tutorial) based on
+                                // whatever the user already has configured.
+                                onboardingStep.value = "registering"
+                            }
+                        )
+                    }
+                    "registering" -> {
+                        DeviceRegistrationScreen(
+                            permissionsReady = permissionsReady.value,
+                            onRegistered = { phone ->
+                                val store = PairingStore(this@MainActivity)
+                                store.saveRegistration(phone)
+                                Log.d("ONBOARDING", "Device registered (phone=$phone)")
+                                onboardingStep.value = nextStepAfterRegistration(store)
+                            },
+                            onSkip = {
+                                // Skip doesn't mark the device as registered — on next
+                                // launch we'll route back through registering. But we
+                                // let the user move forward through onboarding so a
+                                // bad SIM read doesn't trap them here.
+                                Log.d("ONBOARDING", "User skipped device registration")
+                                onboardingStep.value = nextStepAfterRegistration(PairingStore(this@MainActivity))
                             }
                         )
                     }
@@ -266,7 +308,6 @@ class MainActivity : AppCompatActivity() {
                     }
                     "pairing" -> {
                         PairingScreen(
-                            permissionsReady = permissionsReady.value,
                             onPaired = {
                                 // Reset mouse tutorial so the full flow replays
                                 getSharedPreferences("launcher_prefs", MODE_PRIVATE)
@@ -557,6 +598,33 @@ class MainActivity : AppCompatActivity() {
             } catch (e2: Exception) {
                 Log.e("ONBOARDING", "No browser available: ${e2.message}")
             }
+        }
+    }
+
+    /**
+     * Pick the onboarding step to run after [DeviceRegistrationScreen] finishes.
+     *
+     * The registration screen sits between `linking` and (pairing | intent), but
+     * it can also be re-entered after-the-fact by existing users who were paired
+     * under the old flow (or who completed linking=no pre-registration). After
+     * registering we should respect any state they already have: if they're
+     * already paired we don't force them back to pairing, if they've already
+     * chosen a messaging platform we don't re-show IntentChoiceScreen, and if
+     * they've already seen the mouse tutorial we send them straight home.
+     */
+    private fun nextStepAfterRegistration(store: PairingStore): String? {
+        val willLink    = PlatformPreferences.getLinkingChoice(this) == true
+        val platform    = PlatformPreferences.getChoice(this)
+        val hasPlatform = platform in setOf("ios", "android", "skipped", "none")
+        return when {
+            // If the user chose "link" during this Device Setup pass, always
+            // show the PairingScreen. When they're already paired it renders
+            // as DeviceLinkedContent (with "next" + "unpair") so they can
+            // continue or re-pair — never swallowed silently.
+            willLink                    -> "pairing"
+            !hasPlatform                -> "intent"
+            !isMouseTutorialDone()      -> "mousetutorial"
+            else                        -> null
         }
     }
 

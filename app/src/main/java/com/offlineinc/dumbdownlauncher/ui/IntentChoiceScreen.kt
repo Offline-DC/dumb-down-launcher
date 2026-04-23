@@ -74,14 +74,21 @@ fun IntentChoiceScreen(
         ) {
             BasicText(
                 text = "what texts are u syncing?",
-                style = DumbTheme.Text.PageTitle,
+                // Device setup titles use the Helvetica body font — see
+                // LinkingChoiceScreen for rationale.
+                style = DumbTheme.Text.PageTitle.copy(fontFamily = DumbTheme.Body),
                 modifier = Modifier.padding(bottom = 24.dp)
             )
 
             options.forEachIndexed { index, (label, value) ->
                 val isSelected = index == selectedIndex
                 val textColor = if (isSelected) DumbTheme.Colors.Yellow else DumbTheme.Colors.Gray
-                val style = DumbTheme.Text.AppLabel.copy(fontSize = 18.sp)
+                // Device setup options use the Helvetica body font to match
+                // the device setup title — see the title above.
+                val style = DumbTheme.Text.AppLabel.copy(
+                    fontFamily = DumbTheme.Body,
+                    fontSize = 18.sp
+                )
 
                 BasicText(
                     text = if (isSelected) "> $label" else "  $label",

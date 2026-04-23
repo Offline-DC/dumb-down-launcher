@@ -224,7 +224,8 @@ class AllAppsActivity : AppCompatActivity() {
 
         val cached = cachedApps
         if (cached != null) {
-            items.addAll(cached)
+            // Defensive dedupe — LazyColumn crashes if two items share the same key
+            items.addAll(cached.distinctBy { it.packageName })
         }
 
         setContent {
@@ -345,7 +346,7 @@ class AllAppsActivity : AppCompatActivity() {
 
         if (cached == null) {
             lifecycleScope.launch(Dispatchers.IO) {
-                val loaded = buildAppList(applicationContext)
+                val loaded = buildAppList(applicationContext).distinctBy { it.packageName }
                 cachedApps = loaded
                 withContext(Dispatchers.Main) {
                     if (isDestroyed) return@withContext
@@ -433,7 +434,10 @@ class AllAppsActivity : AppCompatActivity() {
                             launchComponent = null,
                         )
                         items.add(contactSyncItem)
-                        cachedApps = (cachedApps ?: emptyList()) + contactSyncItem
+                        val cache = cachedApps ?: emptyList()
+                        if (cache.none { it.packageName == CONTACT_SYNC }) {
+                            cachedApps = cache + contactSyncItem
+                        }
                     }
                 } else {
                     // Remove "contact sync" if present when not paired
@@ -455,7 +459,10 @@ class AllAppsActivity : AppCompatActivity() {
                         launchComponent = null,
                     )
                     items.add(quackItem)
-                    cachedApps = (cachedApps ?: emptyList()) + quackItem
+                    val cache = cachedApps ?: emptyList()
+                    if (cache.none { it.packageName == QUACK }) {
+                        cachedApps = cache + quackItem
+                    }
                 } else if (!hasPhoneNumber && hasQuack) {
                     val quackIdx = items.indexOfFirst { it.packageName == QUACK }
                     if (quackIdx >= 0) {
@@ -464,10 +471,17 @@ class AllAppsActivity : AppCompatActivity() {
                     }
                 }
 
-                // Re-sort so dynamically added items appear in alphabetical order
-                val sorted = items.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+                // Re-sort so dynamically added items appear in alphabetical order.
+                // distinctBy is defensive: if a stale cache somehow duplicates a
+                // package (e.g. QUACK added by both buildAppList + refresh), the
+                // LazyColumn key contract would otherwise crash the app.
+                val sorted = items
+                    .distinctBy { it.packageName }
+                    .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
                 items.clear()
                 items.addAll(sorted)
+                // Also dedupe the static cache so future onCreate paths are clean.
+                cachedApps = cachedApps?.distinctBy { it.packageName }
             }
         }
     }

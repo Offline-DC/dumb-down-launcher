@@ -46,7 +46,9 @@ fun PermissionsCard(
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             BasicText(
                 text = "permissions",
-                style = DumbTheme.Text.Title
+                // Device setup titles use the Helvetica body font — see
+                // LinkingChoiceScreen for rationale.
+                style = DumbTheme.Text.Title.copy(fontFamily = DumbTheme.Body)
             )
 
             BasicText(

@@ -69,7 +69,10 @@ fun LinkingChoiceScreen(
         ) {
             BasicText(
                 text = "r u linking smartphone?",
-                style = DumbTheme.Text.PageTitle,
+                // Device setup titles use the Helvetica body font instead of
+                // the Cheltenham header font — keeps the onboarding flow
+                // visually distinct from the rest of the launcher.
+                style = DumbTheme.Text.PageTitle.copy(fontFamily = DumbTheme.Body),
                 modifier = Modifier.padding(bottom = 24.dp)
             )
 
@@ -79,7 +82,10 @@ fun LinkingChoiceScreen(
 
                 BasicText(
                     text = if (isSelected) "> $label" else "  $label",
+                    // Device setup options use the Helvetica body font to
+                    // match the device setup title — see the title above.
                     style = DumbTheme.Text.AppLabel.copy(
+                        fontFamily = DumbTheme.Body,
                         color = textColor,
                         fontSize = 18.sp
                     ),

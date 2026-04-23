@@ -42,7 +42,12 @@ fun HomeScreen(
     ) {
         BasicText(
             text = "contact sync",
-            style = DumbTheme.Text.PageTitle.copy(textAlign = TextAlign.Center),
+            // Device setup titles use the Helvetica body font — see
+            // LinkingChoiceScreen for rationale.
+            style = DumbTheme.Text.PageTitle.copy(
+                fontFamily = DumbTheme.Body,
+                textAlign = TextAlign.Center
+            ),
             modifier = Modifier.fillMaxWidth()
         )
 

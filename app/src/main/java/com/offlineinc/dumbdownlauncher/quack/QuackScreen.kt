@@ -38,6 +38,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.ui.SoftKeyBar
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 import kotlinx.coroutines.delay
@@ -340,14 +341,25 @@ private fun PostRow(post: QuackPost, selected: Boolean, ageTick: Int = 0) {
     ) {
         BasicText(
             text = post.body,
-            style = DumbTheme.Text.BodySmall.copy(color = textColor),
+            // Bumped from BodySmall's default 14sp to 20sp so posts fill the
+            // feed and are easy to read from arm's length on the TCL flip.
+            style = DumbTheme.Text.BodySmall.copy(
+                fontSize = 20.sp,
+                color = textColor,
+            ),
             modifier = Modifier.weight(1f),
         )
         val age = formatAge(post.createdAt)
         if (age.isNotEmpty()) {
             BasicText(
                 text = age,
-                style = DumbTheme.Text.Hint.copy(color = metaColor),
+                // Smaller than the post body on purpose — the timestamp
+                // should feel like secondary metadata, not compete with
+                // the quack's text for attention.
+                style = DumbTheme.Text.Hint.copy(
+                    fontSize = 11.sp,
+                    color = metaColor,
+                ),
                 modifier = Modifier.padding(start = 6.dp),
             )
         }
@@ -404,7 +416,13 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
     ) {
         BasicText(
             text = "rulez",
-            style = DumbTheme.Text.PageTitle.copy(color = DumbTheme.Colors.Yellow),
+            // Helvetica body font + 26 sp so the title reads as a chunky
+            // Quack-style header rather than the default Cheltenham PageTitle.
+            style = DumbTheme.Text.PageTitle.copy(
+                fontFamily = DumbTheme.Body,
+                fontSize = 26.sp,
+                color = DumbTheme.Colors.Yellow,
+            ),
             modifier = Modifier.padding(
                 horizontal = DumbTheme.Spacing.ScreenPaddingH,
                 vertical = DumbTheme.Spacing.ScreenPaddingV,
@@ -422,7 +440,12 @@ private fun RulesScreen(state: QuackUiState, viewModel: QuackViewModel) {
         for (rule in rules) {
             BasicText(
                 text = rule,
-                style = DumbTheme.Text.Body.copy(color = DumbTheme.Colors.White),
+                // Bumped from Body's default 16sp to 19sp to match the
+                // overall Quack font bump.
+                style = DumbTheme.Text.Body.copy(
+                    fontSize = 19.sp,
+                    color = DumbTheme.Colors.White,
+                ),
                 modifier = Modifier
                     .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH)
                     .padding(bottom = 12.dp),
@@ -462,10 +485,11 @@ private fun ComposeScreen(
         // Header
         Spacer(Modifier.height(DumbTheme.Spacing.ScreenPaddingV))
 
-        // Char count
+        // Char count — bumped from default Hint (12sp) to 15sp so the
+        // running count is easy to glance at while composing.
         BasicText(
             text = "${state.composeText.length}/140",
-            style = DumbTheme.Text.Hint,
+            style = DumbTheme.Text.Hint.copy(fontSize = 15.sp),
             modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
         )
 
@@ -509,14 +533,25 @@ private fun ComposeScreen(
                         else -> false
                     }
                 },
-            textStyle = DumbTheme.Text.Body.copy(color = DumbTheme.Colors.White),
+            // Typed text + placeholder — bumped from Body (16sp) to 18sp so
+            // "what's happening nearby?" and the user's composition both
+            // read easily on the small screen. Placeholder must share
+            // fontSize with the field itself or the hint will jump in size
+            // the moment the user types their first character.
+            textStyle = DumbTheme.Text.Body.copy(
+                color = DumbTheme.Colors.White,
+                fontSize = 18.sp,
+            ),
             cursorBrush = SolidColor(DumbTheme.Colors.Yellow),
             decorationBox = { innerTextField ->
                 Box {
                     if (state.composeText.isEmpty()) {
                         BasicText(
                             text = "what's happening nearby?",
-                            style = DumbTheme.Text.Body.copy(color = DumbTheme.Colors.Gray),
+                            style = DumbTheme.Text.Body.copy(
+                                color = DumbTheme.Colors.Gray,
+                                fontSize = 18.sp,
+                            ),
                         )
                     }
                     innerTextField()
@@ -524,13 +559,15 @@ private fun ComposeScreen(
             },
         )
 
-        // Posts remaining indicator
+        // Posts remaining indicator — bumped from Hint (12sp) to 15sp so
+        // the daily-limit message is readable at a glance.
         val remaining = (3 - state.postsToday).coerceAtLeast(0)
         BasicText(
             text = "$remaining/3 quacks left today",
             style = DumbTheme.Text.Hint.copy(
                 color = if (remaining == 0) DumbTheme.Colors.Red else DumbTheme.Colors.Gray,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                fontSize = 15.sp,
             ),
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         )

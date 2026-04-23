@@ -1,9 +1,9 @@
 package com.offlineinc.dumbdownlauncher.ui
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,23 +13,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import com.offlineinc.dumbdownlauncher.AllAppsActivity
 import com.offlineinc.dumbdownlauncher.MainAppsGridActivity
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
-import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
-import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.ui.components.DumbButton
 import com.offlineinc.dumbdownlauncher.ui.components.DumbChipButton
@@ -44,22 +38,22 @@ private const val TAG = "PairingScreen"
 
 /**
  * Pairing screen states:
- *  - LOADING:     reading phone number in background (retries happening)
- *  - ERROR:       retries exhausted — show support number
  *  - READY:       phone number known, show pairing code entry
  *  - PAIRING:     pairing API call in progress
  *  - PAIRED:      success, navigating forward
+ *
+ * Reading the SIM + registering the device has moved to
+ * [DeviceRegistrationScreen] — by the time this screen is shown, the phone
+ * number has already been persisted in [PairingStore.flipPhoneNumber].
  */
-private enum class ScreenState { LOADING, REGISTERING, REG_ERROR, ERROR, READY, PAIRING, PAIRED }
+private enum class ScreenState { READY, PAIRING, PAIRED }
 
 /**
- * Full-screen pairing code entry — shown during onboarding before the
- * "what is ur smart phone?" question.  Uses D-pad number keys for input,
- * same BioRhyme / yellow-on-black style as the rest of the launcher.
+ * Full-screen pairing code entry — shown during onboarding after
+ * [DeviceRegistrationScreen] has run. Uses D-pad number keys for input.
  */
 @Composable
 fun PairingScreen(
-    permissionsReady: Boolean = false,
     onPaired: () -> Unit,
     onSkip: () -> Unit = {}
 ) {
@@ -89,86 +83,15 @@ fun PairingScreen(
     val scope = rememberCoroutineScope()
     var skipFocused by remember { mutableStateOf(false) }
 
-    var screenState by remember { mutableStateOf(ScreenState.LOADING) }
-    var phoneNumber by remember { mutableStateOf<String?>(null) }
-    // Keep IMEI + ICCID around so we can pass them to registerNow and retry
-    // without re-reading via root shell.
-    var cachedImei by remember { mutableStateOf<String?>(null) }
-    var cachedIccid by remember { mutableStateOf<String?>(null) }
+    // Phone number is normally read + persisted by DeviceRegistrationScreen
+    // before we get here, but if the user skipped registration (or the SIM
+    // read failed) the store value will be null. We keep this in a mutable
+    // state so an on-demand SIM fallback can populate it when the user
+    // presses OK.
+    var screenState by remember { mutableStateOf(ScreenState.READY) }
+    var phoneNumber by remember { mutableStateOf(pairingStore.flipPhoneNumber) }
     var pairingCode by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-
-    // Reads phone number, IMEI, and ICCID via SimInfoReader.readAll() — a
-    // single root shell call to content://telephony/siminfo that returns all
-    // three values. This replaces the old approach of 3 separate reads (each
-    // of which tried ~8 failing service-call commands before finding data).
-    //
-    // Once the SIM info is read, registers the device with the backend BEFORE
-    // showing the phone number to the user.
-    //
-    // IMPORTANT: readAll() spawns a `su` subprocess (ProcessBuilder +
-    // waitFor), which would block the main thread and trigger an ANR.
-    // Always run on Dispatchers.IO.
-    suspend fun readPhoneNumberWithRetry() {
-        screenState = ScreenState.LOADING
-        val maxAttempts = 5
-        repeat(maxAttempts) { attempt ->
-            val simInfo = withContext(Dispatchers.IO) {
-                SimInfoReader.readAll(ctx)
-            }
-            val phone = simInfo.phoneNumber
-            val imei = simInfo.imei
-            val iccid = simInfo.iccid
-
-            if (phone != null && !imei.isNullOrBlank() && !iccid.isNullOrBlank()) {
-                phoneNumber = phone
-                cachedImei = imei
-                cachedIccid = iccid
-
-                // Register the device before showing the number.
-                screenState = ScreenState.REGISTERING
-                val registered = withContext(Dispatchers.IO) {
-                    DeviceRegistrar.registerNow(ctx, imei, iccid, phone)
-                }
-                screenState = if (registered) ScreenState.READY else ScreenState.REG_ERROR
-                return
-            }
-            if (attempt == maxAttempts - 1) {
-                screenState = ScreenState.ERROR
-                return
-            }
-            val delayMs = (attempt + 1) * 1000L
-            Log.d(TAG, "SIM not ready, retrying (${attempt + 1}/$maxAttempts) in ${delayMs}ms...")
-            delay(delayMs)
-        }
-    }
-
-    // Guard against concurrent launches of readPhoneNumberWithRetry — both the
-    // ON_RESUME observer and the permissionsReady effect can fire close together.
-    var readInFlight by remember { mutableStateOf(false) }
-
-    fun launchReadIfIdle() {
-        if (readInFlight || phoneNumber != null || screenState != ScreenState.LOADING) return
-        readInFlight = true
-        scope.launch {
-            try { readPhoneNumberWithRetry() } finally { readInFlight = false }
-        }
-    }
-
-    // On resume: kick off the retry loop only if still in the initial loading state.
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) launchReadIfIdle()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    // Re-read phone number once su permission grant completes
-    LaunchedEffect(permissionsReady) {
-        if (permissionsReady) launchReadIfIdle()
-    }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -231,16 +154,36 @@ fun PairingScreen(
                                 } else false
                             }
                             Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                                if (pairingCode.length == 4 && phoneNumber != null) {
-                                    screenState = ScreenState.PAIRING
-                                    error = null
-                                    scope.launch {
-                                        confirmPairing(ctx, pairingCode, phoneNumber!!) { success, err ->
-                                            if (success) {
-                                                screenState = ScreenState.PAIRED
-                                            } else {
-                                                screenState = ScreenState.READY
-                                                error = err
+                                if (pairingCode.length == 4) {
+                                    // Fallback: if DeviceRegistrationScreen was skipped
+                                    // the store may not have a phone number. Try a
+                                    // direct SIM read before giving up so the user can
+                                    // still pair without being stuck with a silent OK.
+                                    var currentPhone = phoneNumber
+                                    if (currentPhone.isNullOrBlank()) {
+                                        val (fromSim, _) = readPhoneNumber(ctx)
+                                        if (!fromSim.isNullOrBlank()) {
+                                            currentPhone = fromSim
+                                            phoneNumber = fromSim
+                                            pairingStore.flipPhoneNumber = fromSim
+                                            Log.i(TAG, "Populated phone from SIM fallback: $fromSim")
+                                        }
+                                    }
+                                    if (currentPhone.isNullOrBlank()) {
+                                        error = "no phone number — insert sim and retry"
+                                        Log.w(TAG, "OK pressed but no phone number available")
+                                    } else {
+                                        screenState = ScreenState.PAIRING
+                                        error = null
+                                        val phoneForPair = currentPhone
+                                        scope.launch {
+                                            confirmPairing(ctx, pairingCode, phoneForPair) { success, err ->
+                                                if (success) {
+                                                    screenState = ScreenState.PAIRED
+                                                } else {
+                                                    screenState = ScreenState.READY
+                                                    error = err
+                                                }
                                             }
                                         }
                                     }
@@ -251,29 +194,9 @@ fun PairingScreen(
                         }
                     }
 
-                    ScreenState.LOADING, ScreenState.REGISTERING, ScreenState.ERROR, ScreenState.PAIRING, ScreenState.PAIRED -> {
+                    ScreenState.PAIRING, ScreenState.PAIRED -> {
                         // Consume OK in these states so it doesn't bubble to the skip button
                         if (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter) {
-                            return@onPreviewKeyEvent true
-                        }
-                    }
-
-                    ScreenState.REG_ERROR -> {
-                        // Let the user retry registration by pressing OK.
-                        // Uses cached IMEI/ICCID to avoid re-reading via root shell.
-                        if (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter) {
-                            val imei = cachedImei
-                            val iccid = cachedIccid
-                            val phone = phoneNumber
-                            if (imei != null && iccid != null && phone != null) {
-                                screenState = ScreenState.REGISTERING
-                                scope.launch {
-                                    val registered = withContext(Dispatchers.IO) {
-                                        DeviceRegistrar.registerNow(ctx, imei, iccid, phone)
-                                    }
-                                    screenState = if (registered) ScreenState.READY else ScreenState.REG_ERROR
-                                }
-                            }
                             return@onPreviewKeyEvent true
                         }
                     }
@@ -291,7 +214,9 @@ fun PairingScreen(
         ) {
             BasicText(
                 text = "link ur smart phone",
-                style = DumbTheme.Text.PageTitle,
+                // Device setup titles use the Helvetica body font — see
+                // LinkingChoiceScreen for rationale.
+                style = DumbTheme.Text.PageTitle.copy(fontFamily = DumbTheme.Body),
                 modifier = Modifier.padding(bottom = 4.dp)
             )
 
@@ -302,70 +227,6 @@ fun PairingScreen(
             )
 
             when (screenState) {
-                // ── Loading: reading phone number in background ──────
-                ScreenState.LOADING -> {
-                    BasicText(
-                        text = "reading phone number...",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
-                        modifier = Modifier.padding(top = 16.dp)
-                    )
-                }
-
-                // ── Registering: phone number read, registering with backend ──
-                ScreenState.REGISTERING -> {
-                    BasicText(
-                        text = "registering device...",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
-                        modifier = Modifier.padding(top = 16.dp)
-                    )
-                }
-
-                // ── Registration error — let user retry ─────────────
-                ScreenState.REG_ERROR -> {
-                    BasicText(
-                        text = "failed to connect to network",
-                        style = DumbTheme.Text.BodySmall.copy(
-                            color = DumbTheme.Colors.White,
-                            textAlign = TextAlign.Center
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 6.dp)
-                    )
-                    BasicText(
-                        text = "did u activate ur sim?",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    BasicText(
-                        text = "press ok to retry or call us for help:",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                        modifier = Modifier.padding(bottom = 2.dp)
-                    )
-                    BasicText(
-                        text = "404-716-3605",
-                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
-                    )
-                }
-
-                // ── Error: couldn't read number — call support ───────
-                ScreenState.ERROR -> {
-                    BasicText(
-                        text = "couldn't read ur phone #. is ur sim in?",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    BasicText(
-                        text = "call the dumb line for help:",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                        modifier = Modifier.padding(bottom = 2.dp)
-                    )
-                    BasicText(
-                        text = "404-716-3605",
-                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
-                    )
-                }
-
                 // ── Ready: phone number known, show code entry ───────
                 ScreenState.READY, ScreenState.PAIRING, ScreenState.PAIRED -> {
                     Row(modifier = Modifier.padding(bottom = 10.dp)) {
@@ -394,14 +255,20 @@ fun PairingScreen(
                         for (i in 0 until 4) {
                             val char = if (pairingCode.length > i) pairingCode[i].toString() else ""
                             val isCurrent = i == pairingCode.length && screenState != ScreenState.PAIRED
+                            // Yellow border + brighter fill on the next-input
+                            // box; white border on the rest. The explicit
+                            // border makes the boxes readable over any
+                            // wallpaper or background, not just the old
+                            // low-alpha tint.
+                            val borderColor = if (isCurrent) DumbTheme.Colors.Yellow
+                                              else DumbTheme.Colors.White.copy(alpha = 0.55f)
+                            val boxBg = if (isCurrent) DumbTheme.Colors.Yellow.copy(alpha = 0.25f)
+                                        else DumbTheme.Colors.White.copy(alpha = 0.18f)
                             Box(
                                 modifier = Modifier
                                     .size(52.dp)
-                                    .background(
-                                        if (isCurrent) DumbTheme.Colors.Yellow.copy(alpha = 0.15f)
-                                        else DumbTheme.Colors.White.copy(alpha = 0.1f),
-                                        RoundedCornerShape(8.dp)
-                                    ),
+                                    .background(boxBg, RoundedCornerShape(8.dp))
+                                    .border(2.dp, borderColor, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 BasicText(
@@ -544,7 +411,9 @@ private fun DeviceLinkedContent(
         ) {
             BasicText(
                 text = "link ur smart phone",
-                style = DumbTheme.Text.PageTitle,
+                // Device setup titles use the Helvetica body font — see
+                // LinkingChoiceScreen for rationale.
+                style = DumbTheme.Text.PageTitle.copy(fontFamily = DumbTheme.Body),
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 

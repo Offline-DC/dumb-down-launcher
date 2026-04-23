@@ -103,6 +103,10 @@ object DeviceRegistrar {
      * @param iccid  ICCID read by caller.
      * @param phone  Phone number in E.164 format read by caller.
      * @param maxRetries  Number of retries on failure (default 3, with 2s/4s/6s backoff).
+     * @param force  If true, bypass the "already registered for this SIM"
+     *               short-circuit and always call the backend. Used from the
+     *               Device Setup flow so re-running onboarding hits the
+     *               backend every time, even with the same SIM.
      */
     fun registerNow(
         context: Context,
@@ -110,6 +114,7 @@ object DeviceRegistrar {
         iccid: String,
         phone: String,
         maxRetries: Int = 3,
+        force: Boolean = false,
     ): Boolean {
         val ctx = context.applicationContext
         val normalizedPhone = normalizePhone(phone)
@@ -121,15 +126,20 @@ object DeviceRegistrar {
             return false
         }
 
-        // 1. Check if already registered for this SIM.
+        // 1. Check if already registered for this SIM. The onboarding flow
+        //    passes force=true so users re-running Device Setup always hit
+        //    the backend.
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val lastImei = prefs.getString(KEY_IMEI, null)
         val lastIccid = prefs.getString(KEY_ICCID, null)
         val registeredAt = prefs.getLong(KEY_REGISTERED_AT, 0L)
 
-        if (registeredAt != 0L && lastImei == imei && lastIccid == iccid) {
+        if (!force && registeredAt != 0L && lastImei == imei && lastIccid == iccid) {
             Log.i(TAG, "registerNow: already registered for this SIM — nothing to do")
             return true
+        }
+        if (force && registeredAt != 0L && lastImei == imei && lastIccid == iccid) {
+            Log.i(TAG, "registerNow: force=true — re-registering despite cached SIM match")
         }
 
         // 2. Register via single combined endpoint, with retries.

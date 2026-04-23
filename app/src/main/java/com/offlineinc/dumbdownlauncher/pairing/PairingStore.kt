@@ -25,6 +25,32 @@ class PairingStore(context: Context) {
         get() = prefs.getString("flip_phone_number", null)
         set(v) = prefs.edit().putString("flip_phone_number", v).apply()
 
+    /**
+     * True once the device has been successfully registered with the
+     * backend (POST /api/v1/register). Registration now runs for every
+     * user during onboarding — whether or not they go on to link a smart
+     * phone — so this flag lets us skip the registration step on re-entry
+     * after it has already completed.
+     *
+     * Separate from [isPaired]: a device can be registered without being
+     * paired (linking=no path), but any paired device is also registered.
+     */
+    var deviceRegistered: Boolean
+        get() = prefs.getBoolean("device_registered", false)
+        set(v) = prefs.edit().putBoolean("device_registered", v).apply()
+
+    /**
+     * Persist the phone number + mark the device as registered atomically
+     * so downstream readers never see registered=true without a phone
+     * number available in the store.
+     */
+    fun saveRegistration(phoneNumber: String) {
+        prefs.edit()
+            .putString("flip_phone_number", phoneNumber)
+            .putBoolean("device_registered", true)
+            .commit()
+    }
+
     var lastReportedVersion: String?
         get() = prefs.getString("last_reported_version", null)
         set(v) = prefs.edit().putString("last_reported_version", v).apply()

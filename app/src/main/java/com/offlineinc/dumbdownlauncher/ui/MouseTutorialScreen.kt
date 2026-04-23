@@ -173,7 +173,9 @@ private fun ActivateMouseStep(
         ) {
             BasicText(
                 text = "Getting around ur phone.",
-                style = DumbTheme.Text.Title,
+                // Device setup titles use the Helvetica body font — see
+                // LinkingChoiceScreen for rationale.
+                style = DumbTheme.Text.Title.copy(fontFamily = DumbTheme.Body),
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             BasicText(
@@ -482,7 +484,10 @@ private fun DoneStep(onDismiss: () -> Unit) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             BasicText(
                 text = "u got it!\ntime 4 smart txt",
+                // Device setup titles use the Helvetica body font — see
+                // LinkingChoiceScreen for rationale.
                 style = DumbTheme.Text.PageTitle.copy(
+                    fontFamily = DumbTheme.Body,
                     color = DumbTheme.Colors.Yellow,
                     textAlign = TextAlign.Center
                 )
@@ -506,7 +511,9 @@ private fun TutorialHeader(instruction: String) {
     Column(modifier = Modifier.heightIn(min = 70.dp)) {
         BasicText(
             text = "Getting around ur phone.",
-            style = DumbTheme.Text.Title,
+            // Device setup titles use the Helvetica body font — see
+            // LinkingChoiceScreen for rationale.
+            style = DumbTheme.Text.Title.copy(fontFamily = DumbTheme.Body),
             modifier = Modifier.padding(bottom = 8.dp)
         )
         BasicText(

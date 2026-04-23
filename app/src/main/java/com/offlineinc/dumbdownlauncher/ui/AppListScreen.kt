@@ -182,7 +182,7 @@ fun AppListScreen(
                     text = title,
                     style = TextStyle(
                         color = DumbTheme.Colors.White,
-                        fontSize = 18.sp,
+                        fontSize = 20.sp,
                         fontFamily = fontFamily
                     )
                 )
@@ -191,7 +191,7 @@ fun AppListScreen(
                         text = titleEndLabel,
                         style = TextStyle(
                             color = DumbTheme.Colors.White.copy(alpha = 0.4f),
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             fontFamily = fontFamily
                         )
                     )
@@ -244,7 +244,7 @@ fun AppListScreen(
                     text = softKeyLeftLabel,
                     style = TextStyle(
                         color = DumbTheme.Colors.Yellow,
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         fontFamily = fontFamily
                     )
                 )
@@ -253,7 +253,7 @@ fun AppListScreen(
                     text = softKeyRightLabel,
                     style = TextStyle(
                         color = DumbTheme.Colors.Yellow,
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         fontFamily = fontFamily
                     )
                 )

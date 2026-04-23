@@ -19,8 +19,10 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.notifications.model.NotificationItem
@@ -225,7 +227,7 @@ fun NotificationsScreen(
                 text = "notifications",
                 style = TextStyle(
                     color = White,
-                    fontSize = 14.sp,
+                    fontSize = 16.sp,
                     fontFamily = fontFamily,
                 ),
                 modifier = Modifier.weight(1f),
@@ -325,7 +327,7 @@ private fun MuteToggleCell(
             text = "mute txts",
             style = TextStyle(
                 fontFamily = fontFamily,
-                fontSize = 14.sp,
+                fontSize = 16.sp,
                 color = if (focused) Black else White,
             ),
         )
@@ -382,7 +384,7 @@ private fun ClearAllButton(
             text = "clear all",
             style = TextStyle(
                 color = if (focused) Black else Yellow,
-                fontSize = 14.sp,
+                fontSize = 16.sp,
                 fontFamily = fontFamily
             )
         )
@@ -398,7 +400,7 @@ private fun EmptyState(
         text = "none... ur free!",
         style = TextStyle(
             color = Gray,
-            fontSize = 14.sp,
+            fontSize = 16.sp,
             fontFamily = fontFamily
         ),
         modifier = modifier
@@ -424,22 +426,41 @@ private fun NotificationRow(
                 interactionSource = remember { MutableInteractionSource() }
             ) { onClick() }
     ) {
+        // BioRhyme has deep descenders — without an explicit lineHeight and
+        // includeFontPadding = true, a single-line row clips the g/y/p/j/q tails.
+        // Title: 20sp line height (down from 22) trims the padding below the
+        // title while still leaving room for descenders at 16sp.
         BasicText(
             text = item.title,
             style = TextStyle(
                 color = if (selected) Black else White,
-                fontSize = 14.sp,
-                fontFamily = fontFamily
+                fontSize = 16.sp,
+                lineHeight = 20.sp,
+                fontFamily = fontFamily,
+                platformStyle = PlatformTextStyle(includeFontPadding = true),
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                ),
             ),
             maxLines = 1
         )
-        Spacer(Modifier.height(2.dp))
+        // Description (body): lineHeight reduced 20 → 16 so the two visible
+        // lines sit closer together. The row-wide 2.dp spacer is gone —
+        // Trim.None + the body's own lineHeight padding already provide
+        // enough breathing room between title and body.
         BasicText(
             text = item.text,
             style = TextStyle(
                 color = if (selected) Black else Gray,
-                fontSize = 12.sp,
-                fontFamily = fontFamily
+                fontSize = 14.sp,
+                lineHeight = 16.sp,
+                fontFamily = fontFamily,
+                platformStyle = PlatformTextStyle(includeFontPadding = true),
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                ),
             ),
             maxLines = 2
         )

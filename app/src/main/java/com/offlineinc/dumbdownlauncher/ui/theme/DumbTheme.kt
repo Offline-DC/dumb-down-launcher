@@ -65,10 +65,11 @@ object DumbTheme {
 
     @Immutable
     object Text {
-        /** Large page title — 20 sp, white.  "link ur smart phone", etc. */
+        /** Large page title — 22 sp, white.  "link ur smart phone", etc. */
         val PageTitle = TextStyle(
             fontFamily = Header,
-            fontSize = 20.sp,
+            fontSize = 22.sp,
+            lineHeight = 28.sp,
             color = Colors.White
         )
 
@@ -107,10 +108,18 @@ object DumbTheme {
             color = Colors.Gray
         )
 
-        /** Small labels — 11 sp, gray. Used for skip buttons, etc. */
+        /**
+         * Small labels / short descriptions — 12 sp, gray.
+         *
+         * lineHeight is set so multi-line descriptions (e.g. the sub-header
+         * on PairingScreen) get visible breathing room between wrapped
+         * lines. Used for skip buttons, chip labels, and short descriptive
+         * copy under titles.
+         */
         val Label = TextStyle(
             fontFamily = DumbTheme.Body,
-            fontSize = 11.sp,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
             color = Colors.Gray
         )
 

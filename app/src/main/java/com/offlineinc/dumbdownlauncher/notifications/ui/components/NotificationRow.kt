@@ -12,8 +12,10 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.offlineinc.dumbdownlauncher.notifications.model.NotificationItem
@@ -36,23 +38,36 @@ fun NotificationRow(
                 interactionSource = remember { MutableInteractionSource() }
             ) { onClick() }
     ) {
+        // BioRhyme has deep descenders — without explicit lineHeight and
+        // includeFontPadding = true, single-line rows clip g/y/p/j/q tails.
         BasicText(
             text = item.title,
             style = TextStyle(
                 color = if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.White,
-                fontSize = 16.sp,
-                fontFamily = fontFamily
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                fontFamily = fontFamily,
+                platformStyle = PlatformTextStyle(includeFontPadding = true),
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                ),
             ),
             maxLines = 1
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(8.dp))
         BasicText(
             text = item.text,
             style = TextStyle(
                 color = if (selected) DumbTheme.Colors.Black else DumbTheme.Colors.Gray,
-                fontSize = 14.sp,
+                fontSize = 16.sp,
                 lineHeight = 24.sp,
-                fontFamily = fontFamily
+                fontFamily = fontFamily,
+                platformStyle = PlatformTextStyle(includeFontPadding = true),
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                ),
             ),
             maxLines = 2
         )
