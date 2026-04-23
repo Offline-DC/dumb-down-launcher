@@ -176,14 +176,18 @@ class AllAppsActivity : AppCompatActivity() {
                 ))
             }
 
-            if (!pairingStore.hideSmartTxt) {
-                appItems.add(AppItem(
-                    packageName = DEVICE_SETUP,
-                    label = "device setup",
-                    icon = pm.defaultActivityIcon,
-                    launchComponent = null,
-                ))
-            }
+            // Device setup is ALWAYS shown — it doubles as the re-run-onboarding
+            // / unpair / factory-reset entry point (see onActivate + onLongActivate
+            // below). Gating it behind hideSmartTxt used to mean dumbest-tier
+            // users lost the only escape hatch back into Device Setup (and
+            // therefore the only way to trigger the long-press "clear setup"
+            // flow) once their hideSmartTxt flag flipped on.
+            appItems.add(AppItem(
+                packageName = DEVICE_SETUP,
+                label = "device setup",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
             appItems.add(AppItem(
                 packageName = CHECK_UPDATES,
                 label = "updates",

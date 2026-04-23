@@ -410,6 +410,11 @@ fun BootRegistrationScreen(
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
                     BasicText(
+                        text = try restarting ur phone",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    BasicText(
                         text = "press ok to retry or call us for help:",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
                         modifier = Modifier.padding(bottom = 2.dp)
@@ -423,6 +428,11 @@ fun BootRegistrationScreen(
                 BootState.SIM_ERROR -> {
                     BasicText(
                         text = "couldn't read ur phone #. is ur sim in?",
+                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    BasicText(
+                        text = "try restarting ur phone",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
