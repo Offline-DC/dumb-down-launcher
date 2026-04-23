@@ -97,6 +97,27 @@ fun PairingScreen(
         focusRequester.requestFocus()
     }
 
+    // Background SIM fallback: if we landed here without a phone number
+    // (user skipped DeviceRegistrationScreen, or just unpaired and fell
+    // through to this code-entry UI) try to read one from the SIM so the
+    // "ur dumb #:" line isn't blank and OK can proceed without blocking
+    // the main thread to shell out to root on first press.
+    //
+    // MUST run on Dispatchers.IO because PhoneNumberReader.read may invoke
+    // `su` via ProcessBuilder + waitFor, which blocks the calling thread.
+    LaunchedEffect(Unit) {
+        if (phoneNumber.isNullOrBlank()) {
+            val fromSim = withContext(Dispatchers.IO) {
+                readPhoneNumber(ctx).first
+            }
+            if (!fromSim.isNullOrBlank() && phoneNumber.isNullOrBlank()) {
+                phoneNumber = fromSim
+                pairingStore.flipPhoneNumber = fromSim
+                Log.i(TAG, "Populated phone from SIM background read: $fromSim")
+            }
+        }
+    }
+
     // Navigate forward after successful pairing
     LaunchedEffect(screenState) {
         if (screenState == ScreenState.PAIRED) {
@@ -155,35 +176,43 @@ fun PairingScreen(
                             }
                             Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
                                 if (pairingCode.length == 4) {
-                                    // Fallback: if DeviceRegistrationScreen was skipped
-                                    // the store may not have a phone number. Try a
-                                    // direct SIM read before giving up so the user can
-                                    // still pair without being stuck with a silent OK.
-                                    var currentPhone = phoneNumber
-                                    if (currentPhone.isNullOrBlank()) {
-                                        val (fromSim, _) = readPhoneNumber(ctx)
-                                        if (!fromSim.isNullOrBlank()) {
-                                            currentPhone = fromSim
-                                            phoneNumber = fromSim
-                                            pairingStore.flipPhoneNumber = fromSim
-                                            Log.i(TAG, "Populated phone from SIM fallback: $fromSim")
+                                    // Run the pairing attempt (and any SIM fallback) in
+                                    // a coroutine so we never block the main thread on
+                                    // a root shell call. Without this, pressing OK when
+                                    // `phoneNumber` is null (e.g. user skipped
+                                    // DeviceRegistrationScreen, or just unpaired) would
+                                    // call readPhoneNumber directly and potentially
+                                    // sit on the UI thread for ~3s waiting on `su`,
+                                    // triggering an ANR.
+                                    val codeToSubmit = pairingCode
+                                    screenState = ScreenState.PAIRING
+                                    error = null
+                                    scope.launch {
+                                        var currentPhone = phoneNumber
+                                        if (currentPhone.isNullOrBlank()) {
+                                            val fromSim = withContext(Dispatchers.IO) {
+                                                readPhoneNumber(ctx).first
+                                            }
+                                            if (!fromSim.isNullOrBlank()) {
+                                                currentPhone = fromSim
+                                                phoneNumber = fromSim
+                                                pairingStore.flipPhoneNumber = fromSim
+                                                Log.i(TAG, "Populated phone from SIM fallback: $fromSim")
+                                            }
                                         }
-                                    }
-                                    if (currentPhone.isNullOrBlank()) {
-                                        error = "no phone number — insert sim and retry"
-                                        Log.w(TAG, "OK pressed but no phone number available")
-                                    } else {
-                                        screenState = ScreenState.PAIRING
-                                        error = null
+                                        if (currentPhone.isNullOrBlank()) {
+                                            screenState = ScreenState.READY
+                                            error = "no phone number — insert sim and retry"
+                                            Log.w(TAG, "OK pressed but no phone number available")
+                                            return@launch
+                                        }
                                         val phoneForPair = currentPhone
-                                        scope.launch {
-                                            confirmPairing(ctx, pairingCode, phoneForPair) { success, err ->
-                                                if (success) {
-                                                    screenState = ScreenState.PAIRED
-                                                } else {
-                                                    screenState = ScreenState.READY
-                                                    error = err
-                                                }
+                                        confirmPairing(ctx, codeToSubmit, phoneForPair) { success, err ->
+                                            if (success) {
+                                                screenState = ScreenState.PAIRED
+                                            } else {
+                                                screenState = ScreenState.READY
+                                                error = err
                                             }
                                         }
                                     }

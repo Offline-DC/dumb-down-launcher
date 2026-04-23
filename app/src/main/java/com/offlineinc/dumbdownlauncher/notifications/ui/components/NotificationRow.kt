@@ -38,8 +38,6 @@ fun NotificationRow(
                 interactionSource = remember { MutableInteractionSource() }
             ) { onClick() }
     ) {
-        // BioRhyme has deep descenders — without explicit lineHeight and
-        // includeFontPadding = true, single-line rows clip g/y/p/j/q tails.
         BasicText(
             text = item.title,
             style = TextStyle(

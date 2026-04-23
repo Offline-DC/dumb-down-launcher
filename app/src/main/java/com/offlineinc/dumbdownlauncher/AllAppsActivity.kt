@@ -237,9 +237,17 @@ class AllAppsActivity : AppCompatActivity() {
                 items = items,
                 onLongActivate = { item ->
                     if (item.packageName == DEVICE_SETUP) {
-                        // Clear all setup state so the next launch returns to onboarding
+                        // Factory-reset-style wipe. PairingStore.clear() only
+                        // removes pairing credentials now (so a normal unpair
+                        // doesn't force re-registration), so we explicitly
+                        // clear the phone number and deviceRegistered flag
+                        // here to send the user through the full onboarding
+                        // (including registration) again.
                         PlatformPreferences.clearAll(this@AllAppsActivity)
-                        PairingStore(this@AllAppsActivity).clear()
+                        val pairingStore = PairingStore(this@AllAppsActivity)
+                        pairingStore.clear()
+                        pairingStore.flipPhoneNumber = null
+                        pairingStore.deviceRegistered = false
                         // Clear device registration prefs so the next boot re-registers
                         this@AllAppsActivity.getSharedPreferences("device_registration", MODE_PRIVATE)
                             .edit().clear().apply()

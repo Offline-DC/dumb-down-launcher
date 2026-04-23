@@ -97,7 +97,23 @@ class PairingStore(context: Context) {
             .commit()   // synchronous — guarantees data is persisted before returning
     }
 
+    /**
+     * Clear pairing credentials only. The device's phone number
+     * ([flipPhoneNumber]) and backend registration state
+     * ([deviceRegistered]) are intentionally preserved across unpair so
+     * that an unpaired device doesn't have to re-register with the backend
+     * — or re-show the "setting up ur phone" onboarding screen — just
+     * because the user broke the link to a flip phone.
+     */
     fun clear() {
-        prefs.edit().clear().apply()
+        prefs.edit()
+            .remove("is_paired")
+            .remove("shared_secret")
+            .remove("pairing_id")
+            .remove("last_reported_version")
+            .remove("stripe_product_ids")
+            .remove("hide_audio_bundle")
+            .remove("hide_smart_txt")
+            .apply()
     }
 }
