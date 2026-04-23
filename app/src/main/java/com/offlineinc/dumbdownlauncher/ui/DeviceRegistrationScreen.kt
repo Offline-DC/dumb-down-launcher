@@ -245,9 +245,9 @@ fun DeviceRegistrationScreen(
             )
 
             when (state) {
-                // Unified status message for both phases — the split between
-                // "reading SIM" and "POSTing to backend" is an implementation
-                // detail the user doesn't care about.
+                // Two-step status — gives the user a sense of forward motion
+                // instead of a mystery 2-second spinner. LOADING covers the
+                // SIM read, REGISTERING covers the POST /register round trip.
                 RegState.LOADING, RegState.REGISTERING -> {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -256,7 +256,11 @@ fun DeviceRegistrationScreen(
                         DumbSpinner()
                         Spacer(Modifier.height(8.dp))
                         BasicText(
-                            text = "activating ur phone...",
+                            text = if (state == RegState.LOADING) {
+                                "reading ur sim..."
+                            } else {
+                                "activating ur phone..."
+                            },
                             style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Gray),
                         )
                     }
