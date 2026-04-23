@@ -69,10 +69,31 @@ object DeviceRegistrar {
     private val JSON_TYPE = "application/json".toMediaType()
     private val inFlight = AtomicBoolean(false)
 
+    // Timeouts are deliberately generous because the user is staring at an
+    // "activating ur phone..." spinner on the boot screen and we'd rather they
+    // wait a little longer than see a spurious failure. The backend sometimes
+    // takes 20–40s on a cold Heroku dyno + the first mobile-data round-trip
+    // after SIM registration can be slow, so the previous (15s / 30s) budget
+    // was tripping the retry loop before the server ever replied.
+    //
+    //   connectTimeout — time to establish the TCP + TLS handshake. 30s gives
+    //                    the radio time to attach to the tower and bring up
+    //                    the data bearer on a flaky signal.
+    //   readTimeout    — time to receive response bytes after the request is
+    //                    sent. 60s covers a cold Heroku dyno boot (10–30s)
+    //                    plus the backend's DB round-trip.
+    //   writeTimeout   — OkHttp default is 10s; bump to 30s for symmetry
+    //                    with read on slow uplinks.
+    //   callTimeout    — overall cap per attempt. With a callTimeout the
+    //                    full connect+write+read pipeline is bounded, so a
+    //                    single hung attempt can't stall registerNow() past
+    //                    ~75s regardless of which stage is slow.
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(75, TimeUnit.SECONDS)
             .build()
     }
 
@@ -106,7 +127,12 @@ object DeviceRegistrar {
      * @param imei   IMEI read by caller (avoids re-reading via root shell).
      * @param iccid  ICCID read by caller.
      * @param phone  Phone number in E.164 format read by caller.
-     * @param maxRetries  Number of retries on failure (default 3, with 2s/4s/6s backoff).
+     * @param maxRetries  Number of attempts on failure. Default 4 with
+     *               exponential backoff (2s / 4s / 8s between attempts). At
+     *               the 75s per-attempt cap this gives the boot screen up to
+     *               ~5 minutes of patience before surfacing an error — bad
+     *               UX for a one-off slow response is still much better than
+     *               bailing out while the backend is mid-response.
      * @param force  If true, bypass the "already registered for this SIM"
      *               short-circuit and always call the backend. Used from the
      *               Device Setup flow so re-running onboarding hits the
@@ -117,7 +143,7 @@ object DeviceRegistrar {
         imei: String,
         iccid: String,
         phone: String,
-        maxRetries: Int = 3,
+        maxRetries: Int = 4,
         force: Boolean = false,
     ): Boolean {
         val ctx = context.applicationContext
@@ -159,7 +185,11 @@ object DeviceRegistrar {
                 return true
             }
             if (attempt < maxRetries) {
-                val backoffMs = attempt * 2000L
+                // Exponential backoff: 2s, 4s, 8s, 16s, … capped at 30s so
+                // the total retry budget is bounded even at higher maxRetries.
+                // Gives a slow backend breathing room between retries rather
+                // than hammering it with the old linear 2s/4s/6s schedule.
+                val backoffMs = (2000L shl (attempt - 1).coerceAtMost(5)).coerceAtMost(30_000L)
                 Log.w(TAG, "registerNow: attempt $attempt failed — retrying in ${backoffMs}ms")
                 try {
                     Thread.sleep(backoffMs)

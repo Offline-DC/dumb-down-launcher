@@ -109,6 +109,12 @@ fun BootRegistrationScreen(
     // Cache IMEI + ICCID so REG_ERROR retries don't need another root shell call.
     var cachedImei by remember { mutableStateOf<String?>(null) }
     var cachedIccid by remember { mutableStateOf<String?>(null) }
+    // After 30s in an in-flight state we show a "still trying..." sub-line so
+    // the user can tell the spinner isn't frozen while the backend's
+    // retry-with-exponential-backoff path chews through attempts. Reset to
+    // false on every state transition so it doesn't carry over into a new
+    // in-flight stage.
+    var showStillTrying by remember { mutableStateOf(false) }
 
     /**
      * Best-effort bundle-flag fetch. Delegates to
@@ -222,6 +228,23 @@ fun BootRegistrationScreen(
         }
     }
 
+    // Drive the "still trying..." sub-line. Keyed on state so re-entering
+    // REGISTERING (e.g. via REG_ERROR → retry → REGISTERING) restarts the
+    // 30s timer from scratch. LaunchedEffect auto-cancels the delay if state
+    // changes before the 30s elapses, so we never flip the flag on a stale
+    // stage. Applies to all in-flight states — LOADING usually finishes well
+    // under 30s but if a cold-boot SIM read stalls there, the user still
+    // deserves visible reassurance.
+    LaunchedEffect(state) {
+        showStillTrying = false
+        if (state == BootState.LOADING ||
+            state == BootState.REGISTERING ||
+            state == BootState.CHECKING_BUNDLE) {
+            delay(30_000L)
+            showStillTrying = true
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -292,7 +315,10 @@ fun BootRegistrationScreen(
                     }
                     // OK retries SIM read from scratch — clears cache and
                     // kicks runOnce() again so the user isn't stuck if the
-                    // SIM came up late.
+                    // SIM came up late. We also reset PhoneNumberReader's
+                    // su-path backoff: on MediaTek-only-su devices the user's
+                    // explicit retry would otherwise hit a silent no-op if
+                    // the backoff window from the prior miss was still open.
                     BootState.SIM_ERROR -> {
                         if (event.key == Key.Enter ||
                             event.key == Key.NumPadEnter ||
@@ -300,6 +326,8 @@ fun BootRegistrationScreen(
                             phoneNumber = null
                             cachedImei = null
                             cachedIccid = null
+                            com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
+                                .invalidateCache()
                             state = BootState.WAITING
                             launchIfIdle()
                             return@onPreviewKeyEvent true
@@ -390,6 +418,20 @@ fun BootRegistrationScreen(
                             ),
                             modifier = Modifier.fillMaxWidth()
                         )
+                        // After 30s in this stage, add a reassurance line so
+                        // the user knows the spinner isn't frozen and we're
+                        // still inside the retry-with-backoff budget.
+                        if (showStillTrying) {
+                            Spacer(Modifier.height(4.dp))
+                            BasicText(
+                                text = "still trying...",
+                                style = DumbTheme.Text.BodySmall.copy(
+                                    color = DumbTheme.Colors.Gray,
+                                    textAlign = TextAlign.Center
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
 
