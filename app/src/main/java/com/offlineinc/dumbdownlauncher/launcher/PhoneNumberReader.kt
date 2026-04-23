@@ -43,10 +43,62 @@ object PhoneNumberReader {
     @Volatile
     private var cachedNumber: String? = null
 
+    // --- Exponential backoff for the su fallback path ---
+    //
+    // On cold boot multiple subsystems (AllApps, DeviceRegistrar, SimInfoReader,
+    // QuackViewModel, ...) all hit readWithWait concurrently, and each retries
+    // after its 30s SIM-ready wait. Without any throttling we shell out to `su`
+    // roughly once per second per caller — each attempt takes up to 1500ms to
+    // time out, which is spammy in logs and wasteful on CPU for a flip phone
+    // that has very little of either.
+    //
+    // Scheme: after each miss we refuse to re-enter readViaSu() for a window
+    // that doubles each time, capped at SU_BACKOFF_CAP_MS. After SU_MAX_ATTEMPTS
+    // total failures the su path is disabled for the rest of the process; the
+    // Telephony/SubscriptionManager paths keep being tried since they're cheap.
+    //
+    //   attempt 1 miss → skip for  2s
+    //   attempt 2 miss → skip for  4s
+    //   attempt 3 miss → skip for  8s
+    //   attempt 4 miss → skip for 16s
+    //   attempt 5 miss → skip for 32s
+    //   attempt 6+ miss → skip for 60s (cap)
+    //
+    // Note: increments are racy under concurrent callers (two threads can both
+    // read count=N and both write count=N+1, losing one increment). That's
+    // tolerable — the backoff is a heuristic, not a correctness guarantee, and
+    // the worst case is a handful of extra retries before the cap kicks in.
+    @Volatile private var suLastFailureMs: Long = 0L
+    @Volatile private var suFailureCount: Int = 0
+    private const val SU_BACKOFF_BASE_MS = 2_000L
+    private const val SU_BACKOFF_CAP_MS = 60_000L
+    private const val SU_MAX_ATTEMPTS = 10
+
     /** Drop the cached number — for tests, or if the caller needs a forced re-read. */
     @JvmStatic
     fun invalidateCache() {
         cachedNumber = null
+        // An explicit invalidation usually means the caller has reason to
+        // believe the SIM is now ready (e.g. user tapped retry, or boot
+        // registration just completed), so give the su path a fresh shot.
+        suFailureCount = 0
+        suLastFailureMs = 0L
+    }
+
+    /**
+     * True if we're inside the exponential-backoff window since the last
+     * su-fallback failure, or if we've exceeded [SU_MAX_ATTEMPTS] and should
+     * stop trying altogether for this process.
+     */
+    private fun suBackoffActive(): Boolean {
+        val count = suFailureCount
+        if (count >= SU_MAX_ATTEMPTS) return true
+        if (count == 0) return false
+        // shl by up to 5 gives us the 2→4→8→16→32→64 progression; cap applies above.
+        val window = (SU_BACKOFF_BASE_MS shl (count - 1).coerceAtMost(5))
+            .coerceAtMost(SU_BACKOFF_CAP_MS)
+        val age = System.currentTimeMillis() - suLastFailureMs
+        return age in 0 until window
     }
 
     fun read(ctx: Context): Pair<String?, String?> {
@@ -222,12 +274,20 @@ object PhoneNumberReader {
     }
 
     private fun readViaSu(): String? {
+        // Skip the su path entirely if we're inside the backoff window or have
+        // blown past the max-attempts cap. Callers fall through to the (fast)
+        // SubscriptionManager / TelephonyManager paths in read().
+        if (suBackoffActive()) {
+            return null
+        }
+
         // Method 1: Settings.Secure (written by setup script via #686# USSD query)
         try {
             val setting = runSuCommand("settings get secure device_phone_number")
             val num = setting?.trim()
             if (!num.isNullOrBlank() && num != "null" && num.any { it.isDigit() }) {
                 Log.d(TAG, "Root fallback (Settings.Secure) got number")
+                suFailureCount = 0
                 return num.replace("-", "")
             }
         } catch (e: Exception) {
@@ -242,6 +302,7 @@ object PhoneNumberReader {
                 val num = match?.groupValues?.get(1)?.trim()
                 if (!num.isNullOrBlank() && num != "NULL" && num.any { it.isDigit() }) {
                     Log.d(TAG, "Root fallback (siminfo) got number")
+                    suFailureCount = 0
                     return num.replace("-", "")
                 }
             }
@@ -249,6 +310,13 @@ object PhoneNumberReader {
             Log.w(TAG, "Root fallback (siminfo) failed", e)
         }
 
+        // Both methods failed — record for the exponential-backoff window.
+        suLastFailureMs = System.currentTimeMillis()
+        val next = (suFailureCount + 1).coerceAtMost(SU_MAX_ATTEMPTS)
+        suFailureCount = next
+        if (next >= SU_MAX_ATTEMPTS) {
+            Log.w(TAG, "su fallbacks exhausted after $SU_MAX_ATTEMPTS attempts — disabling for this process")
+        }
         return null
     }
 
