@@ -103,7 +103,7 @@ fun MainAppGridCell(
                 text = item.label,
                 style = TextStyle(
                     fontFamily = DumbTheme.BioRhyme,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     color = textColor,
                     textAlign = TextAlign.Center,
                 ),
