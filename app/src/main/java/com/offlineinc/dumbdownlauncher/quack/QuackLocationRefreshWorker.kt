@@ -78,5 +78,17 @@ class QuackLocationRefreshWorker(
             )
             Log.i(TAG, "scheduled periodic refresh every ${INTERVAL_HOURS}h")
         }
+
+        /**
+         * Cancel any previously-scheduled periodic refresh. Called from
+         * [com.offlineinc.dumbdownlauncher.DumbDownApp] when no location
+         * consent has been granted in either of the apps that use it, so
+         * devices that were upgraded from a build that scheduled this work
+         * unconditionally stop doing the background refresh.
+         */
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            Log.i(TAG, "cancelled periodic refresh")
+        }
     }
 }

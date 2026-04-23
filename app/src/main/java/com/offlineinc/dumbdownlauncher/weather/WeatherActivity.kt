@@ -29,6 +29,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
+import com.offlineinc.dumbdownlauncher.quack.LocationConsent
 import com.offlineinc.dumbdownlauncher.ui.SoftKeyBar
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
@@ -64,6 +65,11 @@ class WeatherActivity : AppCompatActivity() {
                 LocationConsentScreen(
                     onAccept = {
                         WeatherLocationConsentStore.setConsented(this@WeatherActivity, true)
+                        // Kick off the launcher-wide location prewarm + periodic
+                        // refresh now that the user has opted in. Previously this
+                        // ran unconditionally at every boot; now it waits until
+                        // consent is granted in either quack or weather.
+                        LocationConsent.onConsentGranted(this@WeatherActivity)
                         needsConsent = false
                         requestLocationAndLoad()
                     },

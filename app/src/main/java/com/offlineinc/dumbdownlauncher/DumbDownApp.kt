@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
+import com.offlineinc.dumbdownlauncher.quack.LocationConsent
 import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationRefreshWorker
@@ -72,30 +73,44 @@ class DumbDownApp : Application() {
         // script never ran or a reinstall cleared them. Must happen BEFORE
         // the prewarm so getLastKnownLocation() has permission to read.
         // After granting, kick off a silent coarse-location prewarm.
-        bootExecutor.execute {
-            LocationPermissionGranter.ensureGranted(this)
-            // Boot-time prewarm: kick off a silent coarse-location read so the
-            // persisted location cache is populated before the user opens
-            // quack. Use the long PREWARM_TIMEOUT_MS (10 minutes) — a cold GPS
-            // chip on a phone with no Network Location Provider can need
-            // several minutes outside to download orbital data. The helper
-            // persists every fix it gets internally.
-            val noop = object : QuackLocationHelper.Callback {
-                override fun onLocation(lat: Double, lng: Double) { /* persisted internally */ }
-                override fun onError(reason: String) { /* ignore */ }
+        //
+        // GATED on the user having accepted the location ask in either the
+        // quack app or the weather app. Until consent is granted we do no
+        // location work at all — no permission self-grant, no prewarm, no
+        // periodic refresh. The first time the user accepts consent in
+        // either app, [LocationConsent.onConsentGranted] kicks all of this
+        // off so the cache gets populated.
+        if (LocationConsent.hasAnyConsent(this)) {
+            bootExecutor.execute {
+                LocationPermissionGranter.ensureGranted(this)
+                // Boot-time prewarm: kick off a silent coarse-location read so the
+                // persisted location cache is populated before the user opens
+                // quack. Use the long PREWARM_TIMEOUT_MS (10 minutes) — a cold GPS
+                // chip on a phone with no Network Location Provider can need
+                // several minutes outside to download orbital data. The helper
+                // persists every fix it gets internally.
+                val noop = object : QuackLocationHelper.Callback {
+                    override fun onLocation(lat: Double, lng: Double) { /* persisted internally */ }
+                    override fun onError(reason: String) { /* ignore */ }
+                }
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    QuackLocationHelper(
+                        this,
+                        noop,
+                        hardTimeoutMs = QuackLocationHelper.PREWARM_TIMEOUT_MS,
+                    ).request()
+                }
             }
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                QuackLocationHelper(
-                    this,
-                    noop,
-                    hardTimeoutMs = QuackLocationHelper.PREWARM_TIMEOUT_MS,
-                ).request()
-            }
-        }
 
-        // Periodic 6-hour background refresh of the persisted location cache,
-        // so the < 6 h freshness window is always satisfied without any UI work.
-        QuackLocationRefreshWorker.schedule(this)
+            // Periodic 6-hour background refresh of the persisted location cache,
+            // so the < 6 h freshness window is always satisfied without any UI work.
+            QuackLocationRefreshWorker.schedule(this)
+        } else {
+            // Consent not yet granted — cancel any previously-scheduled periodic
+            // refresh so devices upgraded from a build that scheduled it
+            // unconditionally stop doing the background fetch.
+            QuackLocationRefreshWorker.cancel(this)
+        }
 
         // Schedule the Monday 9am quack reminder alarm (no-ops if muted).
         // As the HOME launcher our onCreate runs on every boot, so this
