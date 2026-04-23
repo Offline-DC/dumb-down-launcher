@@ -2,6 +2,8 @@ package com.offlineinc.dumbdownlauncher.registration
 
 import android.content.Context
 import android.util.Log
+import com.offlineinc.dumbdownlauncher.AllAppsActivity
+import com.offlineinc.dumbdownlauncher.MainAppsGridActivity
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
@@ -219,7 +221,17 @@ object DeviceRegistrar {
     // ---------------------------------------------------------------------
 
     private fun runBlocking(ctx: Context) {
-        // 0. Cold-boot quiet period. The launcher's onCreate fans out several
+        // 0a. Fast-path: if the foreground [BootRegistrationScreen] ran
+        //     very recently (fresh phone or Device Setup re-entry) it has
+        //     already done the SIM read + /register + bundle-flag fetch
+        //     that this path would do. Skip outright — no value in doing
+        //     the same round-trips twice.
+        if (recentlyRegistered(ctx)) {
+            Log.i(TAG, "runBlocking: boot screen registered recently — skipping")
+            return
+        }
+
+        // 0b. Cold-boot quiet period. The launcher's onCreate fans out several
         //    threads that all shell to root (swap setup, location grants,
         //    OpenBubbles file, migrations). Kicking off SIM reads + HTTP
         //    registration at the same time saturates the Magisk daemon and
@@ -230,6 +242,15 @@ object DeviceRegistrar {
             Thread.sleep(COLD_BOOT_QUIET_PERIOD_MS)
         } catch (ie: InterruptedException) {
             Thread.currentThread().interrupt()
+            return
+        }
+
+        // 0c. Re-check after the quiet period: BootRegistrationScreen
+        //     typically finishes within 10–20s of app launch, so by the
+        //     time we wake up from the 30s sleep it may have finished and
+        //     made this pass redundant.
+        if (recentlyRegistered(ctx)) {
+            Log.i(TAG, "runBlocking: boot screen registered during quiet period — skipping")
             return
         }
 
@@ -300,6 +321,14 @@ object DeviceRegistrar {
             val api = PairingApiClient(http)
             val result = api.getBundleFlags(phone)
             val store = PairingStore(ctx)
+            // Snapshot the previous flags BEFORE overwriting so we can
+            // detect tier changes. A user's Gigs plan can change between
+            // boots (upgrade dumb → dumber, downgrade dumbest → dumb, etc.)
+            // and the launcher's cached app visibility needs to follow —
+            // otherwise the audio bundle tile stays visible on a user who
+            // just upgraded, or vice versa, until they next navigate.
+            val prevHideAudio = store.hideAudioBundle
+            val prevHideSmart = store.hideSmartTxt
             store.hideAudioBundle = result.hideAudioBundle
             store.hideSmartTxt = result.hideSmartTxt
             Log.i(
@@ -307,6 +336,26 @@ object DeviceRegistrar {
                 "refreshBundleFlags ✔ planId=${result.planId} tier=${result.tier} " +
                     "hideAudioBundle=${result.hideAudioBundle} hideSmartTxt=${result.hideSmartTxt}"
             )
+
+            val audioChanged = prevHideAudio != result.hideAudioBundle
+            val smartChanged = prevHideSmart != result.hideSmartTxt
+            if (audioChanged || smartChanged) {
+                // Both the all-apps list and the 3×3 home grid filter apps
+                // by hideAudioBundle / hideSmartTxt. Their caches are keyed
+                // on the package set, not the flag values, so they don't
+                // invalidate themselves when flags flip — we have to tell
+                // them. Run on the application context so we don't leak a
+                // short-lived caller context into the async rebuild.
+                val appCtx = ctx.applicationContext
+                Log.i(
+                    TAG,
+                    "refreshBundleFlags: tier change detected " +
+                        "(audio $prevHideAudio→${result.hideAudioBundle}, " +
+                        "smart $prevHideSmart→${result.hideSmartTxt}) — busting caches"
+                )
+                AllAppsActivity.invalidateCache()
+                MainAppsGridActivity.invalidateAndRebuildAsync(appCtx)
+            }
         } catch (e: Exception) {
             // 404 (no gigs row yet / brand-new activation) is expected for
             // devices that haven't had the Gigs webhook fire. The next boot
@@ -527,4 +576,20 @@ object DeviceRegistrar {
     /** Normalize to E.164 and strip dashes/whitespace for stable comparison. */
     private fun normalizePhone(raw: String): String =
         PhoneNumberReader.formatE164(raw.trim().replace("-", "").replace(" ", ""))
+
+    /**
+     * True if this device was registered within the recent-registration
+     * window (5 minutes). Used to short-circuit the background boot pass
+     * when [BootRegistrationScreen] has already done the work. 5 min is
+     * comfortably longer than any realistic /register round-trip +
+     * bundle-flag fetch (≤ 30s) and short enough that a true cold boot
+     * after a reboot won't accidentally match.
+     */
+    private fun recentlyRegistered(ctx: Context): Boolean {
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val registeredAt = prefs.getLong(KEY_REGISTERED_AT, 0L)
+        if (registeredAt == 0L) return false
+        val ageMs = System.currentTimeMillis() - registeredAt
+        return ageMs in 0 until TimeUnit.MINUTES.toMillis(5)
+    }
 }

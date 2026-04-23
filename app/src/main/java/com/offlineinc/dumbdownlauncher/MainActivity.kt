@@ -32,7 +32,7 @@ import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import android.net.Uri
-import com.offlineinc.dumbdownlauncher.ui.DeviceRegistrationScreen
+import com.offlineinc.dumbdownlauncher.ui.BootRegistrationScreen
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
 import com.offlineinc.dumbdownlauncher.ui.IntentChoiceScreen
@@ -60,12 +60,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var controller: LauncherController
     /**
      * Onboarding step machine:
-     *   linking → registering → [pairing → contactsync →] intent → mousetutorial → null
+     *   boot_registration → linking → [pairing → contactsync →] intent → mousetutorial → null
      *
-     * `registering` runs for every user (regardless of linking choice) so every
-     * device ends up registered with the backend — see [DeviceRegistrationScreen].
-     * Linking=yes also runs `pairing` afterwards; linking=no skips straight to
-     * `intent` (messaging-platform picker).
+     * `boot_registration` runs FIRST for every user on a fresh phone or on
+     * Device Setup re-entry — it reads the SIM, hits POST /api/v1/register,
+     * and fetches the Gigs-tier bundle flags. Doing this before showing
+     * any user choices lets dumbest-tier users skip the rest of onboarding
+     * entirely (no linking screen, no platform picker). See
+     * [BootRegistrationScreen] and [nextStepAfterBoot].
+     *
+     * For users already past registration, the flow continues with
+     * `linking` (yes/no), then `pairing` if yes (followed by contactsync
+     * and `intent`), or straight to `intent` if no.
      */
     private val onboardingStep = mutableStateOf<String?>(null)
     /** Flips to true once su permission grant finishes (or was unnecessary). */
@@ -112,8 +118,9 @@ class MainActivity : AppCompatActivity() {
         val isRegistered = pairingStore.deviceRegistered || pairingStore.isPaired
         // New users: neither linking nor platform chosen yet
         val needsLinking     = linkingChoice == null && !pairingStore.isPaired
-        // Linking choice made but device not yet registered — run the
-        // standalone DeviceRegistrationScreen before anything else.
+        // Linking choice made but device not yet registered — loop back
+        // through BootRegistrationScreen so /register + bundle-flag fetch
+        // complete before the rest of onboarding.
         val needsRegistering = linkingChoice != null && !isRegistered
         // Linking=yes → pair first, intent comes after contactsync
         val needsPairing     = linkingChoice == true && !pairingStore.isPaired
@@ -130,8 +137,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         onboardingStep.value = when {
-            needsLinking     -> "linking"       // brand-new users: are you linking?
-            needsRegistering -> "registering"   // read SIM + register w/ backend
+            // Fresh phones (no linking choice) AND users who picked a
+            // linking option but never finished registration both go
+            // through the boot screen first — it runs SIM read + backend
+            // register + bundle-flag fetch before any UI branches.
+            needsLinking || needsRegistering -> "boot_registration"
             needsPairing     -> "pairing"       // linking=yes: pair the phone
             needsIntent      -> "intent"        // pick imessage / google messages / none
             !isMouseTutorialDone() -> "mousetutorial"
@@ -252,38 +262,38 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 when (currentStep) {
+                    "boot_registration" -> {
+                        BootRegistrationScreen(
+                            permissionsReady = permissionsReady.value,
+                            onComplete = { phone ->
+                                val store = PairingStore(this@MainActivity)
+                                store.saveRegistration(phone)
+                                Log.d("ONBOARDING", "Boot registration complete (phone=$phone)")
+                                onboardingStep.value = nextStepAfterBoot(store)
+                            },
+                            onSkip = {
+                                // Escape hatch from the error states: drop the
+                                // user on the home screen and skip the rest of
+                                // device setup for this session. No persistent
+                                // flags are written, so onCreate will route
+                                // them back through boot registration on next
+                                // launch (where they can retry or skip again).
+                                Log.d("ONBOARDING", "User skipped boot registration — going to home")
+                                onboardingStep.value = null
+                            }
+                        )
+                    }
                     "linking" -> {
                         LinkingChoiceScreen(
                             onChoose = { willLink ->
                                 PlatformPreferences.saveLinkingChoice(this@MainActivity, willLink)
                                 Log.d("ONBOARDING", "Linking choice: $willLink")
-                                // Every pass through Device Setup re-runs registration so
-                                // the backend gets a fresh record with the current SIM /
-                                // phone number. The backend's /api/v1/register is
-                                // idempotent, so re-registering with the same IMEI/ICCID
-                                // is safe. nextStepAfterRegistration() routes past the
-                                // subsequent steps (pairing / intent / tutorial) based on
-                                // whatever the user already has configured.
-                                onboardingStep.value = "registering"
-                            }
-                        )
-                    }
-                    "registering" -> {
-                        DeviceRegistrationScreen(
-                            permissionsReady = permissionsReady.value,
-                            onRegistered = { phone ->
-                                val store = PairingStore(this@MainActivity)
-                                store.saveRegistration(phone)
-                                Log.d("ONBOARDING", "Device registered (phone=$phone)")
-                                onboardingStep.value = nextStepAfterRegistration(store)
-                            },
-                            onSkip = {
-                                // Skip doesn't mark the device as registered — on next
-                                // launch we'll route back through registering. But we
-                                // let the user move forward through onboarding so a
-                                // bad SIM read doesn't trap them here.
-                                Log.d("ONBOARDING", "User skipped device registration")
-                                onboardingStep.value = nextStepAfterRegistration(PairingStore(this@MainActivity))
+                                // Registration already ran in boot_registration, so
+                                // route straight to whatever the user's linking +
+                                // platform state calls for next (pairing / intent /
+                                // mouse tutorial / home).
+                                onboardingStep.value =
+                                    nextStepAfterRegistration(PairingStore(this@MainActivity))
                             }
                         )
                     }
@@ -423,7 +433,10 @@ class MainActivity : AppCompatActivity() {
         if (PlatformPreferences.consumeShowDialog(this)) {
             // "device setup" from AllAppsActivity re-runs the full flow from the very beginning
             // so the user can change any of their choices (linking preference, messaging app, etc.).
-            onboardingStep.value = "linking"
+            // Every re-entry starts at the boot screen so the backend gets a
+            // fresh /register call and the Gigs bundle flags are re-fetched —
+            // crucial if the user's plan tier changed since last time.
+            onboardingStep.value = "boot_registration"
         }
         // User returned from smart txt — clear the launching overlay
         if (onboardingStep.value == "launching_smarttxt") {
@@ -602,14 +615,43 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Pick the onboarding step to run after [DeviceRegistrationScreen] finishes.
+     * Pick the onboarding step to run after [BootRegistrationScreen] finishes.
      *
-     * The registration screen sits between `linking` and (pairing | intent), but
-     * it can also be re-entered after-the-fact by existing users who were paired
-     * under the old flow (or who completed linking=no pre-registration). After
-     * registering we should respect any state they already have: if they're
-     * already paired we don't force them back to pairing, if they've already
-     * chosen a messaging platform we don't re-show IntentChoiceScreen, and if
+     * Boot registration is the FIRST screen every user sees (fresh phone
+     * or Device Setup re-entry). By the time it completes, PairingStore
+     * knows the Gigs tier, so we can decide whether to suppress the rest
+     * of onboarding:
+     *  - `hideSmartTxt` (dumbest tier)  — no linking, no messaging app, no
+     *    mouse tutorial makes sense. Skip straight to home. Mirrors the
+     *    `effectiveLinkingChoice`/`effectivePlatformChoice` override in
+     *    [onCreate] for the same reason.
+     *  - No linking choice saved yet (first-run)  — show [LinkingChoiceScreen].
+     *  - Linking choice already saved (re-entry mid-flow, or upgrade-path
+     *    users who completed registration but not linking)  — fall through
+     *    to [nextStepAfterRegistration] which routes by existing state.
+     */
+    private fun nextStepAfterBoot(store: PairingStore): String? {
+        if (store.hideSmartTxt) {
+            // Dumbest tier — nothing else to configure. Mark the mouse
+            // tutorial done so we don't re-prompt on next launch and then
+            // go straight home.
+            markMouseTutorialDone()
+            Log.d("ONBOARDING", "Boot done, hideSmartTxt=true — skipping rest of onboarding")
+            return null
+        }
+        if (PlatformPreferences.getLinkingChoice(this) == null) {
+            return "linking"
+        }
+        return nextStepAfterRegistration(store)
+    }
+
+    /**
+     * Pick the onboarding step to run after [BootRegistrationScreen] +
+     * [LinkingChoiceScreen] have both been resolved.
+     *
+     * Respects any state the user already has: if they're already paired
+     * we don't force them back to pairing, if they've already chosen a
+     * messaging platform we don't re-show IntentChoiceScreen, and if
      * they've already seen the mouse tutorial we send them straight home.
      */
     private fun nextStepAfterRegistration(store: PairingStore): String? {
