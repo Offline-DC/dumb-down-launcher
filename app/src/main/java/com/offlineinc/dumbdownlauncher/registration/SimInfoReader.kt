@@ -42,6 +42,33 @@ object SimInfoReader {
     private val ICCID_CALLS = listOf("11", "12")
 
     /**
+     * `sim_id` is the slot index Android's SubscriptionManager keeps on every
+     * row in `content://telephony/siminfo`. It's `>= 0` for the SIM currently
+     * in a slot and `-1` for historical rows whose SIM has been removed.
+     *
+     * We filter on it because the content provider keeps one row per SIM the
+     * phone has ever seen, and without a filter the first-match regex in
+     * [extractField] / [queryField] will happily return the previous SIM's
+     * ICCID on a SIM-swapped phone. That bug caused post-swap registrations
+     * to POST the old ICCID and broke the Gigs-tab IMEI join (phones.sim_number
+     * ≠ gigs_subscriptions.iccid).
+     *
+     * `>= 0` is used instead of `!= -1` because shell-quoting `!` through
+     * `su -c '…'` is fragile across zsh / adb / sh / the Android `content`
+     * tool; `>= 0` is equivalent and survives every layer unescaped.
+     */
+    private const val SIMINFO_ACTIVE_WHERE = "sim_id>=0"
+
+    /**
+     * Build a `content query` command against `content://telephony/siminfo`
+     * that returns only rows for a currently-inserted SIM. [projection] is a
+     * comma-separated list of column names (e.g. `"imsi,icc_id,number"`).
+     */
+    private fun siminfoQuery(projection: String): String =
+        "content query --uri content://telephony/siminfo " +
+            "--projection $projection --where \"$SIMINFO_ACTIVE_WHERE\""
+
+    /**
      * Data class for the combined SIM info read — IMEI, ICCID, and phone number
      * from a single `content://telephony/siminfo` query (one root shell call).
      */
@@ -75,10 +102,12 @@ object SimInfoReader {
             return SimInfo(null, null, null)
         }
 
-        // 1. Fast path: single content query for all three fields.
+        // 1. Fast path: single content query for all three fields. The
+        //    [siminfoQuery] helper pins the query to currently-inserted SIMs
+        //    only — see [SIMINFO_ACTIVE_WHERE] for the rationale.
         //    Wrapped in try/catch in case Magisk isn't ready or su is missing.
         try {
-            val raw = runSu("content query --uri content://telephony/siminfo --projection imsi,icc_id,number")
+            val raw = runSu(siminfoQuery("imsi,icc_id,number"))
             if (raw != null) {
                 imei = extractField(raw, "imsi")
                     ?.takeIf { IMEI_REGEX.matches(it) || (it.isNotBlank() && it.all(Char::isDigit)) }
@@ -251,10 +280,12 @@ object SimInfoReader {
         return cleaned.takeIf { it.isNotBlank() }
     }
 
-    /** Mirrors get_siminfo_field() in device_registration.sh. */
+    /**
+     * Mirrors get_siminfo_field() in device_registration.sh. Uses the same
+     * `siminfo` active-SIM filter as [readAll] via [siminfoQuery].
+     */
     private fun queryField(field: String): String? {
-        val raw = runSu("content query --uri content://telephony/siminfo --projection $field")
-            ?: return null
+        val raw = runSu(siminfoQuery(field)) ?: return null
         val match = Regex("""$field=([^,}\s]+)""").find(raw) ?: return null
         val v = match.groupValues[1].trim().trim('\r', '\n')
         return if (v.isBlank() || v.equals("NULL", ignoreCase = true) || v == "null") null else v
