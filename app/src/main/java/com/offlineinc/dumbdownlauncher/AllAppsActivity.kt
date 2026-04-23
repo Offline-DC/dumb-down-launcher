@@ -431,6 +431,16 @@ class AllAppsActivity : AppCompatActivity() {
             withContext(Dispatchers.Main) {
                 if (isDestroyed) return@withContext
 
+                // If the initial cold-cache build is still in flight, items
+                // is empty. Skip this refresh — buildAppList() already reads
+                // current pairing + phone-number state and will include
+                // contact sync / quack correctly. Mutating the empty list
+                // here would briefly render a one-row screen (e.g. just
+                // "quack") before the full list replaces it, which visibly
+                // flashes the user and leaves the LazyColumn scrolled to
+                // the wrong key when the full list arrives.
+                if (items.isEmpty()) return@withContext
+
                 if (isPaired) {
                     // Add "contact sync" if it isn't already in the list
                     val hasContactSync = items.any { it.packageName == CONTACT_SYNC }

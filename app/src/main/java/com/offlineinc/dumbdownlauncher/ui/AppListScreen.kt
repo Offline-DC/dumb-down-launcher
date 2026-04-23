@@ -58,13 +58,27 @@ fun AppListScreen(
     var centerKeyDown by remember { mutableStateOf(false) }
     var longPressConsumed by remember { mutableStateOf(false) }
 
+    // True once items have been populated at least once. Cold-cache opens
+    // (AllAppsActivity with no warm cache) compose this screen with an
+    // empty list and then swap the real items in a few hundred ms later
+    // on the Main thread once buildAppList() finishes. Without this flag
+    // we'd skip the initial scroll (because items was empty when the
+    // one-shot LaunchedEffect ran), and LazyColumn would preserve its
+    // last scroll position by key instead of jumping back to the top.
+    var didInitialPopulate by remember { mutableStateOf(false) }
+
     LaunchedEffect(items.size) {
-        selectedIndex = selectedIndex.coerceIn(0, (items.lastIndex).coerceAtLeast(0))
+        if (!didInitialPopulate && items.isNotEmpty()) {
+            didInitialPopulate = true
+            selectedIndex = 0
+            listState.scrollToItem(0)
+        } else {
+            selectedIndex = selectedIndex.coerceIn(0, items.lastIndex.coerceAtLeast(0))
+        }
     }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
-        if (items.isNotEmpty()) listState.scrollToItem(0)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
