@@ -447,6 +447,11 @@ fun BootRegistrationScreen(
                 }
 
                 BootState.REG_ERROR -> {
+                    // By the time we're here, SIM IMEI/ICCID/phone have all
+                    // been read successfully — the failure is network/DNS,
+                    // not SIM activation. Don't show "did u activate ur sim?"
+                    // here; that message lives on SIM_ERROR where it's
+                    // actually accurate.
                     BasicText(
                         text = "failed to connect to network",
                         style = DumbTheme.Text.BodySmall.copy(
@@ -456,11 +461,6 @@ fun BootRegistrationScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 6.dp)
-                    )
-                    BasicText(
-                        text = "did u activate ur sim?",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
                     )
                     BasicText(
                         text = "try restarting ur phone",
