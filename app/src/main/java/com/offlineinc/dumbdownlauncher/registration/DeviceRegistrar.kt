@@ -366,9 +366,12 @@ object DeviceRegistrar {
         val prevHideAudio = store.hideAudioBundle
         val prevHideSmart = store.hideSmartTxt
 
-        val newHideAudio: Boolean
-        val newHideSmart: Boolean
-        val logSuffix: String
+        // Must be `var` — Kotlin's definite-assignment analysis doesn't
+        // recognise that the try + two catch blocks are mutually exclusive,
+        // so a `val` assigned in each branch fails to compile.
+        var newHideAudio: Boolean
+        var newHideSmart: Boolean
+        var logSuffix: String
 
         try {
             val api = PairingApiClient(http)
