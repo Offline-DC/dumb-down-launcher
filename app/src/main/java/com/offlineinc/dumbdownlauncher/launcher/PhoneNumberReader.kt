@@ -14,8 +14,14 @@ import java.util.concurrent.TimeUnit
 
 private const val TAG = "PhoneNumberReader"
 
-/** Default max time to wait for the SIM to become ready on cold boot. */
-private const val DEFAULT_SIM_WAIT_MS = 30_000L
+/**
+ * Default max time to wait for the SIM to become ready on cold boot.
+ * Bumped from 30s → 60s because on fresh/unactivated SIMs the modem can take
+ * well over 30s to finish first-time registration with the carrier, and
+ * dropping into SIM_ERROR at 30s makes users think the launcher is broken
+ * when the SIM is simply still coming up.
+ */
+private const val DEFAULT_SIM_WAIT_MS = 60_000L
 
 /**
  * Shared utility for reading the device's own phone number.
@@ -47,7 +53,7 @@ object PhoneNumberReader {
     //
     // On cold boot multiple subsystems (AllApps, DeviceRegistrar, SimInfoReader,
     // QuackViewModel, ...) all hit readWithWait concurrently, and each retries
-    // after its 30s SIM-ready wait. Without any throttling we shell out to `su`
+    // after its 60s SIM-ready wait. Without any throttling we shell out to `su`
     // roughly once per second per caller — each attempt takes up to 1500ms to
     // time out, which is spammy in logs and wasteful on CPU for a flip phone
     // that has very little of either.

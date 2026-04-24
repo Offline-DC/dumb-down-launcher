@@ -407,7 +407,7 @@ fun BootRegistrationScreen(
                         Spacer(Modifier.height(8.dp))
                         BasicText(
                             text = when (state) {
-                                BootState.LOADING -> "reading ur sim..."
+                                BootState.LOADING -> "waiting for ur sim..."
                                 BootState.REGISTERING -> "activating ur phone..."
                                 BootState.CHECKING_BUNDLE -> "checking bundle..."
                                 else -> ""

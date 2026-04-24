@@ -7,6 +7,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * Result of [PairingApiClient.getStripeProductIds].
@@ -54,6 +55,15 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
         private const val BASE_URL = "https://offline-dc-backend-ba4815b2bcc8.herokuapp.com/contact-sync"
         private val JSON_TYPE = "application/json".toMediaType()
 
+        /**
+         * Per-call timeout for [getBundleFlags]. The shared OkHttpClient from
+         * [DeviceRegistrar] has a 75s callTimeout tuned for /register (which
+         * can legitimately take 20–40s against a cold Heroku dyno). Bundle
+         * flags is a trivial GET — if the backend hasn't answered in 20s it
+         * isn't going to, and we'd rather punt back to the cached flags and
+         * move the user off the "checking bundle..." spinner than stall boot.
+         */
+        private const val BUNDLE_FLAGS_TIMEOUT_SECONDS = 20L
     }
 
     /**
@@ -171,7 +181,14 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
             .build()
 
         Log.d(TAG, "HTTP ${request.method} ${request.url}")
-        val response = httpClient.newCall(request).execute()
+        // Override the shared client's 75s callTimeout per call — bundle
+        // flags is a trivial GET and we don't want it to stall the boot
+        // screen's "checking bundle..." spinner on a misbehaving backend.
+        // Call.timeout() takes precedence over the client-level callTimeout.
+        val call = httpClient.newCall(request).apply {
+            timeout().timeout(BUNDLE_FLAGS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+        val response = call.execute()
         val bodyStr = response.body?.string() ?: "{}"
         if (!response.isSuccessful) {
             Log.e(TAG, "getBundleFlags: HTTP ${response.code}")
