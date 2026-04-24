@@ -353,7 +353,7 @@ fun DeviceRegistrationScreen(
 
                 RegState.ERROR -> {
                     BasicText(
-                        text = "couldn't read ur phone #. is ur sim in?",
+                        text = "couldn't read ur phone #. is ur sim activated?",
                         style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
