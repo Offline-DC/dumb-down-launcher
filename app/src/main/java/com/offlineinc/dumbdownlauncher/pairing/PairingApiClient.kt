@@ -46,6 +46,16 @@ data class BundleFlagsResult(
 )
 
 /**
+ * Thrown by [PairingApiClient.getStripeProductIds] and
+ * [PairingApiClient.getBundleFlags] when the backend returns HTTP 404 —
+ * i.e. the phone number isn't in the relevant table (phone_lines for the
+ * Stripe call, gigs_subscriptions for bundle flags). Callers should treat
+ * this as a "no subscription data" signal (default both bundle flags to
+ * false) rather than a transient failure to keep retrying.
+ */
+class PhoneNumberNotFoundException(message: String) : IOException(message)
+
+/**
  * Minimal API client for the pairing confirm endpoint.
  * Only used during onboarding to pair the flip phone with the smartphone.
  */
@@ -145,6 +155,10 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
         Log.d(TAG, "HTTP ${request.method} ${request.url}")
         val response = httpClient.newCall(request).execute()
         val bodyStr = response.body?.string() ?: "{}"
+        if (response.code == 404) {
+            Log.w(TAG, "getStripeProductIds: phone number not found (HTTP 404)")
+            throw PhoneNumberNotFoundException("Phone number not found: $flipPhoneNumber")
+        }
         if (!response.isSuccessful) {
             Log.e(TAG, "getStripeProductIds: HTTP ${response.code}")
             throw IOException("Request failed: ${response.code}")
@@ -190,6 +204,14 @@ class PairingApiClient(private val httpClient: OkHttpClient) {
         }
         val response = call.execute()
         val bodyStr = response.body?.string() ?: "{}"
+        if (response.code == 404) {
+            // Phone number isn't in gigs_subscriptions yet (brand-new
+            // activation, Gigs webhook not fired, or no subscription at
+            // all). Surfaced as a dedicated exception so the launcher can
+            // default both flags to false instead of retrying forever.
+            Log.w(TAG, "getBundleFlags: phone number not found (HTTP 404)")
+            throw PhoneNumberNotFoundException("Phone number not found: $flipPhoneNumber")
+        }
         if (!response.isSuccessful) {
             Log.e(TAG, "getBundleFlags: HTTP ${response.code}")
             throw IOException("Request failed: ${response.code}")
