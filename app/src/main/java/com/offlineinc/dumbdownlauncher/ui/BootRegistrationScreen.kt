@@ -152,8 +152,20 @@ fun BootRegistrationScreen(
         delay(INITIAL_WAIT_MS)
 
         state = BootState.LOADING
-        val maxAttempts = 5
+        // 15 attempts with linear (attempt+1) * 1000ms delays gives a ~105s
+        // total budget in LOADING before SIM_ERROR fires
+        // (1+2+3+…+14 = 105s of delays between attempts). Each attempt is
+        // cheap — SimInfoReader.readAll() short-circuits in a few ms when
+        // the SIM isn't ready — so bumping this count has no wasted work
+        // when SIM comes up early (loop exits as soon as all three fields
+        // land). Previously 5 (≈15s budget), which routinely tripped on
+        // fresh carrier-provisioned SIMs that take 30–90s to attach on
+        // first boot. The existing "still trying..." sub-line (appears
+        // after 30s in any in-flight state) covers the UX concern of long
+        // gaps between polls later in the loop.
+        val maxAttempts = 15
         repeat(maxAttempts) { attempt ->
+            val delayMs = (attempt + 1) * 1000L
             val simInfo = withContext(Dispatchers.IO) {
                 SimInfoReader.readAll(ctx)
             }
@@ -185,7 +197,6 @@ fun BootRegistrationScreen(
                 state = BootState.SIM_ERROR
                 return
             }
-            val delayMs = (attempt + 1) * 1000L
             Log.d(TAG, "SIM not ready, retrying (${attempt + 1}/$maxAttempts) in ${delayMs}ms...")
             delay(delayMs)
         }
