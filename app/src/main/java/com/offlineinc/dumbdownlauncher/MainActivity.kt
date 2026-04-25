@@ -31,6 +31,7 @@ import com.offlineinc.dumbdownlauncher.launcher.dnd.DndMuteManager
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
+import com.offlineinc.dumbdownlauncher.pairing.PhoneNumberNotFoundException
 import android.net.Uri
 import com.offlineinc.dumbdownlauncher.ui.BootRegistrationScreen
 import com.offlineinc.dumbdownlauncher.ui.DpadDirection
@@ -213,6 +214,16 @@ class MainActivity : AppCompatActivity() {
                         pairingStore.hideSmartTxt = result.hideSmartTxt
                         AllAppsActivity.invalidateCache()
                         Log.i("ONBOARDING", "Fetched stripeProductIds=${result.productIds} hideAudioBundle=${result.hideAudioBundle} hideSmartTxt=${result.hideSmartTxt}")
+                    } catch (e: PhoneNumberNotFoundException) {
+                        // Phone number isn't on file with the backend yet — treat
+                        // as "no subscription data": no product IDs, both bundle
+                        // flags false so the upsells remain visible. Persisting
+                        // these defaults also prevents refetching every launch.
+                        pairingStore.stripeProductIds = emptyList()
+                        pairingStore.hideAudioBundle = false
+                        pairingStore.hideSmartTxt = false
+                        AllAppsActivity.invalidateCache()
+                        Log.i("ONBOARDING", "Phone number not found (404); defaulting hideAudioBundle=false hideSmartTxt=false")
                     } catch (e: Exception) {
                         Log.w("ONBOARDING", "Failed to fetch stripeProductIds: ${e.message}")
                     }

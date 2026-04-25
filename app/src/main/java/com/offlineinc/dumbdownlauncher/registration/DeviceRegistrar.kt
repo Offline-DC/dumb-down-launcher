@@ -8,6 +8,7 @@ import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
+import com.offlineinc.dumbdownlauncher.pairing.PhoneNumberNotFoundException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -339,58 +340,91 @@ object DeviceRegistrar {
     /**
      * Fetch `/contact-sync/bundle-flags` for this phone number and persist
      * the resulting `hideAudioBundle` / `hideSmartTxt` flags into
-     * [PairingStore]. Best-effort — all exceptions are swallowed so a
-     * transient backend or network error never blocks registration.
+     * [PairingStore]. Best-effort — transient exceptions are swallowed so
+     * a flaky backend or network error never blocks registration.
+     *
+     * A 404 from the backend (phone not in `gigs_subscriptions`) is not a
+     * failure: it's an authoritative "no subscription data yet" signal, so
+     * we explicitly write `hideAudioBundle = false` / `hideSmartTxt = false`
+     * rather than leaving whatever stale value was cached. This matters for
+     * downgrade cases — a user who went from Dumbest back to Dumb would
+     * otherwise keep the hidden upsells cached until a 200 arrived.
      *
      * Visible for unit testing and for the Device Setup screen to call
      * directly if it wants to chain off registration without going through
      * its own PairingApiClient instance.
      */
     fun refreshBundleFlags(ctx: Context, phone: String) {
+        val store = PairingStore(ctx)
+        // Snapshot the previous flags BEFORE overwriting so we can detect
+        // tier changes in both the 200 and 404 paths. A user's Gigs plan
+        // can change between boots (upgrade dumb → dumber, downgrade
+        // dumbest → dumb, etc.) and the launcher's cached app visibility
+        // needs to follow — otherwise the audio bundle tile stays visible
+        // on a user who just upgraded, or vice versa, until they next
+        // navigate.
+        val prevHideAudio = store.hideAudioBundle
+        val prevHideSmart = store.hideSmartTxt
+
+        // Must be `var` — Kotlin's definite-assignment analysis doesn't
+        // recognise that the try + two catch blocks are mutually exclusive,
+        // so a `val` assigned in each branch fails to compile.
+        var newHideAudio: Boolean
+        var newHideSmart: Boolean
+        var logSuffix: String
+
         try {
             val api = PairingApiClient(http)
             val result = api.getBundleFlags(phone)
-            val store = PairingStore(ctx)
-            // Snapshot the previous flags BEFORE overwriting so we can
-            // detect tier changes. A user's Gigs plan can change between
-            // boots (upgrade dumb → dumber, downgrade dumbest → dumb, etc.)
-            // and the launcher's cached app visibility needs to follow —
-            // otherwise the audio bundle tile stays visible on a user who
-            // just upgraded, or vice versa, until they next navigate.
-            val prevHideAudio = store.hideAudioBundle
-            val prevHideSmart = store.hideSmartTxt
-            store.hideAudioBundle = result.hideAudioBundle
-            store.hideSmartTxt = result.hideSmartTxt
+            newHideAudio = result.hideAudioBundle
+            newHideSmart = result.hideSmartTxt
+            logSuffix = "planId=${result.planId} tier=${result.tier}"
             Log.i(
                 TAG,
-                "refreshBundleFlags ✔ planId=${result.planId} tier=${result.tier} " +
-                    "hideAudioBundle=${result.hideAudioBundle} hideSmartTxt=${result.hideSmartTxt}"
+                "refreshBundleFlags ✔ $logSuffix " +
+                    "hideAudioBundle=$newHideAudio hideSmartTxt=$newHideSmart"
             )
-
-            val audioChanged = prevHideAudio != result.hideAudioBundle
-            val smartChanged = prevHideSmart != result.hideSmartTxt
-            if (audioChanged || smartChanged) {
-                // Both the all-apps list and the 3×3 home grid filter apps
-                // by hideAudioBundle / hideSmartTxt. Their caches are keyed
-                // on the package set, not the flag values, so they don't
-                // invalidate themselves when flags flip — we have to tell
-                // them. Run on the application context so we don't leak a
-                // short-lived caller context into the async rebuild.
-                val appCtx = ctx.applicationContext
-                Log.i(
-                    TAG,
-                    "refreshBundleFlags: tier change detected " +
-                        "(audio $prevHideAudio→${result.hideAudioBundle}, " +
-                        "smart $prevHideSmart→${result.hideSmartTxt}) — busting caches"
-                )
-                AllAppsActivity.invalidateCache()
-                MainAppsGridActivity.invalidateAndRebuildAsync(appCtx)
-            }
+        } catch (e: PhoneNumberNotFoundException) {
+            // 404 → no gigs_subscriptions row for this number (brand-new
+            // activation, Gigs webhook hasn't fired, or the user has no
+            // subscription). Treat as authoritative "no bundle perks" so
+            // any previously cached `true` flags don't linger forever.
+            newHideAudio = false
+            newHideSmart = false
+            logSuffix = "404 (phone not found)"
+            Log.i(
+                TAG,
+                "refreshBundleFlags: $logSuffix — defaulting " +
+                    "hideAudioBundle=false hideSmartTxt=false"
+            )
         } catch (e: Exception) {
-            // 404 (no gigs row yet / brand-new activation) is expected for
-            // devices that haven't had the Gigs webhook fire. The next boot
-            // will try again.
+            // Transient failure (network blip, 5xx, timeout). Do NOT
+            // overwrite cached flags — the next boot will try again.
             Log.w(TAG, "refreshBundleFlags: skipped (${e.message})")
+            return
+        }
+
+        store.hideAudioBundle = newHideAudio
+        store.hideSmartTxt = newHideSmart
+
+        val audioChanged = prevHideAudio != newHideAudio
+        val smartChanged = prevHideSmart != newHideSmart
+        if (audioChanged || smartChanged) {
+            // Both the all-apps list and the 3×3 home grid filter apps
+            // by hideAudioBundle / hideSmartTxt. Their caches are keyed
+            // on the package set, not the flag values, so they don't
+            // invalidate themselves when flags flip — we have to tell
+            // them. Run on the application context so we don't leak a
+            // short-lived caller context into the async rebuild.
+            val appCtx = ctx.applicationContext
+            Log.i(
+                TAG,
+                "refreshBundleFlags: tier change detected " +
+                    "(audio $prevHideAudio→$newHideAudio, " +
+                    "smart $prevHideSmart→$newHideSmart) — busting caches"
+            )
+            AllAppsActivity.invalidateCache()
+            MainAppsGridActivity.invalidateAndRebuildAsync(appCtx)
         }
     }
 
