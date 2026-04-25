@@ -109,4 +109,19 @@ object QuackNotificationManager {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(notificationId)
     }
+
+    /**
+     * Cancels every quack-channel notification currently visible. Called when
+     * the user enters [QuackActivity] so the shade is cleared regardless of
+     * whether they tapped the notification or opened the app another way.
+     *
+     * Safe to call unconditionally: NotificationManager.cancel is a no-op for
+     * IDs that aren't currently posted.
+     */
+    fun cancelAll(context: Context) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(NOTIFICATION_ID_BE_FIRST)
+        nm.cancel(NOTIFICATION_ID_SOMEBODY_QUACKED)
+        nm.cancel(NOTIFICATION_ID_CONSENT_NUDGE)
+    }
 }

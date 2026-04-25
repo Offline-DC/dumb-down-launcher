@@ -56,12 +56,13 @@ class QuackActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = 0xFF000000.toInt()
 
-        // Dismiss the one-time consent nudge if it's still showing — covers
-        // OEM Android variants where setAutoCancel(true) doesn't reliably
-        // dismiss low-importance silent notifications on tap. Safe to call
-        // unconditionally: NotificationManager.cancel is a no-op if the
-        // notification doesn't exist.
-        QuackNotificationManager.cancel(this, QuackNotificationManager.NOTIFICATION_ID_CONSENT_NUDGE)
+        // Dismiss every quack-channel notification ("be the first", "somebody
+        // quacked nearby", consent nudge). Covers OEM Android variants where
+        // setAutoCancel(true) doesn't reliably dismiss low-importance silent
+        // notifications on tap, and the case where the user opens quack via
+        // some path other than tapping the notification. onResume also calls
+        // this — see below.
+        QuackNotificationManager.cancelAll(this)
 
         viewModel = ViewModelProvider(this)[QuackViewModel::class.java]
 
@@ -123,6 +124,11 @@ class QuackActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         overridePendingTransition(0, 0)
+        // Clear any quack notifications that arrived while we were backgrounded
+        // — e.g. user gets "somebody quacked nearby" while in another app, then
+        // returns to quack via recents. onCreate only runs on cold launch, so
+        // this onResume call is what handles the warm-resume case.
+        QuackNotificationManager.cancelAll(this)
         // Silently refresh posts (not location) every time the user returns
         // to the quack screen so the feed is always fresh. Once loaded, focus
         // snaps to the most recent quack (index 0). No-op until consent has
