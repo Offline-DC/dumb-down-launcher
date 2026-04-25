@@ -56,6 +56,13 @@ class QuackActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = 0xFF000000.toInt()
 
+        // Dismiss the one-time consent nudge if it's still showing — covers
+        // OEM Android variants where setAutoCancel(true) doesn't reliably
+        // dismiss low-importance silent notifications on tap. Safe to call
+        // unconditionally: NotificationManager.cancel is a no-op if the
+        // notification doesn't exist.
+        QuackNotificationManager.cancel(this, QuackNotificationManager.NOTIFICATION_ID_CONSENT_NUDGE)
+
         viewModel = ViewModelProvider(this)[QuackViewModel::class.java]
 
         setContent {
