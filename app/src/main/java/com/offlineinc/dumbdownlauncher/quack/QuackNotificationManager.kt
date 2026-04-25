@@ -18,6 +18,7 @@ object QuackNotificationManager {
     private const val CHANNEL_ID = "quack_reminders"
     const val NOTIFICATION_ID_BE_FIRST = 2001
     const val NOTIFICATION_ID_SOMEBODY_QUACKED = 2002
+    const val NOTIFICATION_ID_CONSENT_NUDGE = 2003
 
     fun ensureChannel(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -80,6 +81,28 @@ object QuackNotificationManager {
             .setContentIntent(quackPendingIntent(context, NOTIFICATION_ID_SOMEBODY_QUACKED))
             .build()
         nm.notify(NOTIFICATION_ID_SOMEBODY_QUACKED, notification)
+    }
+
+    /**
+     * One-time nudge sent on the first Monday alarm where the user has no
+     * usable location stored. Title-only ("wanna quack?") with no body —
+     * tapping opens [QuackActivity], which surfaces the location consent
+     * prompt. Sent at most once ever; see [QuackLocationConsentStore.hasNudged].
+     */
+    fun notifyConsentNudge(context: Context) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("wanna quack?")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSound(null)
+            .setVibrate(longArrayOf(0))
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setContentIntent(quackPendingIntent(context, NOTIFICATION_ID_CONSENT_NUDGE))
+            .build()
+        nm.notify(NOTIFICATION_ID_CONSENT_NUDGE, notification)
     }
 
     fun cancel(context: Context, notificationId: Int) {

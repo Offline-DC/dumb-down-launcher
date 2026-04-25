@@ -16,6 +16,7 @@ object QuackLocationConsentStore {
 
     private const val PREFS = "quack_consent"
     private const val KEY_CONSENTED = "location_consented"
+    private const val KEY_NUDGED = "consent_nudge_sent"
 
     fun hasConsented(context: Context): Boolean {
         return context.applicationContext
@@ -28,6 +29,26 @@ object QuackLocationConsentStore {
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_CONSENTED, consented)
+            .apply()
+    }
+
+    /**
+     * Tracks whether we've already sent the one-time "quack" nudge
+     * notification on a Monday alarm fire while the user had no usable
+     * location. The nudge is sent at most once ever — even if the user
+     * never grants consent — so they aren't pestered every Monday.
+     */
+    fun hasNudged(context: Context): Boolean {
+        return context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_NUDGED, false)
+    }
+
+    fun setNudged(context: Context, nudged: Boolean) {
+        context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_NUDGED, nudged)
             .apply()
     }
 }

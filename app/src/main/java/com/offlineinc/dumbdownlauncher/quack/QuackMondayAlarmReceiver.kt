@@ -140,7 +140,29 @@ class QuackMondayAlarmReceiver : BroadcastReceiver() {
         // Check location — bail if we can't poll
         val loc = QuackLocationStore.load(context)
         if (loc == null || loc.ageMs >= QuackLocationStore.STALE_MAX_AGE_MS) {
-            Log.w(TAG, "No usable location — skipping notification, rescheduling")
+            // If the user has never consented to location sharing AND has
+            // never been nudged, send a one-time "quack" notification so they
+            // discover the feature and can grant consent on tap. After this
+            // single nudge, fall back to silent-skip every Monday — even if
+            // they never consent — so we don't pester them.
+            if (!QuackLocationConsentStore.hasConsented(context)
+                && !QuackLocationConsentStore.hasNudged(context)
+            ) {
+                Log.i(TAG, "No location + never nudged — posting one-time quack nudge")
+                // Wrapped defensively so an unexpected throw (e.g. system
+                // service unavailable, PendingIntent limit) can't escape
+                // onReceive and crash the launcher process. setNudged is
+                // inside the try so a notify failure leaves the user eligible
+                // for another nudge next Monday rather than burning the chance.
+                try {
+                    QuackNotificationManager.notifyConsentNudge(context)
+                    QuackLocationConsentStore.setNudged(context, true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "notifyConsentNudge failed — will retry next week", e)
+                }
+            } else {
+                Log.w(TAG, "No usable location — skipping notification, rescheduling")
+            }
             scheduleNext(context)
             return
         }
