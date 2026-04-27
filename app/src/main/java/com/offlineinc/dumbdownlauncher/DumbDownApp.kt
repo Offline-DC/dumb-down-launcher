@@ -1,9 +1,11 @@
 package com.offlineinc.dumbdownlauncher
 
+import android.Manifest
 import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
@@ -443,6 +445,50 @@ class DumbDownApp : Application() {
                     }
                 } catch (e: Exception) {
                     Log.w(tag, "Cannot disable wifi_scan_throttle: ${e.message}")
+                }
+            },
+            // Grant READ_CONTACTS / WRITE_CONTACTS to OpenBubbles if it's
+            // installed and missing them. OpenBubbles needs contacts access to
+            // resolve handles → display names; on some installs the runtime
+            // grant gets dropped (re-install, permission reset) and there's no
+            // in-launcher UI to re-prompt. `pm grant` for a different package
+            // requires GRANT_RUNTIME_PERMISSIONS (signature|privileged), so
+            // this has to go through `su` — same as the other pm migrations.
+            "grant_openbubbles_contact_perms" to {
+                val obPkg = "com.openbubbles.messaging"
+                try {
+                    // Skip cleanly if OpenBubbles isn't installed.
+                    try {
+                        packageManager.getPackageInfo(obPkg, 0)
+                    } catch (_: PackageManager.NameNotFoundException) {
+                        Log.d(tag, "$obPkg not installed — skipping contact permission grant")
+                        return@to
+                    }
+
+                    val perms = listOf(
+                        Manifest.permission.READ_CONTACTS,
+                        Manifest.permission.WRITE_CONTACTS,
+                    )
+                    for (perm in perms) {
+                        val granted = packageManager.checkPermission(perm, obPkg) ==
+                                PackageManager.PERMISSION_GRANTED
+                        if (granted) {
+                            Log.d(tag, "$obPkg already has $perm")
+                            continue
+                        }
+                        val proc = Runtime.getRuntime().exec(
+                            arrayOf("su", "-c", "pm grant $obPkg $perm")
+                        )
+                        val stderr = proc.errorStream.bufferedReader().readText().trim()
+                        val exit = proc.waitFor()
+                        if (exit == 0) {
+                            Log.d(tag, "Granted $perm to $obPkg")
+                        } else {
+                            Log.w(tag, "Failed to grant $perm to $obPkg (exit=$exit): $stderr")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Cannot grant OpenBubbles contact permissions: ${e.message}")
                 }
             },
             // Remove OpenBubbles from the Doze whitelist. A bug in OpenBubbles'
