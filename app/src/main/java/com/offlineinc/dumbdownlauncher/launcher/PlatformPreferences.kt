@@ -8,6 +8,12 @@ object PlatformPreferences {
     private const val KEY_PLATFORM_CHOICE = "platform_choice"
     private const val KEY_SHOW_PLATFORM_DIALOG = "show_platform_dialog"
     private const val KEY_LINKING_CHOICE = "linking_choice" // "yes" | "no" | absent = not set
+    // Set to true when the user taps "skip setup" on LinkingChoiceScreen.
+    // Persistent: survives reboots so the launcher doesn't keep dragging
+    // the user through boot_registration on every startup. Cleared when
+    // the user re-enters Device Setup via [consumeShowDialog] so a
+    // deliberate re-run isn't silently undone.
+    private const val KEY_SETUP_SKIPPED = "setup_skipped"
 
     fun getChoice(context: Context): String? {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -53,6 +59,25 @@ object PlatformPreferences {
             prefs.edit().putBoolean(KEY_SHOW_PLATFORM_DIALOG, false).apply()
         }
         return flag
+    }
+
+    /**
+     * True when the user explicitly tapped "skip setup" on the
+     * LinkingChoiceScreen. While set, [MainActivity.onCreate] short-
+     * circuits the onboarding step machine so the user lands on the
+     * home screen on every launch — they'll only see Device Setup again
+     * by tapping it from AllAppsActivity.
+     */
+    fun isSetupSkipped(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_SETUP_SKIPPED, false)
+    }
+
+    fun setSetupSkipped(context: Context, skipped: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SETUP_SKIPPED, skipped)
+            .apply()
     }
 
     /**

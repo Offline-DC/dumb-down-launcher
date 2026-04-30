@@ -5,12 +5,14 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.offlineinc.dumbdownlauncher.ui.components.DumbChipButton
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 /**
@@ -21,15 +23,25 @@ import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
  * straight to the mouse tutorial (smart txt works, just no sync).
  *
  * [onChoose] is called with true (yes, linking) or false (no, not linking).
+ *
+ * [onSkipAll] is invoked when the user moves focus to the top-right
+ * "skip setup" chip and presses OK. It signals "I don't want to do
+ * any of device setup right now" — the caller is expected to persist a
+ * flag so onCreate doesn't drag the user back through boot_registration
+ * on the next launch. The user can still re-enter setup later from
+ * AllAppsActivity → "device setup".
  */
 @Composable
 fun LinkingChoiceScreen(
-    onChoose: (Boolean) -> Unit
+    onChoose: (Boolean) -> Unit,
+    onSkipAll: () -> Unit = {}
 ) {
     val options = listOf("yes" to true, "no" to false)
 
     var selectedIndex by remember { mutableIntStateOf(0) }
     val focusRequester = remember { FocusRequester() }
+    val skipFocusRequester = remember { FocusRequester() }
+    var skipFocused by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -43,9 +55,34 @@ fun LinkingChoiceScreen(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                // Skip-chip handling — mirrors the pattern from
+                // PairingScreen / BootRegistrationScreen / MouseTutorialScreen:
+                // when the chip is focused, OK fires onSkipAll, Down/Back
+                // returns to the main list, Up is a no-op (nothing above it).
+                if (skipFocused) {
+                    return@onPreviewKeyEvent when (event.key) {
+                        Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+                            onSkipAll()
+                            true
+                        }
+                        Key.DirectionDown, Key.Back -> {
+                            focusRequester.requestFocus()
+                            true
+                        }
+                        Key.DirectionUp -> true  // nothing above the chip
+                        else -> false
+                    }
+                }
                 when (event.key) {
                     Key.DirectionUp -> {
-                        selectedIndex = (selectedIndex - 1).coerceAtLeast(0)
+                        // From the first option (yes), Up moves focus to
+                        // the skip-setup chip in the top right. From
+                        // lower options it just walks back up the list.
+                        if (selectedIndex == 0) {
+                            skipFocusRequester.requestFocus()
+                        } else {
+                            selectedIndex = (selectedIndex - 1).coerceAtLeast(0)
+                        }
                         true
                     }
                     Key.DirectionDown -> {
@@ -93,5 +130,16 @@ fun LinkingChoiceScreen(
                 )
             }
         }
+
+        // "skip setup" chip — top right. Bails out of all of Device Setup;
+        // the next launch will go straight to the home screen and the user
+        // can re-enter setup from AllAppsActivity.
+        DumbChipButton(
+            text = "skip setup",
+            focusRequester = skipFocusRequester,
+            isFocused = skipFocused,
+            onFocusChanged = { skipFocused = it },
+            modifier = Modifier.align(Alignment.TopEnd)
+        )
     }
 }

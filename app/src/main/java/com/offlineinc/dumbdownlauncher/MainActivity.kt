@@ -75,6 +75,19 @@ class MainActivity : AppCompatActivity() {
      * and `intent`), or straight to `intent` if no.
      */
     private val onboardingStep = mutableStateOf<String?>(null)
+    /**
+     * Set to true when the user re-enters Device Setup from
+     * AllAppsActivity (the [PlatformPreferences.consumeShowDialog] flag
+     * fires in [onResume]). Re-entry is a deliberate "show me every
+     * option again" gesture, so the routing helpers
+     * [nextStepAfterBoot] / [nextStepAfterRegistration] consult this
+     * flag to walk the user through linking / intent / mouse tutorial
+     * even when the saved state would normally short-circuit those
+     * screens. Session-only — never persisted, so a fresh activity
+     * launch (cold boot, process death) defaults back to the original
+     * "skip already-completed steps" behavior.
+     */
+    private val isDeviceSetupReentry = mutableStateOf(false)
     /** Flips to true once su permission grant finishes (or was unnecessary). */
     private val permissionsReady = mutableStateOf(false)
     // Incremented on every onResume so HomeScreen re-fetches the wallpaper
@@ -137,7 +150,16 @@ class MainActivity : AppCompatActivity() {
             markMouseTutorialDone()
         }
 
+        // Has the user explicitly bailed out of device setup (via
+        // "skip setup" on LinkingChoiceScreen)? If so, short-circuit
+        // every onboarding step — including boot_registration. They'll
+        // only see setup again by tapping "device setup" from
+        // AllAppsActivity, which clears [setSetupSkipped] and triggers
+        // a fresh re-entry pass through onResume's consumeShowDialog.
+        val setupSkipped = PlatformPreferences.isSetupSkipped(this)
+
         onboardingStep.value = when {
+            setupSkipped     -> null            // user said "skip setup" — stay on home
             // Fresh phones (no linking choice) AND users who picked a
             // linking option but never finished registration both go
             // through the boot screen first — it runs SIM read + backend
@@ -283,14 +305,31 @@ class MainActivity : AppCompatActivity() {
                                 onboardingStep.value = nextStepAfterBoot(store)
                             },
                             onSkip = {
-                                // Escape hatch from the error states: drop the
-                                // user on the home screen and skip the rest of
-                                // device setup for this session. No persistent
-                                // flags are written, so onCreate will route
-                                // them back through boot registration on next
-                                // launch (where they can retry or skip again).
-                                Log.d("ONBOARDING", "User skipped boot registration — going to home")
-                                onboardingStep.value = null
+                                if (isDeviceSetupReentry.value) {
+                                    // Device Setup re-entry: the user opened
+                                    // setup themselves to walk through every
+                                    // option, so a skip here means "skip just
+                                    // this step", not "bail out of setup".
+                                    // Continue to the linking screen — they
+                                    // should still get the chance to revisit
+                                    // linking, the platform picker, and the
+                                    // mouse tutorial even when registration
+                                    // hits a network/SIM error they can't
+                                    // resolve right now. None of the screens
+                                    // after this require the network for the
+                                    // user's choice itself to be saved.
+                                    Log.d("ONBOARDING", "User skipped boot registration on re-entry — continuing to linking")
+                                    onboardingStep.value = "linking"
+                                } else {
+                                    // Initial setup escape hatch: drop the user
+                                    // on the home screen and skip the rest of
+                                    // device setup for this session. No persistent
+                                    // flags are written, so onCreate will route
+                                    // them back through boot registration on next
+                                    // launch (where they can retry or skip again).
+                                    Log.d("ONBOARDING", "User skipped boot registration — going to home")
+                                    onboardingStep.value = null
+                                }
                             }
                         )
                     }
@@ -305,6 +344,19 @@ class MainActivity : AppCompatActivity() {
                                 // mouse tutorial / home).
                                 onboardingStep.value =
                                     nextStepAfterRegistration(PairingStore(this@MainActivity))
+                            },
+                            onSkipAll = {
+                                // User opted out of device setup entirely. Persist
+                                // a "skipped" flag so onCreate skips boot_registration
+                                // and every other onboarding step on subsequent
+                                // launches. The user can re-enter setup at any time
+                                // by tapping "device setup" in AllAppsActivity, which
+                                // clears the flag in onResume's consumeShowDialog
+                                // handler.
+                                Log.d("ONBOARDING", "User chose 'skip setup' on linking screen — persisting skip flag and going home")
+                                PlatformPreferences.setSetupSkipped(this@MainActivity, true)
+                                isDeviceSetupReentry.value = false
+                                onboardingStep.value = null
                             }
                         )
                     }
@@ -322,7 +374,16 @@ class MainActivity : AppCompatActivity() {
                                     markMouseTutorialDone()
                                     onboardingStep.value = "onboarding_complete"
                                 } else {
-                                    onboardingStep.value = if (isMouseTutorialDone()) null else "mousetutorial"
+                                    // Always run the mouse tutorial after a non-"none" pick.
+                                    // On initial setup the tutorial hasn't been done yet so
+                                    // this is the normal path. On Device Setup re-entry the
+                                    // user explicitly came back to walk through every screen,
+                                    // and the DoneStep then launches smart txt — exactly the
+                                    // behavior they get on initial setup. We deliberately do
+                                    // NOT consult isMouseTutorialDone() here: skipping the
+                                    // tutorial on re-entry would also skip the smart txt
+                                    // launch that lives at its end.
+                                    onboardingStep.value = "mousetutorial"
                                 }
                             }
                         )
@@ -354,8 +415,24 @@ class MainActivity : AppCompatActivity() {
                                 overridePendingTransition(0, 0)
                             },
                             onSkip = {
-                                Log.d("ONBOARDING", "User skipped pairing — moving to intent")
-                                PairingStore(this@MainActivity).isPaired = true
+                                Log.d("ONBOARDING", "User skipped pairing — moving to intent (reentry=${isDeviceSetupReentry.value})")
+                                if (!isDeviceSetupReentry.value) {
+                                    // Initial-setup legacy behavior: mark as paired
+                                    // so the pairing screen doesn't keep coming back
+                                    // on every launch when the user said "yes" to
+                                    // linking but bailed before completing it. They
+                                    // can re-pair anytime from Device Setup.
+                                    PairingStore(this@MainActivity).isPaired = true
+                                }
+                                // On Device Setup re-entry we deliberately do NOT
+                                // touch isPaired here. The user came back to review
+                                // their settings — choosing yes/no/skip on the
+                                // linking flow must never silently flip their
+                                // pairing status. Already-paired users skipping
+                                // out leave already paired; unpaired users skipping
+                                // out leave still unpaired. Real pairing state
+                                // changes only flow through "unpair" (clears) and
+                                // a successful confirmPairing call (sets).
                                 // Platform not chosen yet — intent screen comes next
                                 onboardingStep.value = "intent"
                             }
@@ -447,6 +524,21 @@ class MainActivity : AppCompatActivity() {
             // Every re-entry starts at the boot screen so the backend gets a
             // fresh /register call and the Gigs bundle flags are re-fetched —
             // crucial if the user's plan tier changed since last time.
+            //
+            // Flip [isDeviceSetupReentry] so the routing helpers walk the
+            // user through every screen (linking / intent / mouse tutorial)
+            // regardless of saved choices — re-entry exists precisely so the
+            // user can review and change those choices, so we mustn't short-
+            // circuit any of them. Pairing status is intentionally NOT cleared
+            // here; the linking screen surfaces yes/no without ever flipping
+            // the underlying pairing.
+            isDeviceSetupReentry.value = true
+            // Clear the "user skipped all of setup" flag — they came back
+            // to actually do setup, so the onCreate short-circuit must not
+            // mask the boot_registration / linking / intent screens on the
+            // next launch. If they hit "skip setup" on the linking screen
+            // again, the flag gets set right back to true.
+            PlatformPreferences.setSetupSkipped(this, false)
             onboardingStep.value = "boot_registration"
         }
         // User returned from smart txt — clear the launching overlay
@@ -650,6 +742,16 @@ class MainActivity : AppCompatActivity() {
             Log.d("ONBOARDING", "Boot done, hideSmartTxt=true — skipping rest of onboarding")
             return null
         }
+        // On Device Setup re-entry, always show the linking screen —
+        // even if the user already chose before AND even if they're
+        // already paired. Re-entry's whole purpose is to let the user
+        // walk through every option again. Selecting "no" at this screen
+        // does NOT unpair them; selecting "yes" while already paired
+        // surfaces DeviceLinkedContent (next/unpair). See
+        // [isDeviceSetupReentry].
+        if (isDeviceSetupReentry.value) {
+            return "linking"
+        }
         if (PlatformPreferences.getLinkingChoice(this) == null) {
             return "linking"
         }
@@ -660,21 +762,38 @@ class MainActivity : AppCompatActivity() {
      * Pick the onboarding step to run after [BootRegistrationScreen] +
      * [LinkingChoiceScreen] have both been resolved.
      *
-     * Respects any state the user already has: if they're already paired
-     * we don't force them back to pairing, if they've already chosen a
-     * messaging platform we don't re-show IntentChoiceScreen, and if
-     * they've already seen the mouse tutorial we send them straight home.
+     * On *initial* setup, respects any state the user already has: if
+     * they've already chosen a messaging platform we don't re-show
+     * IntentChoiceScreen, and if they've already seen the mouse tutorial
+     * we send them straight home.
+     *
+     * On *Device Setup re-entry* ([isDeviceSetupReentry]) the user
+     * deliberately came back to walk through every option, so we always
+     * route them through the intent → mouse tutorial → smart txt chain
+     * (or the pairing screen if linking=yes) regardless of saved state.
+     * Pairing status itself is never modified by this routing — it only
+     * flips on a successful confirmPairing or an explicit "unpair".
      */
     private fun nextStepAfterRegistration(store: PairingStore): String? {
         val willLink    = PlatformPreferences.getLinkingChoice(this) == true
         val platform    = PlatformPreferences.getChoice(this)
         val hasPlatform = platform in setOf("ios", "android", "skipped", "none")
+        val isReentry   = isDeviceSetupReentry.value
         return when {
             // If the user chose "link" during this Device Setup pass, always
             // show the PairingScreen. When they're already paired it renders
             // as DeviceLinkedContent (with "next" + "unpair") so they can
             // continue or re-pair — never swallowed silently.
             willLink                    -> "pairing"
+            // Re-entry: always show the messaging-platform picker, even if
+            // a platform is already saved. The user opened Device Setup
+            // explicitly to revisit their choices, and the mouse tutorial
+            // / smart txt screens that follow depend on a fresh pick. The
+            // intent handler unconditionally routes into "mousetutorial"
+            // for ios/android (see the "intent" branch below), so this
+            // also satisfies "skipping through still surfaces the mouse
+            // tutorial" for re-entry users who never picked a platform.
+            isReentry                   -> "intent"
             !hasPlatform                -> "intent"
             !isMouseTutorialDone()      -> "mousetutorial"
             else                        -> null
