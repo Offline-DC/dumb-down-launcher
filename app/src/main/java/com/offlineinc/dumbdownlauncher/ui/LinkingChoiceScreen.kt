@@ -66,6 +66,12 @@ fun LinkingChoiceScreen(
                             true
                         }
                         Key.DirectionDown, Key.Back -> {
+                            // Explicitly clear skipFocused before moving focus.
+                            // The chip's onFocusChanged callback is unreliable
+                            // (sometimes fires late or not at all on this
+                            // launcher), so we drive the visual state
+                            // ourselves rather than waiting for it.
+                            skipFocused = false
                             focusRequester.requestFocus()
                             true
                         }
@@ -79,6 +85,11 @@ fun LinkingChoiceScreen(
                         // the skip-setup chip in the top right. From
                         // lower options it just walks back up the list.
                         if (selectedIndex == 0) {
+                            // Set skipFocused explicitly before requesting
+                            // focus on the chip — see the comment in the
+                            // skipFocused handler above for why we don't
+                            // rely on the chip's onFocusChanged callback.
+                            skipFocused = true
                             skipFocusRequester.requestFocus()
                         } else {
                             selectedIndex = (selectedIndex - 1).coerceAtLeast(0)
@@ -114,7 +125,10 @@ fun LinkingChoiceScreen(
             )
 
             options.forEachIndexed { index, (label, _) ->
-                val isSelected = index == selectedIndex
+                // When the skip-setup chip is focused, no option in the
+                // list should look selected — otherwise "yes" stays
+                // highlighted while focus is up on the chip.
+                val isSelected = index == selectedIndex && !skipFocused
                 val textColor = if (isSelected) DumbTheme.Colors.Yellow else DumbTheme.Colors.Gray
 
                 BasicText(

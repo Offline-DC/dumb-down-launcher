@@ -40,6 +40,7 @@ import com.offlineinc.dumbdownlauncher.ui.IntentChoiceScreen
 import com.offlineinc.dumbdownlauncher.ui.LinkingChoiceScreen
 import com.offlineinc.dumbdownlauncher.ui.MouseTutorialScreen
 import com.offlineinc.dumbdownlauncher.ui.PairingScreen
+import com.offlineinc.dumbdownlauncher.ui.SkipSetupConfirmationScreen
 
 
 const val ALL_APPS = "__ALL_APPS__"
@@ -353,11 +354,23 @@ class MainActivity : AppCompatActivity() {
                                 // by tapping "device setup" in AllAppsActivity, which
                                 // clears the flag in onResume's consumeShowDialog
                                 // handler.
-                                Log.d("ONBOARDING", "User chose 'skip setup' on linking screen — persisting skip flag and going home")
+                                //
+                                // Before dropping them on the home screen, show a
+                                // brief confirmation that explains how to come back
+                                // to device setup later — see [SkipSetupConfirmationScreen].
+                                Log.d("ONBOARDING", "User chose 'skip setup' on linking screen — persisting skip flag and showing confirmation")
                                 PlatformPreferences.setSetupSkipped(this@MainActivity, true)
                                 isDeviceSetupReentry.value = false
-                                onboardingStep.value = null
+                                onboardingStep.value = "skip_confirmation"
                             }
+                        )
+                    }
+                    "skip_confirmation" -> {
+                        // Shown after the user picks "skip setup" on the
+                        // linking screen. The skip flag has already been
+                        // persisted; OK here just dismisses to home.
+                        SkipSetupConfirmationScreen(
+                            onOk = { onboardingStep.value = null }
                         )
                     }
                     "intent" -> {
