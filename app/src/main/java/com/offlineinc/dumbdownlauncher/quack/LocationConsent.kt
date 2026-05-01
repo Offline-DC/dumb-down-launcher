@@ -14,7 +14,7 @@ private const val TAG = "LocationConsent"
  * The launcher used to unconditionally prewarm + periodically refresh the
  * persisted location cache (via [QuackLocationHelper] / [QuackLocationRefreshWorker]).
  * That meant every boot fetched coarse location and a periodic worker fetched
- * it again every 6 hours — even if the user never opened the two apps that
+ * it again hourly — even if the user never opened the two apps that
  * use location (quack and weather). Now we wait until the user has accepted
  * the location ask in either of those apps before doing any of that work.
  */
@@ -58,7 +58,7 @@ object LocationConsent {
             }
         }, "LocationConsent-prewarm").start()
 
-        // Schedule the periodic 6-hourly background refresh so the cache
+        // Schedule the periodic 1-hour background refresh so the cache
         // stays fresh without the user having to reopen the app.
         QuackLocationRefreshWorker.schedule(appCtx)
     }

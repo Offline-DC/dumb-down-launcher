@@ -104,8 +104,10 @@ class DumbDownApp : Application() {
                 }
             }
 
-            // Periodic 6-hour background refresh of the persisted location cache,
-            // so the < 6 h freshness window is always satisfied without any UI work.
+            // Periodic 1-hour background refresh of the persisted location cache,
+            // so intercity travel (e.g. DC→NYC by train) lands inside the trip
+            // rather than after it. BeaconDB is the primary path so each fire
+            // is cheap; GPS fallback only runs when BeaconDB fails.
             QuackLocationRefreshWorker.schedule(this)
         } else {
             // Consent not yet granted — cancel any previously-scheduled periodic
@@ -427,10 +429,10 @@ class DumbDownApp : Application() {
             // Disable Android's Wi-Fi scan throttle (default 4 scans / 2 min
             // for foreground apps, ~1 scan / 30 min in background) so that
             // BeaconDB-based geolocation gets fresh BSSIDs on every request.
-            // Without this the periodic 6-h refresh worker can fall back to
+            // Without this the periodic 1-h refresh worker can fall back to
             // cell-only fixes, and the very first cold-boot scan after a
             // fresh install may return stale results. Negligible battery
-            // impact at our actual scan rate (~5–10 scans/day).
+            // impact at our actual scan rate (~24–30 scans/day).
             "disable_wifi_scan_throttle" to {
                 try {
                     val proc = Runtime.getRuntime().exec(

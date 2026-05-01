@@ -185,7 +185,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Called when the user first enters the quack screen (or regrants
      * location permission). Uses the persisted location populated by the
-     * boot prewarm + 6-hourly refresh worker and fetches a fresh batch of
+     * boot prewarm + hourly refresh worker and fetches a fresh batch of
      * quacks — never blocks on a fresh GPS fix, so opening the feed is
      * always fast. If the persisted cache is empty (fresh install, hasn't
      * had a fix yet), falls back to the full request flow via [loadFeed]
@@ -203,7 +203,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Called when the user presses the "refresh" soft key on the feed.
      * Reloads posts only — does NOT re-request location. The persisted
-     * location is refreshed every 6 hours by [QuackLocationRefreshWorker]
+     * location is refreshed every hour by [QuackLocationRefreshWorker]
      * and at boot via the prewarm in [DumbDownApp]; the user pressing
      * refresh is asking for fresh quacks, not a fresh GPS fix.
      */
