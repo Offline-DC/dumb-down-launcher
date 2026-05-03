@@ -19,6 +19,12 @@
          inside MouseAccessibilityService (no notification needed). -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
+    <!-- Required by TelephonyManager.sendUssdRequest in the USSD fallback path
+         inside PhoneNumberReader for devices where Settings.Secure.device_phone_number
+         was never written by automated_configuration.sh. PhoneNumberReader
+         self-grants this at runtime via `su -c "pm grant …"` if the user hasn't
+         granted it through the normal runtime-permission flow. -->
+    <uses-permission android:name="android.permission.CALL_PHONE"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 

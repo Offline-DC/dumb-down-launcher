@@ -1,12 +1,18 @@
 package com.offlineinc.dumbdownlauncher.launcher
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
+import android.provider.Settings
+import android.telephony.ServiceState
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.concurrent.CountDownLatch
@@ -27,12 +33,25 @@ private const val DEFAULT_SIM_WAIT_MS = 60_000L
  * Shared utility for reading the device's own phone number.
  *
  * Tries, in order:
- * 1. SubscriptionManager (Android 13+)
- * 2. TelephonyManager.getLine1Number (deprecated but still works on older builds)
- * 3. Root fallback: Settings.Secure (written by setup script via #686# USSD query)
- * 4. Root fallback: content://telephony/siminfo (works on TCL/MediaTek)
+ * 1. USSD query to the carrier (#686# on T-Mobile / Tello) via
+ *    [TelephonyManager.sendUssdRequest]. Authoritative — bypasses the SIM's
+ *    MSISDN file and asks the carrier's HLR directly. This is the only path
+ *    that works on units where MSISDN was never written to the SIM (Settings
+ *    shows "unknown" under About Phone → My Phone Number) and the setup
+ *    script's #686# write step never landed Settings.Secure either. Result is
+ *    persisted back to Settings.Secure (and siminfo.number) so the next read
+ *    hits the fast path. The cached value is **ICCID-pinned**: every read
+ *    compares the SIM that produced the cache against the SIM currently
+ *    inserted, so a SIM swap auto-invalidates the cache and re-queries USSD.
+ * 2. Root fallback: Settings.Secure (written by setup script via #686# USSD query)
+ * 3. Root fallback: content://telephony/siminfo (works on TCL/MediaTek)
+ * 4. SubscriptionManager (Android 13+)
+ * 5. TelephonyManager.getLine1Number (deprecated but still works on older builds)
  *
- * Returns (phoneNumber, errorMessage) — one will be null.
+ * Returns (phoneNumber, errorMessage) — one will be null. The user-facing
+ * error message ("unable to read phone number from SIM") is preserved as the
+ * final fallback for the no-SIM / SIM-not-ready cases; USSD silently skips
+ * itself when the gates fail so the cascade still ends in that friendly error.
  */
 object PhoneNumberReader {
 
@@ -80,6 +99,45 @@ object PhoneNumberReader {
     private const val SU_BACKOFF_CAP_MS = 60_000L
     private const val SU_MAX_ATTEMPTS = 10
 
+    // --- USSD fallback state ---
+    //
+    // USSD is expensive (~1-3s round-trip to the carrier per attempt, real
+    // radio traffic) so we don't retry within a process unless explicitly
+    // told to via [invalidateCache]. A failure starts a backoff window; a
+    // success disables further attempts because the result has been persisted
+    // to Settings.Secure and subsequent reads hit the fast path.
+    @Volatile private var ussdAttempted: Boolean = false
+    @Volatile private var ussdLastFailureMs: Long = 0L
+    private const val USSD_BACKOFF_MS = 30_000L
+    /** Hard cap on time a single sendUssdRequest cycle may block. */
+    private const val USSD_TIMEOUT_MS = 15_000L
+    /**
+     * USSD code that asks the carrier to return the subscriber's MSISDN.
+     * `#686#` is the T-Mobile / Tello / Mint Mobile self-number query and is
+     * what `automated_configuration.sh` already uses during provisioning.
+     * Other carriers will need their own code added here later (`*#62#` /
+     * `*#100#` / etc.) — keep this a constant so it's easy to find.
+     */
+    private const val USSD_SELF_NUMBER_CODE = "#686#"
+
+    /**
+     * `TelephonyManager.SIM_STATE_LOADED` is `@hide` in the public SDK on
+     * API 30, so we can't reference it by name. Value `10` matches
+     * `TelephonyProtoEnums.SIM_STATE_LOADED`. Some MediaTek builds settle on
+     * this state instead of `SIM_STATE_READY` even with a fully-attached
+     * SIM, so we accept it explicitly alongside READY in our SIM-ready gates.
+     */
+    private const val SIM_STATE_LOADED_INTERNAL = 10
+
+    /**
+     * Settings.Secure key that stores the ICCID of the SIM that produced the
+     * cached `device_phone_number`. We compare it on every read; on mismatch
+     * (SIM swap), the stored number is invalidated and USSD re-queries the
+     * carrier. Without this pin we'd serve the previous SIM's number after
+     * a swap until something explicitly cleared Settings.Secure.
+     */
+    private const val KEY_DEVICE_PHONE_NUMBER_ICCID = "device_phone_number_iccid"
+
     /** Drop the cached number — for tests, or if the caller needs a forced re-read. */
     @JvmStatic
     fun invalidateCache() {
@@ -89,6 +147,9 @@ object PhoneNumberReader {
         // registration just completed), so give the su path a fresh shot.
         suFailureCount = 0
         suLastFailureMs = 0L
+        // Same logic for USSD — explicit retry should re-arm the network query.
+        ussdAttempted = false
+        ussdLastFailureMs = 0L
     }
 
     /**
@@ -112,9 +173,27 @@ object PhoneNumberReader {
         cachedNumber?.let { return it to null }
 
         return try {
+            // 0. USSD self-number query to the carrier. Authoritative — works on
+            //    units where the SIM has no MSISDN file (Settings shows "unknown")
+            //    and automated_configuration.sh either never ran or its #686# step
+            //    failed to write Settings.Secure. The method internally pre-checks
+            //    Settings.Secure and skips USSD when it's already populated, so this
+            //    is a no-op on already-provisioned phones — the fast path then falls
+            //    straight through to readViaSu below.
+            val ussdNumber = readViaUssd(ctx)
+            if (ussdNumber != null) {
+                Log.i(TAG, "Got phone number via USSD $USSD_SELF_NUMBER_CODE")
+                val formatted = formatE164(ussdNumber)
+                cachedNumber = formatted
+                return formatted to null
+            }
+
             // 1. Setup-script-written values (most reliable on MediaTek flip phones):
             //    automated_configuration.sh writes the number to Settings.Secure and
             //    content://telephony/siminfo during provisioning, so check these first.
+            //    If the USSD path above just ran and succeeded, this never executes
+            //    (we cached and returned). If USSD ran and persisted to Settings.Secure
+            //    but the cache write somehow lost it, this picks it up on the rebound.
             val scriptNumber = readViaSu()
             if (scriptNumber != null) {
                 Log.i(TAG, "Got phone number via setup-script store")
@@ -277,6 +356,391 @@ object PhoneNumberReader {
             }
         } catch (_: Exception) {}
         return false
+    }
+
+    /**
+     * Asks the carrier for our own MSISDN via [TelephonyManager.sendUssdRequest]
+     * (the programmatic equivalent of dialing `#686#`). Independent of every
+     * SIM-side cache, so it returns a real number on units where `tm.line1Number`,
+     * `Settings.Secure.device_phone_number`, and the siminfo content provider
+     * are all empty.
+     *
+     * Gated behind a series of cheap pre-checks; **silently** returns null on
+     * any "no SIM / SIM not yet ready / no service / wrong API level / no
+     * permission and root grant failed" condition, so the caller's failure
+     * cascade still ends with the friendly "unable to read phone number from
+     * SIM" message rather than introducing a new error path.
+     *
+     * On success the result is persisted to `Settings.Secure.device_phone_number`
+     * via `su -c "settings put …"` so subsequent reads (in this process or any
+     * other) hit the fast path through [readViaSu].
+     *
+     * MUST be called from a background thread — blocks up to [USSD_TIMEOUT_MS]
+     * waiting for the carrier callback. Auto-skips if invoked from the main
+     * looper to avoid an ANR.
+     */
+    private fun readViaUssd(ctx: Context): String? {
+        // Wrong-thread guard — sendUssdRequest is async, but we await its
+        // CountDownLatch synchronously, which would ANR if we're on main.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Log.d(TAG, "readViaUssd: skipping on main thread (would block)")
+            return null
+        }
+
+        // API gate — sendUssdRequest landed in API 26.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            Log.d(TAG, "readViaUssd: requires API 26+, have ${Build.VERSION.SDK_INT}")
+            return null
+        }
+
+        // One-shot guard — don't spam the carrier with USSD round-trips. After a
+        // miss we wait [USSD_BACKOFF_MS] before retrying within the same process.
+        // [invalidateCache] resets this so user-driven retries (REG_ERROR / SIM_ERROR
+        // OK button in BootRegistrationScreen) get a fresh shot.
+        if (ussdAttempted) {
+            val age = System.currentTimeMillis() - ussdLastFailureMs
+            if (age in 0 until USSD_BACKOFF_MS) {
+                Log.d(TAG, "readViaUssd: in backoff window (${age}ms < ${USSD_BACKOFF_MS}ms)")
+                return null
+            }
+        }
+
+        // Pre-check: if Settings.Secure already has the number AND it's pinned
+        // to the currently-inserted SIM, skip the USSD round-trip. Otherwise
+        // we'd serve a stale number after a SIM swap (the persisted value
+        // outlives the SIM that produced it).
+        //
+        // ICCID match logic:
+        //   - no current ICCID readable      → trust the cache (don't second-guess)
+        //   - no stored ICCID                → legacy install, pin lazily and trust this read
+        //   - stored == current              → same SIM as last write, fast path
+        //   - stored != current              → SIM was swapped, force fresh USSD
+        try {
+            val existing = Settings.Secure.getString(ctx.contentResolver, "device_phone_number")
+            val hasNumber = !existing.isNullOrBlank() &&
+                existing != "null" &&
+                existing.any(Char::isDigit)
+            if (hasNumber) {
+                val storedIccid = Settings.Secure.getString(
+                    ctx.contentResolver, KEY_DEVICE_PHONE_NUMBER_ICCID
+                )
+                val currentIccid = readCurrentIccid()
+                when {
+                    currentIccid == null -> {
+                        // Can't read current SIM's ICCID. Don't override the
+                        // cache on a hunch — fall back to historical behavior.
+                        Log.d(TAG, "readViaUssd: current ICCID unreadable — trusting cache")
+                        return null
+                    }
+                    storedIccid.isNullOrBlank() -> {
+                        // Legacy install: Settings.Secure has the number from
+                        // automated_configuration.sh or a pre-ICCID-tracking
+                        // build. Pin the current ICCID alongside so the next
+                        // SIM swap is detectable, and trust the cache for now.
+                        Log.i(TAG, "readViaUssd: legacy cache — pinning ICCID=$currentIccid")
+                        runSuWrite(
+                            "settings put secure $KEY_DEVICE_PHONE_NUMBER_ICCID $currentIccid",
+                            label = "$KEY_DEVICE_PHONE_NUMBER_ICCID (legacy pin)"
+                        )
+                        return null
+                    }
+                    storedIccid == currentIccid -> {
+                        Log.d(TAG, "readViaUssd: Settings.Secure populated for current SIM — skipping USSD")
+                        return null
+                    }
+                    else -> {
+                        Log.i(TAG, "readViaUssd: SIM swap detected " +
+                            "(stored=$storedIccid current=$currentIccid) — re-querying via USSD")
+                        // Fall through to fire USSD; persistPhoneNumber below
+                        // will overwrite Settings.Secure with the new pair.
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Read failure is non-fatal — fall through to USSD.
+        }
+
+        val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        if (tm == null) {
+            Log.d(TAG, "readViaUssd: no TelephonyManager")
+            return null
+        }
+
+        // SIM gate — friendly skip on no-SIM / SIM-not-ready. Accept both READY
+        // (5) and LOADED (10); some MediaTek builds settle on LOADED. See
+        // [SIM_STATE_LOADED_INTERNAL] for why we don't use the framework constant.
+        val simState = tm.simState
+        if (simState != TelephonyManager.SIM_STATE_READY &&
+            simState != SIM_STATE_LOADED_INTERNAL) {
+            Log.i(TAG, "readViaUssd: SIM not ready (simState=$simState) — skipping")
+            return null
+        }
+
+        // Service-state gate — USSD goes over the air to the carrier, so we
+        // need an actual radio attachment. If voice isn't IN_SERVICE the
+        // request will return USSD_RETURN_FAILURE anyway; cheaper to check
+        // up front than burn the full USSD timeout.
+        try {
+            val ss = tm.serviceState
+            val voiceReg = ss?.state ?: ServiceState.STATE_OUT_OF_SERVICE
+            if (voiceReg != ServiceState.STATE_IN_SERVICE) {
+                Log.i(TAG, "readViaUssd: not in service (voiceReg=$voiceReg) — skipping")
+                return null
+            }
+        } catch (e: SecurityException) {
+            // tm.serviceState requires READ_PHONE_STATE; if it's denied,
+            // proceed anyway — sendUssdRequest will fail-fast if the modem
+            // isn't ready and our timeout will catch it.
+            Log.d(TAG, "readViaUssd: serviceState read denied — proceeding anyway")
+        } catch (_: Exception) {
+            // Some MediaTek builds throw on getServiceState(); same recovery.
+        }
+
+        // Permission gate. CALL_PHONE is a runtime permission on Android 6+;
+        // if it's not granted, try a root self-grant (we have su on these
+        // devices already — same path SimInfoReader uses). If that fails,
+        // skip silently.
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CALL_PHONE)
+            != PackageManager.PERMISSION_GRANTED) {
+            Log.d(TAG, "readViaUssd: CALL_PHONE not granted — attempting root grant")
+            if (!grantCallPhoneViaRoot(ctx)) {
+                Log.w(TAG, "readViaUssd: CALL_PHONE not granted and root grant failed — skipping")
+                return null
+            }
+        }
+
+        // Pin to the active data subscription so we hit the right SIM on
+        // dual-SIM-capable builds (single-SIM devices return the same tm).
+        val activeSub = SubscriptionManager.getDefaultDataSubscriptionId()
+        val scoped = if (activeSub != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+            tm.createForSubscriptionId(activeSub)
+        } else tm
+
+        // Mark the attempt before firing — even if the dispatcher throws, we
+        // want the backoff to engage so we don't loop on a permanent failure.
+        ussdAttempted = true
+
+        val latch = CountDownLatch(1)
+        var parsed: String? = null
+        // Main looper handler is fine — the callback just decrements the
+        // latch; the caller's background thread is what blocks on await().
+        val handler = Handler(Looper.getMainLooper())
+
+        val cb = object : TelephonyManager.UssdResponseCallback() {
+            override fun onReceiveUssdResponse(
+                tm: TelephonyManager, request: String, response: CharSequence
+            ) {
+                Log.i(TAG, "readViaUssd: response received (len=${response.length})")
+                val match = Regex("""\+?\d[\d\s\-()]{8,}""").find(response.toString())?.value
+                if (match != null) {
+                    val digits = match.filter { it.isDigit() || it == '+' }
+                    parsed = formatE164(digits)
+                } else {
+                    Log.w(TAG, "readViaUssd: response had no parseable phone number")
+                }
+                latch.countDown()
+            }
+
+            override fun onReceiveUssdResponseFailed(
+                tm: TelephonyManager, request: String, failureCode: Int
+            ) {
+                val codeName = when (failureCode) {
+                    TelephonyManager.USSD_RETURN_FAILURE -> "USSD_RETURN_FAILURE"
+                    TelephonyManager.USSD_ERROR_SERVICE_UNAVAIL -> "USSD_ERROR_SERVICE_UNAVAIL"
+                    else -> "code=$failureCode"
+                }
+                Log.w(TAG, "readViaUssd: failed ($codeName) — carrier rejected or modem busy")
+                latch.countDown()
+            }
+        }
+
+        try {
+            Log.i(TAG, "readViaUssd: firing sendUssdRequest('$USSD_SELF_NUMBER_CODE')")
+            scoped.sendUssdRequest(USSD_SELF_NUMBER_CODE, cb, handler)
+        } catch (e: SecurityException) {
+            // Some OEM builds gate sendUssdRequest behind MODIFY_PHONE_STATE
+            // (signature-only). If we hit this, USSD is unavailable on this
+            // hardware — fall through to the existing root paths.
+            Log.w(TAG, "readViaUssd: SecurityException — ${e.message}")
+            ussdLastFailureMs = System.currentTimeMillis()
+            return null
+        } catch (e: Exception) {
+            Log.w(TAG, "readViaUssd: ${e.javaClass.simpleName} — ${e.message}")
+            ussdLastFailureMs = System.currentTimeMillis()
+            return null
+        }
+
+        val completedInTime = latch.await(USSD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (!completedInTime) {
+            Log.w(TAG, "readViaUssd: timed out after ${USSD_TIMEOUT_MS}ms with no callback")
+            ussdLastFailureMs = System.currentTimeMillis()
+            return null
+        }
+
+        val result = parsed
+        if (result.isNullOrBlank()) {
+            Log.w(TAG, "readViaUssd: callback fired but no usable number")
+            ussdLastFailureMs = System.currentTimeMillis()
+            return null
+        }
+
+        // Persist to BOTH Settings.Secure AND content://telephony/siminfo so
+        // the next read (this process or any other) hits the fast path without
+        // firing USSD again. Writing only Settings.Secure leaves
+        // SimInfoReader.readAll's primary path empty — its "fast" siminfo query
+        // would still come back partial (number=) and the BootRegistrationScreen
+        // retry loop would keep spinning until the carrier eventually OTA-pushes
+        // MSISDN to the SIM (which can take 60+ seconds). Writing to siminfo as
+        // well lights up readAll's fast path on the very next attempt.
+        // Mirrors what automated_configuration.sh would have done.
+        persistPhoneNumber(result)
+
+        // Successful USSD invalidates the existing su backoff — Settings.Secure
+        // is now populated, so the next readViaSu call is going to hit, and we
+        // want it to hit immediately rather than wait through any prior backoff.
+        suFailureCount = 0
+        suLastFailureMs = 0L
+
+        return result
+    }
+
+    /**
+     * Grants `CALL_PHONE` to ourselves via `su -c "pm grant …"`. Mirrors the
+     * pattern used in `UssdProbeActivity` and the rest of the codebase's `su`
+     * use. Returns true iff the permission is reported granted after the call.
+     */
+    private fun grantCallPhoneViaRoot(ctx: Context): Boolean {
+        val cmd = "pm grant ${ctx.packageName} android.permission.CALL_PHONE"
+        return try {
+            val proc = ProcessBuilder("su", "-c", cmd)
+                .redirectErrorStream(true)
+                .start()
+            if (!proc.waitFor(3_000, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "grantCallPhoneViaRoot: timed out")
+                proc.destroyForcibly()
+                return false
+            }
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.CALL_PHONE) ==
+                PackageManager.PERMISSION_GRANTED
+        } catch (e: Exception) {
+            Log.w(TAG, "grantCallPhoneViaRoot: ${e.javaClass.simpleName} — ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Writes an E.164 phone number to BOTH:
+     *   1. `Settings.Secure.device_phone_number` — read by [readViaSu] method 1
+     *   2. `content://telephony/siminfo` column `number` — read by both
+     *      [readViaSu] method 2 AND, more importantly, the fast path inside
+     *      [com.offlineinc.dumbdownlauncher.registration.SimInfoReader.readAll].
+     *      Without this write, readAll's "got all three from siminfo in one
+     *      call" path keeps coming back partial (number=) and the
+     *      BootRegistrationScreen retry loop spins until the carrier
+     *      OTA-provisions MSISDN, which can take 60+ seconds.
+     *
+     * Mirrors the dual-write pattern in `automated_configuration.sh`. Each
+     * write has its own short timeout; failures are logged but non-fatal —
+     * the in-memory cache still serves this read, and the next cold boot
+     * will fall through to USSD again.
+     *
+     * The `--where "sim_id>=0"` filter scopes the siminfo update to the
+     * currently-inserted SIM only. This matches [SimInfoReader.SIMINFO_ACTIVE_WHERE]
+     * and avoids overwriting historical rows for previously-removed SIMs (the
+     * content provider keeps a row per SIM the phone has ever seen, with
+     * `sim_id=-1` for retired ones).
+     */
+    private fun persistPhoneNumber(e164: String) {
+        // Write 1: Settings.Secure
+        runSuWrite(
+            "settings put secure device_phone_number $e164",
+            label = "Settings.Secure.device_phone_number"
+        )
+        // Write 2: telephony/siminfo number column, scoped to active SIM
+        runSuWrite(
+            "content update --uri content://telephony/siminfo " +
+                "--bind number:s:$e164 --where \"sim_id>=0\"",
+            label = "siminfo.number"
+        )
+        // Write 3: pin the cached number to the SIM that produced it. The
+        // pre-check inside readViaUssd compares this against the active SIM's
+        // ICCID on every cold-boot read; mismatch → SIM swap → force USSD
+        // re-query. Skipped (with a warning) if we can't read the ICCID right
+        // now — better to lose the swap-detection capability for one cycle
+        // than to write a bogus pin value.
+        val currentIccid = readCurrentIccid()
+        if (currentIccid != null) {
+            runSuWrite(
+                "settings put secure $KEY_DEVICE_PHONE_NUMBER_ICCID $currentIccid",
+                label = KEY_DEVICE_PHONE_NUMBER_ICCID
+            )
+        } else {
+            Log.w(TAG, "persistPhoneNumber: ICCID unreadable — skipping ICCID pin (SIM swap " +
+                "won't be detected on next read until a successful pin happens)")
+        }
+    }
+
+    /**
+     * Reads the ICCID of the currently-inserted SIM by querying the active
+     * row in `content://telephony/siminfo`. Single `su` call — cheaper than
+     * [SimInfoReader.readIccid] which falls through service calls and
+     * getprop chains, and we don't need that exhaustive search here because
+     * Settings.Secure already vouches that *some* SIM exists.
+     *
+     * Mirrors the active-SIM filter used elsewhere in this class so the
+     * post-SIM-swap row (sim_id=-1) is excluded.
+     *
+     * Uses a generous 5s timeout (vs. the [runSuCommand] default of 1500ms)
+     * because content-provider queries on the TCL/MediaTek targets routinely
+     * take 1-2s, especially on cold boot before the binder cache is warm.
+     * Falling under the default timeout gave a false "current ICCID
+     * unreadable — trusting cache" path that defeated SIM-swap detection.
+     * 5s is well within the BootRegistration retry budget and only fires
+     * on the first read after process start.
+     */
+    private fun readCurrentIccid(): String? {
+        val raw = runSuCommand(
+            cmd = "content query --uri content://telephony/siminfo " +
+                "--projection icc_id --where \"sim_id>=0\"",
+            timeoutMs = 5_000L
+        ) ?: return null
+        val match = Regex("""icc_id=([^,}\s]+)""").find(raw) ?: return null
+        val v = match.groupValues[1].trim().trim('\r', '\n')
+        return if (v.isBlank() || v.equals("NULL", ignoreCase = true) || v == "null") null else v
+    }
+
+    /**
+     * Helper for the persist writes — runs `su -c <cmd>` and logs the
+     * outcome. Returns nothing because the caller doesn't care: the
+     * in-memory cache serves the current read, and worst case is another
+     * USSD round-trip on the next cold boot.
+     *
+     * Default timeout is 5s rather than [runSuCommand]'s 1.5s default
+     * because the persist writes hit `content update` against the telephony
+     * provider, which routinely takes 1-3s on the TCL/MediaTek targets and
+     * occasionally pushes past 2s on cold boot. 2s timeouts produced false
+     * "persist[…]: timed out" warnings even when the write was about to
+     * complete; 5s comfortably covers the observed range without making the
+     * happy path feel slow.
+     */
+    private fun runSuWrite(cmd: String, label: String, timeoutMs: Long = 5_000L) {
+        try {
+            val proc = ProcessBuilder("su", "-c", cmd)
+                .redirectErrorStream(true)
+                .start()
+            if (!proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "persist[$label]: timed out after ${timeoutMs}ms")
+                proc.destroyForcibly()
+                return
+            }
+            if (proc.exitValue() == 0) {
+                Log.i(TAG, "persist[$label]: ok")
+            } else {
+                Log.w(TAG, "persist[$label]: exit=${proc.exitValue()}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "persist[$label]: ${e.javaClass.simpleName} — ${e.message}")
+        }
     }
 
     private fun readViaSu(): String? {
