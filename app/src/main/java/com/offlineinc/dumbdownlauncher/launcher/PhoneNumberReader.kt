@@ -561,6 +561,14 @@ object PhoneNumberReader {
 
         val latch = CountDownLatch(1)
         var parsed: String? = null
+        // Track which callback fired so the post-await branching can tell
+        // "failure callback fired (parsed is null because the carrier said
+        // no)" apart from "success callback fired but parsing produced
+        // nothing (real hard failure)". Without this, both paths land in
+        // the same `parsed.isNullOrBlank()` branch and overwrite each
+        // other's classification of the failure as transient vs hard.
+        var failureCallbackFired = false
+        var failureCallbackCode = -1
         // Main looper handler is fine — the callback just decrements the
         // latch; the caller's background thread is what blocks on await().
         val handler = Handler(Looper.getMainLooper())
@@ -583,18 +591,11 @@ object PhoneNumberReader {
             override fun onReceiveUssdResponseFailed(
                 tm: TelephonyManager, request: String, failureCode: Int
             ) {
-                val codeName = when (failureCode) {
-                    TelephonyManager.USSD_RETURN_FAILURE -> "USSD_RETURN_FAILURE"
-                    TelephonyManager.USSD_ERROR_SERVICE_UNAVAIL -> "USSD_ERROR_SERVICE_UNAVAIL"
-                    else -> "code=$failureCode"
-                }
-                // USSD_RETURN_FAILURE is the "modem busy / cold-boot
-                // not-yet-ready" code. Mark it as transient so we use the
-                // shorter backoff window. Other codes (SERVICE_UNAVAIL,
-                // unknown) are treated as hard failures.
-                ussdLastFailureWasTransient =
-                    failureCode == TelephonyManager.USSD_RETURN_FAILURE
-                Log.w(TAG, "readViaUssd: failed ($codeName) — carrier rejected or modem busy")
+                // Just record what happened — let the post-await code do the
+                // logging and flag-setting in one place so we don't race
+                // against ourselves with the parse-failed branch below.
+                failureCallbackFired = true
+                failureCallbackCode = failureCode
                 latch.countDown()
             }
         }
@@ -628,12 +629,31 @@ object PhoneNumberReader {
             return null
         }
 
+        // Failure callback path. USSD_RETURN_FAILURE is "modem busy / not
+        // yet ready" — almost always transient on cold-boot, especially in
+        // the first 60-90s after boot. Other codes are hard failures.
+        // Process this BEFORE the parsed-empty check below; otherwise that
+        // branch would clobber our transient classification because parsed
+        // is also null in the failure path.
+        if (failureCallbackFired) {
+            val codeName = when (failureCallbackCode) {
+                TelephonyManager.USSD_RETURN_FAILURE -> "USSD_RETURN_FAILURE"
+                TelephonyManager.USSD_ERROR_SERVICE_UNAVAIL -> "USSD_ERROR_SERVICE_UNAVAIL"
+                else -> "code=$failureCallbackCode"
+            }
+            Log.w(TAG, "readViaUssd: failed ($codeName) — carrier rejected or modem busy")
+            ussdLastFailureWasTransient =
+                failureCallbackCode == TelephonyManager.USSD_RETURN_FAILURE
+            ussdLastFailureMs = System.currentTimeMillis()
+            return null
+        }
+
         val result = parsed
         if (result.isNullOrBlank()) {
-            // Callback fired but the response didn't contain a parseable
-            // number. Could be a "wrong code" carrier message, or a
-            // malformed reply. Treat as hard — retrying with the same code
-            // is unlikely to suddenly produce a different shape of response.
+            // Success callback fired but the response didn't contain a
+            // parseable number. Could be a "wrong code" carrier message or
+            // a malformed reply. Treat as hard — retrying with the same
+            // code is unlikely to produce a different shape of response.
             Log.w(TAG, "readViaUssd: callback fired but no usable number")
             ussdLastFailureWasTransient = false
             ussdLastFailureMs = System.currentTimeMillis()
