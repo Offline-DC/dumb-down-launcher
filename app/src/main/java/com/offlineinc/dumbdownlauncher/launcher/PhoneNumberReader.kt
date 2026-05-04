@@ -108,7 +108,22 @@ object PhoneNumberReader {
     // to Settings.Secure and subsequent reads hit the fast path.
     @Volatile private var ussdAttempted: Boolean = false
     @Volatile private var ussdLastFailureMs: Long = 0L
+    @Volatile private var ussdLastFailureWasTransient: Boolean = false
+    /**
+     * Default backoff after a USSD failure. Used for SecurityException, hard
+     * carrier rejections, and parse failures — anything we expect to remain
+     * broken for a while.
+     */
     private const val USSD_BACKOFF_MS = 30_000L
+    /**
+     * Shorter backoff for [TelephonyManager.USSD_RETURN_FAILURE] specifically.
+     * That code is almost always a transient "modem busy / just-attached /
+     * USSD stack still warming up" state on these MediaTek units, especially
+     * during the first 60-90s after boot. A 30s window between retries means
+     * we can sit dark for 2-3 minutes on a cold boot before the modem is
+     * actually ready to answer; 5s lets us catch the first available retry.
+     */
+    private const val USSD_BACKOFF_TRANSIENT_MS = 5_000L
     /** Hard cap on time a single sendUssdRequest cycle may block. */
     private const val USSD_TIMEOUT_MS = 15_000L
     /**
@@ -150,6 +165,7 @@ object PhoneNumberReader {
         // Same logic for USSD — explicit retry should re-arm the network query.
         ussdAttempted = false
         ussdLastFailureMs = 0L
+        ussdLastFailureWasTransient = false
     }
 
     /**
@@ -378,7 +394,18 @@ object PhoneNumberReader {
      * MUST be called from a background thread — blocks up to [USSD_TIMEOUT_MS]
      * waiting for the carrier callback. Auto-skips if invoked from the main
      * looper to avoid an ANR.
+     *
+     * Synchronized at the singleton level so only one thread can be running
+     * USSD resolution at a time. Without this, every concurrent cold-boot
+     * caller (DeviceRegistrar background pass, BootRegistrationScreen retry
+     * tick, QuackViewModel, etc.) would each fire its own sendUssdRequest;
+     * the modem would briefly enter a confused "USSD-pending" state that
+     * produces `USSD_RETURN_FAILURE` on subsequent attempts and was directly
+     * observed adding ~30s to broken-phone first-boot in the field. With the
+     * lock, queued callers wait for the in-flight attempt and re-check the
+     * cache on entry — they get the result for free if it just landed.
      */
+    @Synchronized
     private fun readViaUssd(ctx: Context): String? {
         // Wrong-thread guard — sendUssdRequest is async, but we await its
         // CountDownLatch synchronously, which would ANR if we're on main.
@@ -387,20 +414,32 @@ object PhoneNumberReader {
             return null
         }
 
+        // Double-checked cache lookup — a concurrent caller that beat us
+        // through the @Synchronized gate may have just populated the cache.
+        // Returning here saves a redundant USSD round-trip and, more
+        // importantly, prevents the modem-confusion state described above.
+        cachedNumber?.let { return it }
+
         // API gate — sendUssdRequest landed in API 26.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             Log.d(TAG, "readViaUssd: requires API 26+, have ${Build.VERSION.SDK_INT}")
             return null
         }
 
-        // One-shot guard — don't spam the carrier with USSD round-trips. After a
-        // miss we wait [USSD_BACKOFF_MS] before retrying within the same process.
-        // [invalidateCache] resets this so user-driven retries (REG_ERROR / SIM_ERROR
-        // OK button in BootRegistrationScreen) get a fresh shot.
+        // One-shot guard — don't spam the carrier with USSD round-trips. After
+        // a miss we wait before retrying within the same process. The window
+        // is shorter for transient failures (USSD_RETURN_FAILURE — almost
+        // always a still-warming modem on cold boot) than for hard ones
+        // (SecurityException, carrier service unavailable, parse failures).
+        // [invalidateCache] resets this so user-driven retries (REG_ERROR /
+        // SIM_ERROR OK button in BootRegistrationScreen) get a fresh shot.
         if (ussdAttempted) {
+            val window = if (ussdLastFailureWasTransient) USSD_BACKOFF_TRANSIENT_MS
+                         else USSD_BACKOFF_MS
             val age = System.currentTimeMillis() - ussdLastFailureMs
-            if (age in 0 until USSD_BACKOFF_MS) {
-                Log.d(TAG, "readViaUssd: in backoff window (${age}ms < ${USSD_BACKOFF_MS}ms)")
+            if (age in 0 until window) {
+                Log.d(TAG, "readViaUssd: in backoff window (${age}ms < ${window}ms, " +
+                    "transient=$ussdLastFailureWasTransient)")
                 return null
             }
         }
@@ -549,6 +588,12 @@ object PhoneNumberReader {
                     TelephonyManager.USSD_ERROR_SERVICE_UNAVAIL -> "USSD_ERROR_SERVICE_UNAVAIL"
                     else -> "code=$failureCode"
                 }
+                // USSD_RETURN_FAILURE is the "modem busy / cold-boot
+                // not-yet-ready" code. Mark it as transient so we use the
+                // shorter backoff window. Other codes (SERVICE_UNAVAIL,
+                // unknown) are treated as hard failures.
+                ussdLastFailureWasTransient =
+                    failureCode == TelephonyManager.USSD_RETURN_FAILURE
                 Log.w(TAG, "readViaUssd: failed ($codeName) — carrier rejected or modem busy")
                 latch.countDown()
             }
@@ -560,29 +605,47 @@ object PhoneNumberReader {
         } catch (e: SecurityException) {
             // Some OEM builds gate sendUssdRequest behind MODIFY_PHONE_STATE
             // (signature-only). If we hit this, USSD is unavailable on this
-            // hardware — fall through to the existing root paths.
+            // hardware — hard failure, long backoff.
             Log.w(TAG, "readViaUssd: SecurityException — ${e.message}")
+            ussdLastFailureWasTransient = false
             ussdLastFailureMs = System.currentTimeMillis()
             return null
         } catch (e: Exception) {
             Log.w(TAG, "readViaUssd: ${e.javaClass.simpleName} — ${e.message}")
+            ussdLastFailureWasTransient = false
             ussdLastFailureMs = System.currentTimeMillis()
             return null
         }
 
         val completedInTime = latch.await(USSD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         if (!completedInTime) {
+            // No callback within the timeout — typically means the modem
+            // accepted the request but never delivered a response. Treat as
+            // transient so the next BootRegistration retry tick can try again.
             Log.w(TAG, "readViaUssd: timed out after ${USSD_TIMEOUT_MS}ms with no callback")
+            ussdLastFailureWasTransient = true
             ussdLastFailureMs = System.currentTimeMillis()
             return null
         }
 
         val result = parsed
         if (result.isNullOrBlank()) {
+            // Callback fired but the response didn't contain a parseable
+            // number. Could be a "wrong code" carrier message, or a
+            // malformed reply. Treat as hard — retrying with the same code
+            // is unlikely to suddenly produce a different shape of response.
             Log.w(TAG, "readViaUssd: callback fired but no usable number")
+            ussdLastFailureWasTransient = false
             ussdLastFailureMs = System.currentTimeMillis()
             return null
         }
+
+        // Set the in-memory cache BEFORE releasing the @Synchronized lock so
+        // any thread already queued at the lock sees the result via their
+        // double-checked cache lookup on entry, rather than firing a
+        // redundant USSD round-trip. (read() also sets cachedNumber on its
+        // happy path; this is idempotent — same value, same volatile write.)
+        cachedNumber = result
 
         // Persist to BOTH Settings.Secure AND content://telephony/siminfo so
         // the next read (this process or any other) hits the fast path without
@@ -615,8 +678,13 @@ object PhoneNumberReader {
             val proc = ProcessBuilder("su", "-c", cmd)
                 .redirectErrorStream(true)
                 .start()
-            if (!proc.waitFor(3_000, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "grantCallPhoneViaRoot: timed out")
+            // 5s rather than 3s because the *first* su call after process
+            // start on a cold-booted device can take 3-5s as Magisk warms up.
+            // The previous 3s default tripped during real broken-state tests
+            // and caused readViaUssd to skip the USSD path entirely for the
+            // next ~17s while waiting for the next BootRegistration retry.
+            if (!proc.waitFor(5_000, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "grantCallPhoneViaRoot: timed out after 5s")
                 proc.destroyForcibly()
                 return false
             }
