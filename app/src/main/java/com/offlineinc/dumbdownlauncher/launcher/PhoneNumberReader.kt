@@ -3,6 +3,10 @@ package com.offlineinc.dumbdownlauncher.launcher
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -678,6 +682,21 @@ object PhoneNumberReader {
         // Mirrors what automated_configuration.sh would have done.
         persistPhoneNumber(result)
 
+        // Recover from post-USSD CSFB drop. USSD on T-Mobile/Tello forces the
+        // modem off LTE down to 2G/GSM (CSFB), and on TCL/MediaTek hardware
+        // the modem firmware fails to re-attach to LTE after USSD completes.
+        // Result: data PDP context torn down, DNS unconfigured, every HTTP
+        // call right after USSD success fails with UnknownHostException
+        // (observed in field testing — required a manual reboot to recover).
+        // Toggling airplane mode forces a clean radio re-attach back to LTE.
+        // We do it here, inside the @Synchronized block, so the read() return
+        // happens AFTER the network is back — which means DeviceRegistrar's
+        // first attempt fires against a real working network instead of a
+        // half-attached one. ~10-15s delay added to the USSD success path on
+        // a once-per-phone-lifetime cold boot; trivially cheap compared to
+        // requiring a user reboot.
+        cycleAirplaneToReattachLte(ctx)
+
         // Successful USSD invalidates the existing su backoff — Settings.Secure
         // is now populated, so the next readViaSu call is going to hit, and we
         // want it to hit immediately rather than wait through any prior backoff.
@@ -685,6 +704,93 @@ object PhoneNumberReader {
         suLastFailureMs = 0L
 
         return result
+    }
+
+    /**
+     * Toggles airplane mode on for ~3s, then off, to force the modem to drop
+     * all radio state and re-attach. Required as a post-USSD recovery on
+     * TCL/MediaTek + T-Mobile units where USSD's CSFB to GSM leaves the modem
+     * stuck on 2G with no usable data PDP context.
+     *
+     * Blocks for the full toggle cycle plus a bounded wait for the network to
+     * come back as VALIDATED (i.e. Android has confirmed end-to-end IP +
+     * DNS works, not just radio attachment). Worst-case ~15s; typical ~8s.
+     *
+     * Fails open: if any step times out or errors, we return and the caller
+     * proceeds anyway. The downstream HTTP retries in DeviceRegistrar will
+     * pick up the slack if the toggle didn't complete cleanly.
+     */
+    private fun cycleAirplaneToReattachLte(ctx: Context) {
+        Log.i(TAG, "cycleAirplaneToReattachLte: dropping radio to clear post-USSD CSFB stuck-on-2G state")
+
+        // Step 1: airplane on. Both writes are needed — the global setting
+        // changes the system state, the broadcast wakes up the radio HAL.
+        // Some MediaTek builds only respect one or the other.
+        runSuWrite("settings put global airplane_mode_on 1", "airplane_mode_on=1")
+        runSuWrite(
+            "am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true",
+            "airplane broadcast (on)"
+        )
+
+        // Wait for the modem to fully drop. Empirically 3s is the sweet
+        // spot on TCL Flip Go — shorter and the modem hasn't actually
+        // detached yet, longer and we're just adding latency.
+        try { Thread.sleep(3_000L) } catch (_: InterruptedException) {}
+
+        // Step 2: airplane off — same dual write.
+        runSuWrite("settings put global airplane_mode_on 0", "airplane_mode_on=0")
+        runSuWrite(
+            "am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false",
+            "airplane broadcast (off)"
+        )
+
+        // Step 3: wait for end-to-end network connectivity to come back.
+        // Using NET_CAPABILITY_VALIDATED (not just INTERNET) means we only
+        // unblock once Android has actually confirmed DNS and IP work via
+        // its captive-portal probe — exactly the signal we wished
+        // NetworkUtils was using during normal boot.
+        waitForValidatedNetwork(ctx, timeoutMs = 15_000L)
+
+        Log.i(TAG, "cycleAirplaneToReattachLte: complete — LTE re-attach should be active")
+    }
+
+    /**
+     * Blocks up to [timeoutMs] waiting for any network with both `INTERNET`
+     * and `VALIDATED` capabilities. Returns silently in either case
+     * (success or timeout); the caller's HTTP retries handle the timeout
+     * case if the radio re-attach didn't finish in time.
+     */
+    private fun waitForValidatedNetwork(ctx: Context, timeoutMs: Long) {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        if (cm == null) {
+            Log.w(TAG, "waitForValidatedNetwork: no ConnectivityManager")
+            return
+        }
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .build()
+
+        val latch = CountDownLatch(1)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.i(TAG, "waitForValidatedNetwork: network available + validated")
+                latch.countDown()
+            }
+        }
+
+        try {
+            cm.registerNetworkCallback(request, callback)
+            val ok = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!ok) {
+                Log.w(TAG, "waitForValidatedNetwork: timed out after ${timeoutMs}ms — proceeding anyway")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "waitForValidatedNetwork: ${e.javaClass.simpleName} — ${e.message}")
+        } finally {
+            try { cm.unregisterNetworkCallback(callback) } catch (_: Exception) {}
+        }
     }
 
     /**
