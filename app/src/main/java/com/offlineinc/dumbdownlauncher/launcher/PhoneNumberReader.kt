@@ -682,20 +682,13 @@ object PhoneNumberReader {
         // Mirrors what automated_configuration.sh would have done.
         persistPhoneNumber(result)
 
-        // Recover from post-USSD CSFB drop. USSD on T-Mobile/Tello forces the
-        // modem off LTE down to 2G/GSM (CSFB), and on TCL/MediaTek hardware
-        // the modem firmware fails to re-attach to LTE after USSD completes.
-        // Result: data PDP context torn down, DNS unconfigured, every HTTP
-        // call right after USSD success fails with UnknownHostException
-        // (observed in field testing — required a manual reboot to recover).
-        // Toggling airplane mode forces a clean radio re-attach back to LTE.
-        // We do it here, inside the @Synchronized block, so the read() return
-        // happens AFTER the network is back — which means DeviceRegistrar's
-        // first attempt fires against a real working network instead of a
-        // half-attached one. ~10-15s delay added to the USSD success path on
-        // a once-per-phone-lifetime cold boot; trivially cheap compared to
-        // requiring a user reboot.
-        cycleAirplaneToReattachLte(ctx)
+        // NOTE: USSD's CSFB-to-GSM transition can leave the modem stuck on
+        // 2G with a torn-down data PDP context. We do NOT recover here
+        // unconditionally — the recovery (toggling airplane mode via
+        // [cycleAirplaneToReattachLte]) is reactive and triggered by
+        // DeviceRegistrar when its first HTTP attempt fails with a network
+        // error. That way phones whose modems re-attach cleanly don't pay
+        // the ~15s recovery cost for a problem they don't have.
 
         // Successful USSD invalidates the existing su backoff — Settings.Secure
         // is now populated, so the next readViaSu call is going to hit, and we
@@ -712,6 +705,11 @@ object PhoneNumberReader {
      * TCL/MediaTek + T-Mobile units where USSD's CSFB to GSM leaves the modem
      * stuck on 2G with no usable data PDP context.
      *
+     * Public — invoked reactively from [com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar]
+     * the first time a network HTTP call fails with a network-level error.
+     * NOT called from [readViaUssd] anymore so phones whose modems re-attach
+     * cleanly (no CSFB stuck-on-2G bug) don't pay the toggle cost.
+     *
      * Blocks for the full toggle cycle plus a bounded wait for the network to
      * come back as VALIDATED (i.e. Android has confirmed end-to-end IP +
      * DNS works, not just radio attachment). Worst-case ~15s; typical ~8s.
@@ -720,7 +718,8 @@ object PhoneNumberReader {
      * proceeds anyway. The downstream HTTP retries in DeviceRegistrar will
      * pick up the slack if the toggle didn't complete cleanly.
      */
-    private fun cycleAirplaneToReattachLte(ctx: Context) {
+    @JvmStatic
+    fun cycleAirplaneToReattachLte(ctx: Context) {
         Log.i(TAG, "cycleAirplaneToReattachLte: dropping radio to clear post-USSD CSFB stuck-on-2G state")
 
         // Step 1: airplane on. Both writes are needed — the global setting

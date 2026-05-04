@@ -70,6 +70,26 @@ object DeviceRegistrar {
     private val JSON_TYPE = "application/json".toMediaType()
     private val inFlight = AtomicBoolean(false)
 
+    /**
+     * Set by [postRegister] (and only that one) when its most recent failure
+     * was a network-level error (UnknownHostException / SocketTimeout /
+     * ConnectException) rather than an HTTP non-2xx response. Used by
+     * [registerNow]'s retry loop to decide whether to trigger
+     * [PhoneNumberReader.cycleAirplaneToReattachLte] — the recovery is only
+     * useful for the post-USSD CSFB-stuck-on-2G case, which manifests as
+     * DNS / connect failures, not as 4xx/5xx responses.
+     */
+    @Volatile private var lastFailureWasNetworkError: Boolean = false
+
+    /**
+     * Once-per-process guard so we don't keep re-toggling airplane mode if
+     * the recovery didn't actually fix things. The CSFB stuck-on-2G state
+     * either resolves on the first toggle or it doesn't — repeated toggles
+     * just punish the user with more "no signal" intervals. Reset only when
+     * the process restarts.
+     */
+    private val csfbRecoveryAttempted = AtomicBoolean(false)
+
     // Timeouts are deliberately generous because the user is staring at an
     // "activating ur phone..." spinner on the boot screen and we'd rather they
     // wait a little longer than see a spurious failure. The backend sometimes
@@ -185,6 +205,28 @@ object DeviceRegistrar {
                 Log.i(TAG, "registerNow: ✅ registered on attempt $attempt")
                 return true
             }
+
+            // Reactive CSFB-stuck-on-2G recovery. If postRegister failed with
+            // a transport-level error (DNS/connect/timeout — typical symptom
+            // of the post-USSD stuck-on-2G modem state on TCL/MediaTek
+            // T-Mobile units), toggle airplane mode once to force a clean
+            // LTE re-attach. Process-lifetime guard ([csfbRecoveryAttempted])
+            // ensures we only do it once per process — repeated toggles
+            // wouldn't help and just punish the user with more no-signal
+            // intervals. We skip the normal exponential backoff after a
+            // recovery attempt because the recovery itself blocks ~10-15s
+            // (which is plenty of breathing room) and we want to retry as
+            // soon as the network is validated.
+            if (lastFailureWasNetworkError &&
+                attempt < maxRetries &&
+                csfbRecoveryAttempted.compareAndSet(false, true)) {
+                Log.i(TAG, "registerNow: attempt $attempt hit a network error — " +
+                    "triggering one-shot CSFB recovery (airplane-mode toggle) before retry")
+                PhoneNumberReader.cycleAirplaneToReattachLte(ctx)
+                Log.i(TAG, "registerNow: CSFB recovery complete — retrying immediately")
+                continue  // skip the standard backoff sleep
+            }
+
             if (attempt < maxRetries) {
                 // Exponential backoff: 2s, 4s, 8s, 16s, … capped at 30s so
                 // the total retry budget is bounded even at higher maxRetries.
@@ -210,6 +252,12 @@ object DeviceRegistrar {
      * (phones, sims, phonelines, verify) with one round-trip.
      */
     private fun postRegister(imei: String, iccid: String, phoneNumber: String): Boolean {
+        // Reset the network-error flag at the start of each attempt; it'll
+        // be set to true by the IOException catch below only if the failure
+        // was a transport-level problem (couldn't reach the server). HTTP
+        // 4xx/5xx responses leave it false because the server WAS reachable
+        // and CSFB recovery wouldn't help.
+        lastFailureWasNetworkError = false
         return try {
             val body = JSONObject()
                 .put("imei", imei)
@@ -242,7 +290,13 @@ object DeviceRegistrar {
                 registered
             }
         } catch (e: IOException) {
+            // IOException covers UnknownHostException (DNS), SocketTimeoutException,
+            // ConnectException, etc. — all "couldn't reach server" failures.
+            // These are exactly the symptoms of the post-USSD CSFB stuck-on-2G
+            // state, so we flag them for the retry loop to potentially trigger
+            // airplane-mode recovery.
             Log.w(TAG, "register IO error: ${e.message}")
+            lastFailureWasNetworkError = true
             false
         }
     }
