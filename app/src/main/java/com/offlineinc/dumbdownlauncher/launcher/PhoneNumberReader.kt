@@ -173,6 +173,61 @@ object PhoneNumberReader {
     }
 
     /**
+     * Wipe every persisted phone-number store the read path consults plus the
+     * in-process cache. Used at the start of Device Setup so a stale value
+     * left over from a previous SIM (e.g. factory-imaged number from
+     * sim_setup.sh, then a subsequent SIM swap) can't masquerade as the
+     * current SIM's number.
+     *
+     * What gets cleared, and why:
+     *   1. [cachedNumber] — process-lifetime cache; re-read on next call.
+     *   2. `Settings.Secure.device_phone_number` — written by sim_setup.sh
+     *      after a successful USSD #686# query. Survives reboots and SIM
+     *      swaps, which is exactly what makes it stale.
+     *   3. `content://telephony/siminfo` `number` column for currently-
+     *      inserted SIMs (`sim_id>=0`). Also written by sim_setup.sh and
+     *      can carry a previous SIM's value if the row was re-used after a
+     *      swap. The active-SIM filter mirrors [SimInfoReader] so we don't
+     *      touch historical (`sim_id=-1`) rows; those are harmless because
+     *      every reader filters them out.
+     *
+     * Best-effort: each step is wrapped so a failing root shell on a non-
+     * rooted build doesn't take the others down. Logged at INFO so the
+     * launcher logcat clearly shows when stale data was wiped.
+     *
+     * MUST be called from a background thread — shells out to `su` per step.
+     */
+    @JvmStatic
+    fun clearStoredNumber() {
+        cachedNumber = null
+        // Reset the su-backoff so the next read after this clear isn't
+        // silently skipped because of failures from the previous SIM.
+        suFailureCount = 0
+        suLastFailureMs = 0L
+
+        try {
+            runSuCommand("settings delete secure device_phone_number")
+            Log.i(TAG, "Cleared Settings.Secure.device_phone_number")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear Settings.Secure.device_phone_number", e)
+        }
+
+        // Use sim_id>=0 to skip historical (removed-SIM) rows; same filter
+        // as SimInfoReader.SIMINFO_ACTIVE_WHERE. `>= 0` not `!= -1` because
+        // shell-quoting `!` through su -c '…' is fragile across zsh / adb /
+        // sh / Android's `content` tool.
+        try {
+            runSuCommand(
+                "content update --uri content://telephony/siminfo " +
+                    "--bind number:s: --where \"sim_id>=0\""
+            )
+            Log.i(TAG, "Cleared siminfo.number for active SIMs")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear siminfo.number", e)
+        }
+    }
+
+    /**
      * True if we're inside the exponential-backoff window since the last
      * su-fallback failure, or if we've exceeded [SU_MAX_ATTEMPTS] and should
      * stop trying altogether for this process.
@@ -958,8 +1013,21 @@ object PhoneNumberReader {
         }
 
         // Method 2: telephony siminfo (also written by setup script)
+        //
+        // The `sim_id>=0` filter pins the query to the currently-inserted SIM.
+        // Without it, the content provider returns one row per SIM the phone
+        // has ever seen — including sim_id=-1 rows for SIMs that have been
+        // removed — and the first-match regex below would happily return a
+        // previous SIM's number on a SIM-swapped phone. This mirrors the same
+        // filter SimInfoReader.SIMINFO_ACTIVE_WHERE applies for the same reason.
+        // `>= 0` (not `!= -1`) is used because shell-quoting `!` through
+        // `su -c '…'` is fragile across zsh / adb / sh / the Android `content`
+        // tool; `>= 0` is equivalent and survives every layer unescaped.
         try {
-            val cp = runSuCommand("content query --uri content://telephony/siminfo --projection number")
+            val cp = runSuCommand(
+                "content query --uri content://telephony/siminfo " +
+                    "--projection number --where \"sim_id>=0\""
+            )
             if (cp != null) {
                 val match = Regex("""number=([^,}\s]+)""").find(cp)
                 val num = match?.groupValues?.get(1)?.trim()

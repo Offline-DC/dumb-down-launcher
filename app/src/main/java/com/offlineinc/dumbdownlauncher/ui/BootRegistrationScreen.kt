@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.offlineinc.dumbdownlauncher.R
+import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
@@ -144,6 +145,28 @@ fun BootRegistrationScreen(
      * main thread.
      */
     suspend fun runOnce() {
+        // Wipe any previously-persisted phone number BEFORE we read the SIM.
+        //
+        // sim_setup.sh writes the carrier-resolved number to
+        // Settings.Secure.device_phone_number and to the siminfo.number
+        // column. Those writes survive reboots and SIM swaps, so a phone
+        // that was factory-imaged with a test SIM and then had its SIM
+        // replaced will keep returning the original number from the very
+        // first PhoneNumberReader fallback path — even though the new SIM
+        // has no number on file at all.
+        //
+        // Device Setup is the user's signal that they want a fresh read of
+        // the current SIM, so we clear here unconditionally. If the current
+        // SIM doesn't have a number we'd rather show SIM_ERROR (and prompt
+        // the user to call support / re-run sim_setup.sh) than confidently
+        // surface a stale value that isn't theirs anymore.
+        //
+        // Runs on Dispatchers.IO because clearStoredNumber() shells out to
+        // `su` and would ANR on the main thread otherwise.
+        withContext(Dispatchers.IO) {
+            PhoneNumberReader.clearStoredNumber()
+        }
+
         // Grace period — duck + "quack" + "waiting for sim..." while the
         // modem finishes init. Always shown (even on re-entry) so the
         // transition into Device Setup feels intentional rather than a
