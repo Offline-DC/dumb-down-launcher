@@ -194,6 +194,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Manual trigger for the OpenBubbles weekly attachment-cleanup
+             worker. Same rationale as the call-log trigger above —
+             worst-case effect is the same wipe the worker performs at 2 AM. -->
+        <receiver
+            android:name=".openbubbles.OpenBubblesAttachmentCleanupTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_OB_ATTACHMENT_CLEANUP" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

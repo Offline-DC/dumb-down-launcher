@@ -12,6 +12,8 @@ import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesAttachmentCleanupWorker
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps
 import com.offlineinc.dumbdownlauncher.quack.LocationConsent
 import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
@@ -59,6 +61,13 @@ class DumbDownApp : Application() {
         // policy means re-scheduling on every boot is a no-op once the
         // first run has been queued.
         CallLogCleanupWorker.schedule(this)
+
+        // Weekly 2 AM wipe of OpenBubbles' attachment cache. Pairs with
+        // the openbubbles_setup_v1 migration that turns autoDownload
+        // off, so the cache only refills with attachments the user
+        // explicitly opens between runs. Skips cleanly when OpenBubbles
+        // is in the foreground (defers to the next weekly tick).
+        OpenBubblesAttachmentCleanupWorker.schedule(this)
 
         // ── All su-heavy boot tasks are serialised on bootExecutor ──────────
         // Previously these ran on separate Threads, causing 4–5 concurrent
@@ -259,6 +268,132 @@ class DumbDownApp : Application() {
             }
         } catch (e: Exception) {
             Log.w(tag, "Cannot create OpenBubbles dumb file: ${e.message}")
+        }
+    }
+
+    /**
+     * Applies opinionated OpenBubbles defaults by editing
+     * `FlutterSharedPreferences.xml` directly.
+     *
+     * Skips cleanly if OpenBubbles isn't installed or hasn't been opened
+     * yet (the prefs file is created lazily on first launch). In the
+     * "not opened yet" case the function THROWS so the migration framework
+     * leaves the migration unapplied — it'll retry on the next boot,
+     * picking up the change as soon as the user opens OpenBubbles once.
+     *
+     * The edit pattern is upsert-style per key: if the `<boolean>` line
+     * already exists with the wrong value we replace it; if it's missing
+     * entirely (older OpenBubbles versions where the user never toggled
+     * the setting) we insert it before `</map>`. If it already matches
+     * the target value we leave it alone.
+     *
+     * Settings applied:
+     *  - `flutter.autoDownload`  -> `false`  (don't pre-download attachments)
+     *  - `flutter.highPerfMode`  -> `true`   (turn on OpenBubbles' high-perf path)
+     */
+    private fun applyOpenBubblesPerfSettings(tag: String) {
+        val obPkg = "com.openbubbles.messaging"
+
+        // Skip cleanly when OB isn't installed.
+        try { packageManager.getPackageInfo(obPkg, 0) }
+        catch (_: PackageManager.NameNotFoundException) {
+            Log.d(tag, "$obPkg not installed — skipping OB perf settings migration")
+            return
+        }
+
+        val prefsPath = "/data/data/$obPkg/shared_prefs/FlutterSharedPreferences.xml"
+
+        // The prefs file doesn't exist until OpenBubbles is launched
+        // once. Throw so the migration framework keeps it pending and
+        // retries on the next boot.
+        val (_, existsOut, _) = rootExec("test -f $prefsPath && echo y || echo n")
+        if (existsOut != "y") {
+            throw IllegalStateException(
+                "$prefsPath not present yet — open OpenBubbles once and this migration will apply on the next boot"
+            )
+        }
+
+        // Quietly kill OpenBubbles so its in-memory SharedPreferences
+        // cache can't write back over our edits. The shared helper
+        // throws if OB is currently focused (avoids the crash-look),
+        // otherwise SIGKILLs the PID — its sticky foreground service
+        // restarts automatically without a visible app-died moment.
+        OpenBubblesOps.stopQuietly(tag)
+
+        // Read current contents, capture original ownership.
+        val (catExit, content, catErr) = rootExec("cat $prefsPath")
+        if (catExit != 0) {
+            throw RuntimeException("cat $prefsPath failed (exit=$catExit): $catErr")
+        }
+        val (_, ownerOut, _) = rootExec("stat -c %u:%g $prefsPath")
+        val owner = ownerOut.trim()
+
+        val targets = mapOf(
+            "flutter.autoDownload" to "false",
+            "flutter.highPerfMode" to "true",
+        )
+
+        var modified = content
+        var changes = 0
+        for ((key, desiredValue) in targets) {
+            val pattern = Regex(
+                """<boolean\s+name="${Regex.escape(key)}"\s+value="(true|false)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                val current = match.groupValues[1]
+                if (current == desiredValue) {
+                    Log.d(tag, "OB perf migration: $key already $desiredValue — no change")
+                } else {
+                    modified = pattern.replace(
+                        modified,
+                        """<boolean name="$key" value="$desiredValue" />"""
+                    )
+                    changes++
+                    Log.d(tag, "OB perf migration: $key $current -> $desiredValue")
+                }
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <boolean name=\"$key\" value=\"$desiredValue\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "OB perf migration: $key absent — inserted as $desiredValue")
+            } else {
+                Log.w(tag, "OB perf migration: prefs file missing </map> close — skipped $key")
+            }
+        }
+
+        if (changes == 0) {
+            Log.d(tag, "OB perf migration: nothing to write")
+            return
+        }
+
+        // Stage the new content in our own cacheDir (visible to root via
+        // init's mount namespace) then `cp` into place. Avoids embedding
+        // the file content in a shell heredoc, which gets ugly fast for
+        // XML with lots of quotes.
+        val tmp = java.io.File(cacheDir, "_ob_prefs_v1.xml")
+        try {
+            tmp.writeText(modified)
+            // World-readable so root cp can definitely see it through any
+            // namespace mount weirdness (root reads anything anyway, but
+            // belt-and-suspenders).
+            tmp.setReadable(true, /* ownerOnly = */ false)
+
+            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $prefsPath")
+            if (cpExit != 0) {
+                throw RuntimeException("cp to $prefsPath failed (exit=$cpExit): $cpErr")
+            }
+            if (owner.isNotEmpty()) {
+                rootExec("chown $owner $prefsPath")
+            }
+            // 660 matches what we observed on-device for FlutterSharedPreferences.xml.
+            rootExec("chmod 660 $prefsPath")
+
+            Log.d(tag, "OB perf migration: wrote $changes change(s) to $prefsPath")
+        } finally {
+            tmp.delete()
         }
     }
 
@@ -521,6 +656,38 @@ class DumbDownApp : Application() {
                 } catch (e: Exception) {
                     Log.w(tag, "Cannot remove OpenBubbles from Doze whitelist: ${e.message}")
                 }
+            },
+            // One-time OpenBubbles settings pass. Flips two values in
+            // FlutterSharedPreferences.xml:
+            //
+            //   - flutter.autoDownload  true  -> false  (no auto-fetch of attachments)
+            //   - flutter.highPerfMode  false -> true   (high-perf path on)
+            //
+            // The file is edited directly via root because OpenBubbles
+            // exposes no IPC for these. OpenBubbles is killed quietly
+            // first (see [OpenBubblesOps.stopQuietly]) so its in-memory
+            // SharedPreferences cache can't write back over our changes.
+            //
+            // THROWS when the prefs file isn't present yet (i.e.,
+            // OpenBubbles has never been opened on this device). Throwing
+            // makes the migration framework leave the migration pending
+            // and retry on the next boot.
+            //
+            // The attachment-cache wipe that used to live alongside this
+            // migration now runs as a weekly periodic worker
+            // ([OpenBubblesAttachmentCleanupWorker]) instead — once
+            // every Sunday-ish at 2 AM. That keeps the cache from
+            // accumulating long-term without piggy-backing the wipe
+            // onto a one-time migration.
+            //
+            // This key supersedes the earlier `openbubbles_perf_settings_v1`
+            // migration; the framework keys by the full string, so the
+            // old row in migrations.xml stays around but is harmless.
+            //
+            // Bump the v-suffix (-> _v2 etc.) to force every device to
+            // re-apply the settings.
+            "openbubbles_setup_v1" to {
+                applyOpenBubblesPerfSettings(tag)
             },
         )
 
