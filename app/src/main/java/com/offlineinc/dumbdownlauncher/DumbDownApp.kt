@@ -10,6 +10,7 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
+import com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.quack.LocationConsent
 import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
@@ -51,6 +52,13 @@ class DumbDownApp : Application() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
+
+        // Nightly 2 AM cleanup of the system call log — anything older than
+        // 7 days is deleted. Keeps calllog.db small on low-storage devices
+        // (TCL Flip Go) so the dialer and launcher stay responsive. KEEP
+        // policy means re-scheduling on every boot is a no-op once the
+        // first run has been queued.
+        CallLogCleanupWorker.schedule(this)
 
         // ── All su-heavy boot tasks are serialised on bootExecutor ──────────
         // Previously these ran on separate Threads, causing 4–5 concurrent

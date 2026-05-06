@@ -3,6 +3,11 @@
 
     <uses-permission android:name="android.permission.READ_CONTACTS"/>
     <uses-permission android:name="android.permission.WRITE_CONTACTS"/>
+    <!-- Nightly call-log pruning: CallLogCleanupWorker deletes rows older than
+         a week so the system calllog.db doesn't bloat on low-storage devices
+         (TCL Flip Go etc.). Self-granted at runtime via `su pm grant` from
+         the worker, mirroring the PhoneNumberReader / OpenBubbles patterns. -->
+    <uses-permission android:name="android.permission.WRITE_CALL_LOG"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
@@ -168,6 +173,19 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.offlineinc.dumbdownlauncher.QUACK_MONDAY" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Manual trigger for the call-log cleanup worker. Lets the
+             deletion logic be exercised on demand from adb, bypassing
+             WorkManager / JobScheduler entirely. Exported so `am broadcast`
+             from the shell uid can reach it; no permission required because
+             the worst case is the user's own retention policy running early. -->
+        <receiver
+            android:name=".calllog.CallLogCleanupTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_CALL_LOG_CLEANUP" />
             </intent-filter>
         </receiver>
 
