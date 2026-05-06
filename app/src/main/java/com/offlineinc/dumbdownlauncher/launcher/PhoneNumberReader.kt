@@ -738,12 +738,16 @@ object PhoneNumberReader {
         persistPhoneNumber(result)
 
         // NOTE: USSD's CSFB-to-GSM transition can leave the modem stuck on
-        // 2G with a torn-down data PDP context. We do NOT recover here
-        // unconditionally — the recovery (toggling airplane mode via
-        // [cycleAirplaneToReattachLte]) is reactive and triggered by
-        // DeviceRegistrar when its first HTTP attempt fails with a network
-        // error. That way phones whose modems re-attach cleanly don't pay
-        // the ~15s recovery cost for a problem they don't have.
+        // 2G with a torn-down data PDP context. The recovery (toggling
+        // airplane mode via [cycleAirplaneToReattachLte]) is invoked
+        // PROACTIVELY by BootRegistrationScreen on every setup pass —
+        // every phone pays the ~5-8s toggle cost so calls/SMS are
+        // guaranteed to work after registration completes. We don't fire
+        // it from here so the proactive caller controls UI state ("finishing
+        // sim registration...") around the bounce. DeviceRegistrar still
+        // calls it reactively as a safety net if its first HTTP attempt
+        // fails — covers any path that bypasses BootRegistrationScreen
+        // (e.g. background re-registration via scheduleOnBoot).
 
         // Successful USSD invalidates the existing su backoff — Settings.Secure
         // is now populated, so the next readViaSu call is going to hit, and we
@@ -758,16 +762,31 @@ object PhoneNumberReader {
      * Toggles airplane mode on for ~3s, then off, to force the modem to drop
      * all radio state and re-attach. Required as a post-USSD recovery on
      * TCL/MediaTek + T-Mobile units where USSD's CSFB to GSM leaves the modem
-     * stuck on 2G with no usable data PDP context.
+     * stuck on 2G with no usable data PDP context — the same stuck state also
+     * breaks IMS registration, so calls/SMS would silently fail until the
+     * next reboot or manual airplane-mode toggle without this recovery.
      *
-     * Public — invoked reactively from [com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar]
-     * the first time a network HTTP call fails with a network-level error.
-     * NOT called from [readViaUssd] anymore so phones whose modems re-attach
-     * cleanly (no CSFB stuck-on-2G bug) don't pay the toggle cost.
+     * Public — invoked from two places:
+     *
+     *   1. [com.offlineinc.dumbdownlauncher.ui.BootRegistrationScreen]
+     *      PROACTIVELY on every setup pass, between the successful SIM read
+     *      and the /register HTTP call. This is the primary caller. Every
+     *      phone pays the ~7-10s toggle cost so calls/SMS are guaranteed to
+     *      work after registration completes; the alternative ("only toggle
+     *      when registration fails") leaves a window where registration
+     *      completes successfully but the modem is still stuck on 2G with
+     *      IMS down, which the user only discovers later when they try to
+     *      make a call.
+     *
+     *   2. [com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar]
+     *      REACTIVELY when its first HTTP attempt fails with a network-level
+     *      error. Safety net for code paths that bypass BootRegistrationScreen
+     *      (e.g. the passive scheduleOnBoot re-registration), and for the
+     *      rare case where the proactive bounce didn't fully restore service.
      *
      * Blocks for the full toggle cycle plus a bounded wait for the network to
      * come back as VALIDATED (i.e. Android has confirmed end-to-end IP +
-     * DNS works, not just radio attachment). Worst-case ~15s; typical ~8s.
+     * DNS works, not just radio attachment). Worst-case ~20s; typical ~7-10s.
      *
      * Fails open: if any step times out or errors, we return and the caller
      * proceeds anyway. The downstream HTTP retries in DeviceRegistrar will
@@ -786,10 +805,14 @@ object PhoneNumberReader {
             "airplane broadcast (on)"
         )
 
-        // Wait for the modem to fully drop. Empirically 3s is the sweet
-        // spot on TCL Flip Go — shorter and the modem hasn't actually
-        // detached yet, longer and we're just adding latency.
-        try { Thread.sleep(3_000L) } catch (_: InterruptedException) {}
+        // Wait for the modem to fully drop. Bumped from 3s → 5s to give
+        // the modem extra headroom — on slower MediaTek units 3s
+        // occasionally caught the radio mid-detach, which left IMS in a
+        // half-deregistered state and defeated the whole point of the
+        // bounce. The extra 2s is paid on every setup but is well within
+        // the FINISHING_SIM screen budget and worth it for guaranteed
+        // post-bounce IMS re-registration.
+        try { Thread.sleep(5_000L) } catch (_: InterruptedException) {}
 
         // Step 2: airplane off — same dual write.
         runSuWrite("settings put global airplane_mode_on 0", "airplane_mode_on=0")
