@@ -3,10 +3,14 @@
 
     <uses-permission android:name="android.permission.READ_CONTACTS"/>
     <uses-permission android:name="android.permission.WRITE_CONTACTS"/>
-    <!-- Nightly call-log pruning: CallLogCleanupWorker deletes rows older than
-         a week so the system calllog.db doesn't bloat on low-storage devices
-         (TCL Flip Go etc.). Self-granted at runtime via `su pm grant` from
-         the worker, mirroring the PhoneNumberReader / OpenBubbles patterns. -->
+    <!-- Nightly call-log pruning: CallLogCleanupWorker keeps the newest 50
+         rows in calllog.db so the system DB doesn't bloat on low-storage
+         devices (TCL Flip Go etc.) and the dialer / launcher stay snappy.
+         READ is needed to look up the cutoff date (the 50th-newest row)
+         before WRITE deletes everything older. Both perms are self-granted
+         at runtime via `su pm grant` from the worker, mirroring the
+         PhoneNumberReader / OpenBubbles patterns. -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG"/>
     <uses-permission android:name="android.permission.WRITE_CALL_LOG"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>

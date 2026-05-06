@@ -19,21 +19,23 @@ private const val TAG = "CallLogCleanupWorker"
 /**
  * Nightly cleanup of the system call log.
  *
- * Deletes any row in `content://call_log/calls` whose `date` is older than
- * [RETENTION_DAYS] (currently 7 days). The TCL Flip Go's `calllog.db` grows
- * to tens of thousands of rows over a few months of normal use and the
- * stock dialer / our launcher both get sluggish once the table is large
- * — pruning weekly keeps the table small and the launcher snappy.
+ * Keeps the newest [MAX_KEPT_ENTRIES] (currently 50) rows in
+ * `content://call_log/calls` and deletes the rest. The TCL Flip Go's
+ * `calllog.db` grows to tens of thousands of rows over a few months of
+ * normal use and the stock dialer / our launcher both get sluggish once
+ * the table is large — capping the table at a small fixed size keeps the
+ * launcher snappy regardless of call frequency.
+ *
+ * Implemented as a two-step against the content provider: first find the
+ * `date` of the [MAX_KEPT_ENTRIES]-th newest row, then `DELETE WHERE date <
+ * that`. Going through the provider (rather than poking the SQLite file
+ * directly) keeps the provider's caches and any concurrent dialer reads
+ * consistent.
  *
  * Runs once every 24 hours with the first fire anchored to the next
  * occurrence of [TARGET_HOUR_LOCAL] (2 AM local time). 2 AM is chosen
  * because the phone is almost certainly idle, no calls are landing, and
  * any WorkManager flex-window jitter still lands well before morning use.
- *
- * Designed to be cheap (single SQL DELETE through the official content
- * provider) and safe — deletion goes through the contacts provider rather
- * than poking the SQLite file directly, so the provider's own caches and
- * any concurrent dialer reads stay consistent.
  *
  * [doWork] delegates to [runCleanupNow] in the companion. The same helper
  * is used by [CallLogCleanupTriggerReceiver] for adb-driven manual runs,
@@ -54,18 +56,29 @@ class CallLogCleanupWorker(
     companion object {
         private const val WORK_NAME = "call_log_cleanup"
 
-        /** How many days of call history to keep. Anything older is deleted. */
-        const val RETENTION_DAYS = 7L
+        /**
+         * How many of the most recent call-log rows to keep. Anything older
+         * than the [MAX_KEPT_ENTRIES]-th newest row is deleted on each run.
+         */
+        const val MAX_KEPT_ENTRIES = 50
 
         /** Target local-time hour for the nightly run. */
         private const val TARGET_HOUR_LOCAL = 2  // 2 AM local time
 
         /**
          * Synchronous cleanup. Self-grants `WRITE_CALL_LOG` via root if
-         * needed, then deletes call-log rows older than [RETENTION_DAYS].
+         * needed, then trims `call_log` down to the newest
+         * [MAX_KEPT_ENTRIES] rows.
          *
-         * Returns the number of rows deleted, or `-1` if the permission
-         * couldn't be obtained, or `0` if the delete itself threw.
+         * Two-step: first looks up the `date` of the
+         * [MAX_KEPT_ENTRIES]-th newest row (via `ORDER BY date DESC LIMIT
+         * 1 OFFSET MAX_KEPT_ENTRIES-1`), then deletes every row strictly
+         * older than that. If the table already has ≤ [MAX_KEPT_ENTRIES]
+         * rows the cutoff query returns nothing and we no-op.
+         *
+         * Returns the number of rows deleted, `0` if there was nothing to
+         * trim or the delete itself threw, or `-1` if the permission
+         * couldn't be obtained.
          *
          * Safe to call from any background thread; not safe on the main
          * thread (does I/O via `su` and the contacts provider).
@@ -74,23 +87,56 @@ class CallLogCleanupWorker(
         fun runCleanupNow(context: Context): Int {
             val ctx = context.applicationContext
 
-            ensureWriteCallLogPermission(ctx)
-            val granted = ContextCompat.checkSelfPermission(
+            // Both READ and WRITE are needed: READ for the cutoff lookup
+            // (Step 1, ContentResolver.query) and WRITE for the actual
+            // delete (Step 2). Self-grant both via root if missing.
+            ensureCallLogPermissions(ctx)
+            val readGranted = ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.READ_CALL_LOG,
+            ) == PackageManager.PERMISSION_GRANTED
+            val writeGranted = ContextCompat.checkSelfPermission(
                 ctx, Manifest.permission.WRITE_CALL_LOG,
             ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                Log.w(TAG, "runCleanupNow: WRITE_CALL_LOG not granted and root self-grant failed — skipping")
+            if (!readGranted || !writeGranted) {
+                Log.w(TAG, "runCleanupNow: call-log perms not granted (read=$readGranted write=$writeGranted) and root self-grant failed — skipping")
                 return -1
             }
 
-            val cutoffMs = System.currentTimeMillis() - RETENTION_DAYS * 24L * 60L * 60L * 1000L
+            // Step 1: find the date of the Nth-newest row. The CallLog
+            // provider passes `sortOrder` straight through to SQLite, so
+            // standard `ORDER BY ... LIMIT 1 OFFSET N-1` works. If the
+            // table has < MAX_KEPT_ENTRIES rows the cursor is empty.
+            val cutoffDate: Long? = try {
+                ctx.contentResolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    arrayOf(CallLog.Calls.DATE),
+                    null,
+                    null,
+                    "${CallLog.Calls.DATE} DESC LIMIT 1 OFFSET ${MAX_KEPT_ENTRIES - 1}",
+                )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+            } catch (e: Exception) {
+                Log.w(TAG, "runCleanupNow: cutoff query failed — ${e.javaClass.simpleName}: ${e.message}")
+                return 0
+            }
+
+            if (cutoffDate == null) {
+                Log.i(TAG, "runCleanupNow: ≤ $MAX_KEPT_ENTRIES rows in call log — nothing to delete")
+                return 0
+            }
+
+            // Step 2: delete everything strictly older than the cutoff. We
+            // use `<` rather than `<=` so any tied-timestamp rows at the
+            // boundary are kept — date is in milliseconds so ties are
+            // essentially impossible in practice, but keeping a couple
+            // extra rows is benign while accidentally pruning the 50th
+            // would not be.
             return try {
                 val deleted = ctx.contentResolver.delete(
                     CallLog.Calls.CONTENT_URI,
                     "${CallLog.Calls.DATE} < ?",
-                    arrayOf(cutoffMs.toString()),
+                    arrayOf(cutoffDate.toString()),
                 )
-                Log.i(TAG, "runCleanupNow: deleted $deleted call-log rows older than $RETENTION_DAYS days (cutoff=$cutoffMs ms)")
+                Log.i(TAG, "runCleanupNow: deleted $deleted call-log rows, keeping newest $MAX_KEPT_ENTRIES (cutoff date=$cutoffDate ms)")
                 deleted
             } catch (e: SecurityException) {
                 Log.w(TAG, "runCleanupNow: SecurityException — ${e.message}")
@@ -102,31 +148,43 @@ class CallLogCleanupWorker(
         }
 
         /**
-         * Self-grants `WRITE_CALL_LOG` via `su -c "pm grant …"` if it isn't
-         * already granted. Mirrors `PhoneNumberReader.grantCallPhoneViaRoot`
-         * and the rest of the codebase's `su` use. No-ops on devices without
+         * Self-grants `READ_CALL_LOG` and `WRITE_CALL_LOG` via
+         * `su -c "pm grant …"` for any of them that aren't already
+         * granted. Mirrors `PhoneNumberReader.grantCallPhoneViaRoot` and
+         * the rest of the codebase's `su` use. No-ops on devices without
          * root (the caller then logs and skips).
          */
-        private fun ensureWriteCallLogPermission(ctx: Context) {
-            val already = ContextCompat.checkSelfPermission(
-                ctx, Manifest.permission.WRITE_CALL_LOG,
-            ) == PackageManager.PERMISSION_GRANTED
-            if (already) return
+        private fun ensureCallLogPermissions(ctx: Context) {
+            val perms = listOf(
+                Manifest.permission.READ_CALL_LOG,
+                Manifest.permission.WRITE_CALL_LOG,
+            )
+            for (perm in perms) {
+                val already = ContextCompat.checkSelfPermission(ctx, perm) ==
+                    PackageManager.PERMISSION_GRANTED
+                if (already) continue
+                grantViaRoot(ctx, perm)
+            }
+        }
 
-            val cmd = "pm grant ${ctx.packageName} ${Manifest.permission.WRITE_CALL_LOG}"
+        /**
+         * Runs `su -c "pm grant <pkg> <perm>"` once with a 5 s timeout.
+         * 5 s rather than 3 s: first su call after process start on a
+         * cold-booted device can take 3–5 s as Magisk warms up — same
+         * rationale as `PhoneNumberReader.grantCallPhoneViaRoot`.
+         */
+        private fun grantViaRoot(ctx: Context, perm: String) {
+            val cmd = "pm grant ${ctx.packageName} $perm"
             try {
                 val proc = ProcessBuilder("su", "-c", cmd)
                     .redirectErrorStream(true)
                     .start()
-                // 5s rather than 3s: first su call after process start on a cold-
-                // booted device can take 3–5s as Magisk warms up. Same rationale
-                // as PhoneNumberReader.grantCallPhoneViaRoot.
                 if (!proc.waitFor(5_000, TimeUnit.MILLISECONDS)) {
-                    Log.w(TAG, "ensureWriteCallLogPermission: su timed out after 5s")
+                    Log.w(TAG, "grantViaRoot($perm): su timed out after 5s")
                     proc.destroyForcibly()
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "ensureWriteCallLogPermission: ${e.javaClass.simpleName} — ${e.message}")
+                Log.w(TAG, "grantViaRoot($perm): ${e.javaClass.simpleName} — ${e.message}")
             }
         }
 
