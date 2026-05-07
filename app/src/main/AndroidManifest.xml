@@ -205,6 +205,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- Manual trigger for the WhatsApp weekly rolling-attachment-
+             cleanup worker. Pairs with scripts/whatsapp_probe.sh: run the
+             probe to snapshot pre-cleanup state, fire this broadcast,
+             run the probe again to confirm the file count and disk-usage
+             numbers dropped as expected. Same exposure rationale as the
+             OB and call-log triggers — worst-case effect is running the
+             same 7-day rolling delete the worker performs at 2 AM. -->
+        <receiver
+            android:name=".whatsapp.WhatsAppAttachmentCleanupTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_WA_ATTACHMENT_CLEANUP" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
