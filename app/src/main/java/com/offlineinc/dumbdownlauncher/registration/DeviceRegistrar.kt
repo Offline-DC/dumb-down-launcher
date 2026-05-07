@@ -9,6 +9,8 @@ import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.pairing.PhoneNumberNotFoundException
+import com.google.i18n.phonenumbers.NumberParseException
+import com.google.i18n.phonenumbers.PhoneNumberUtil
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,6 +19,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -169,6 +172,14 @@ object DeviceRegistrar {
     ): Boolean {
         val ctx = context.applicationContext
         val normalizedPhone = normalizePhone(phone)
+        if (normalizedPhone == null) {
+            // Unparseable input — surface as a registration failure rather
+            // than send garbage to the backend. The backend's toE164 would
+            // 400 on the same value, so this just shifts the error one hop
+            // closer with a more actionable log line.
+            Log.e(TAG, "registerNow: phone='$phone' could not be normalized to E.164 — aborting")
+            return false
+        }
 
         // 0. Bail fast if there's no network — avoids burning through retries
         //    with backoff when the radio isn't up yet.
@@ -194,12 +205,15 @@ object DeviceRegistrar {
         }
 
         // 2. Register via single combined endpoint, with retries.
-        // Strip the phone number to bare digits (no +1) for the phoneline key,
-        // matching the format the backend expects.
-        val pathPhone = normalizedPhone.removePrefix("+").removePrefix("1")
+        // Send the canonical E.164 string ("+1XXXXXXXXXX") to the backend.
+        // The backend's /api/v1/register normalizes via libphonenumber and
+        // stores E.164 in phone_lines.phone_number. (Pre-Phase-4 the backend
+        // used to expect bare 10-digit US numbers in the phoneline key, so
+        // this caller stripped the "+1" before sending. That's no longer the
+        // case — the backend accepts both formats but stores E.164.)
         for (attempt in 1..maxRetries) {
             Log.i(TAG, "registerNow: attempt $attempt/$maxRetries")
-            val ok = postRegister(imei, iccid, pathPhone)
+            val ok = postRegister(imei, iccid, normalizedPhone)
             if (ok) {
                 persist(prefs, imei, iccid, normalizedPhone)
                 Log.i(TAG, "registerNow: ✅ registered on attempt $attempt")
@@ -498,14 +512,23 @@ object DeviceRegistrar {
             val (phone, _) = PhoneNumberReader.read(ctx)
 
             if (simReady && !imei.isNullOrBlank() && !iccid.isNullOrBlank() && !phone.isNullOrBlank()) {
-                return Triple(imei, iccid, normalizePhone(phone))
+                val normalized = normalizePhone(phone)
+                if (normalized != null) {
+                    return Triple(imei, iccid, normalized)
+                }
+                // The SIM read produced a value libphonenumber rejected
+                // (typically a still-warming modem returning a partial
+                // string, or a fictional/test number). Keep polling — a
+                // later read once the SIM is fully attached usually
+                // returns a parseable value.
+                Log.w(TAG, "waitForSimAndPhone: phone='$phone' didn't normalize to E.164 — continuing to poll")
+            } else {
+                Log.d(
+                    TAG,
+                    "Waiting for SIM (simReady=$simReady imei=${imei ?: "∅"} " +
+                        "iccid=${iccid ?: "∅"} phone=${phone ?: "∅"})"
+                )
             }
-
-            Log.d(
-                TAG,
-                "Waiting for SIM (simReady=$simReady imei=${imei ?: "∅"} " +
-                    "iccid=${iccid ?: "∅"} phone=${phone ?: "∅"})"
-            )
             try {
                 Thread.sleep(POLL_INTERVAL_MS)
             } catch (ie: InterruptedException) {
@@ -579,9 +602,13 @@ object DeviceRegistrar {
 
     private fun putPhoneline(iccid: String, phone: String): Boolean {
         val body = JSONObject().put("sim_number", iccid)
-        // Phone number is E.164-normalized (+1…); the shell script strips the
-        // leading 1 and uses bare digits in the URL path.
-        val pathPhone = phone.removePrefix("+").removePrefix("1")
+        // Send the canonical E.164 in the URL path. URL-encode it — the "+"
+        // character is technically reserved in path segments and Express
+        // automatically decodes "%2B" → "+" when populating req.params, so
+        // %2B-encoded reaches the backend as "+18048336200". Pre-migration
+        // this stripped "+1" because the backend keyed on bare 10-digit US
+        // numbers; post-Phase-5 the backend stores E.164.
+        val pathPhone = URLEncoder.encode(phone, "UTF-8")
         return putJson("$API_BASE/phonelines/$pathPhone", body, "phonelines")
     }
 
@@ -691,9 +718,36 @@ object DeviceRegistrar {
             .apply()
     }
 
-    /** Normalize to E.164 and strip dashes/whitespace for stable comparison. */
-    private fun normalizePhone(raw: String): String =
-        PhoneNumberReader.formatE164(raw.trim().replace("-", "").replace(" ", ""))
+    /**
+     * Normalize an arbitrary phone-shaped string to canonical E.164.
+     *
+     * Returns null if the input is unparseable, malformed, or not a valid
+     * number for any country. Uses libphonenumber (Google's port — same lib
+     * the backend uses via `libphonenumber-js`) so this is symmetric with
+     * what the server will accept post-Phase-4: any input shape that
+     * `toE164()` accepts on the backend will normalize to the same E.164
+     * here.
+     *
+     * Defaults to "US" region for inputs without a country code (so
+     * "8048336200" → "+18048336200"). Inputs that already include the "+"
+     * country-code prefix are parsed by their own region.
+     *
+     * Replaces a NANP-only home-rolled normalizer that stripped non-digits
+     * and assumed any 10-digit value was a US number. The new behavior is
+     * a strict superset for valid inputs, plus correctly rejects garbage
+     * like "abc" or fictional area codes (returns null instead of "+abc"
+     * which the backend would have errored on anyway).
+     */
+    private fun normalizePhone(raw: String, defaultRegion: String = "US"): String? {
+        val util = PhoneNumberUtil.getInstance()
+        return try {
+            val parsed = util.parse(raw, defaultRegion)
+            if (!util.isValidNumber(parsed)) null
+            else util.format(parsed, PhoneNumberUtil.PhoneNumberFormat.E164)
+        } catch (e: NumberParseException) {
+            null
+        }
+    }
 
     /**
      * True if this device was registered within the recent-registration

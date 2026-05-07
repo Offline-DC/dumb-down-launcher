@@ -14,8 +14,8 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 112
-        versionName = "4.52.0"
+        versionCode = 113
+        versionName = "4.53.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -85,6 +85,13 @@ dependencies {
 
     // OkHttp (WebSocket client for Type Sync)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // libphonenumber — used by DeviceRegistrar.normalizePhone to produce
+    // canonical E.164 phone numbers before sending to /api/v1/register.
+    // Replaces a NANP-only home-rolled normalizer that stripped digits and
+    // assumed US 10/11-digit shapes. Backend (post-phone-normalize migration)
+    // expects E.164 at every entry point.
+    implementation("com.googlecode.libphonenumber:libphonenumber:8.13.46")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
