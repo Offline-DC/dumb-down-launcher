@@ -50,6 +50,21 @@ object DeviceRegistrar {
     private const val KEY_PHONE = "last_phone_number"
     private const val KEY_REGISTERED_AT = "registered_at_ms"
 
+    /**
+     * Returns the IMEI we last successfully registered with the backend, or
+     * null if the device has never completed registration. Backed by the same
+     * SharedPreferences row that [persist] writes; reading is essentially
+     * free, so callers that need IMEI on a hot path (e.g. the activation-code
+     * fallback in [DumbDownApp.populateOpenBubblesActivationCode]) should
+     * prefer this over the multi-second [SimInfoReader.readImei] cascade.
+     */
+    @JvmStatic
+    fun getCachedImei(ctx: Context): String? {
+        val prefs = ctx.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_IMEI, null)?.takeIf { it.isNotBlank() }
+    }
+
     // Mirrors OFFLINE_API in dumb-phone-configuration/.env
     private const val API_BASE =
         "https://offline-dc-backend-ba4815b2bcc8.herokuapp.com/api/v1"

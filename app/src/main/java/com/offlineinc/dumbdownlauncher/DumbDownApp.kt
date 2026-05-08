@@ -12,6 +12,7 @@ import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
+import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesAttachmentCleanupWorker
 import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps
 import com.offlineinc.dumbdownlauncher.whatsapp.WhatsAppAttachmentCleanupWorker
@@ -21,7 +22,15 @@ import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationRefreshWorker
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
+import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class DumbDownApp : Application() {
     companion object {
@@ -36,6 +45,15 @@ class DumbDownApp : Application() {
 
         internal const val MIGRATIONS_PREFS = "migrations"
         internal const val MIGRATION_SWAP_KEY = "create_swap_256m"
+
+        /**
+         * Offline backend base URL — kept in sync with [DeviceRegistrar.API_BASE]
+         * (and OFFLINE_API in dumb-phone-configuration/.env). Used by the
+         * activation-code fallback to fetch a QR code when the OpenBubbles
+         * `dumb` file is empty/missing on startup.
+         */
+        private const val API_BASE =
+            "https://offline-dc-backend-ba4815b2bcc8.herokuapp.com/api/v1"
 
         /**
          * Single-threaded executor for ALL boot-time tasks that shell out to
@@ -184,6 +202,22 @@ class DumbDownApp : Application() {
         // an existing file.
         bootExecutor.execute { ensureOpenBubblesDumbFile() }
 
+        // 5b. If the dumb file ends up empty (e.g. automated_configuration.sh
+        // never ran, or its QR-code fetch failed during provisioning), pull a
+        // QR code from the Offline backend and write it ourselves. Mirrors
+        // the activation-code-write step in automated_configuration.sh so a
+        // device that boots without a code can self-heal once it has SIM +
+        // network. Runs on a dedicated thread (not bootExecutor) because it
+        // blocks waiting for SIM/network and would otherwise hold up the
+        // single-threaded boot tasks behind it.
+        Thread({
+            try {
+                populateOpenBubblesActivationCode(this)
+            } catch (e: Exception) {
+                Log.w("DumbDownApp", "populateOpenBubblesActivationCode crashed: ${e.message}", e)
+            }
+        }, "DumbDownActivation").apply { isDaemon = true }.start()
+
         // 6. Enable swap if the file exists — swap doesn't survive reboot,
         // but as the HOME launcher our onCreate runs on every boot.
         // Internally defers to the create_swap_256m migration on first run
@@ -293,6 +327,228 @@ class DumbDownApp : Application() {
             }
         } catch (e: Exception) {
             Log.w(tag, "Cannot create OpenBubbles dumb file: ${e.message}")
+        }
+    }
+
+    /**
+     * Self-heals an empty/missing OpenBubbles activation file by fetching a
+     * QR code from the Offline backend and writing it to
+     * `/data/data/com.openbubbles.messaging/files/dumb` — the same path and
+     * payload that `dumb-phone-configuration/automated_configuration.sh`
+     * writes during initial provisioning.
+     *
+     * Runs on a dedicated background thread (NOT [bootExecutor]) because it
+     * blocks waiting for the SIM to come up and for network to attach. The
+     * launcher is the HOME process so a slow modem just means we sit cheaply.
+     *
+     * Flow:
+     *   1. If `dumb` is already non-empty → skip (provisioning already wrote it).
+     *   2. Wait for IMEI to become readable (SIM ready).
+     *   3. Wait for network availability.
+     *   4. GET `${API_BASE}/qr_codes/next_available?imei=${IMEI}` — the
+     *      backend returns the existing assignment for this IMEI if one
+     *      exists, otherwise hands out the next free QR code.
+     *   5. Write the response's `code` field to the `dumb` file via
+     *      `nsenter`-wrapped `su` (same pattern as [ensureOpenBubblesDumbFile]).
+     *      Base64-encoded on the wire so JWT-style codes with `=`/`+`/etc.
+     *      survive shell parsing without escaping headaches.
+     *   6. PUT `${API_BASE}/phones/${IMEI}` with `{ qr_code_id: <id> }` to
+     *      claim the assignment, mirroring the QR ASSIGNMENT step in
+     *      automated_configuration.sh — without this the same code could be
+     *      handed to another phone on its next provisioning run.
+     *
+     * Best-effort: every error path logs a warning and bails. The next boot
+     * will retry from the top.
+     */
+    private fun populateOpenBubblesActivationCode(ctx: Context) {
+        val tag = "DumbDownApp"
+        val obDir = "/data/data/com.openbubbles.messaging/files"
+        val obFile = "$obDir/dumb"
+
+        try {
+            // 1. Skip if already populated. `stat -c %s` returns the byte
+            //    size; we compare > 0 to also treat a 0-byte placeholder
+            //    (created by ensureOpenBubblesDumbFile above) as "needs
+            //    fetching", which is the whole point of this routine.
+            val (_, sizeOut, _) = rootExec("stat -c %s $obFile 2>/dev/null || echo missing")
+            val size = sizeOut.toLongOrNull() ?: 0L
+            if (size > 0L) {
+                Log.d(tag, "OpenBubbles dumb file already populated (size=$size) — skipping QR fetch")
+                return
+            }
+            Log.i(tag, "OpenBubbles dumb file empty/missing (sizeOut=$sizeOut) — fetching activation code")
+
+            // 2. Resolve IMEI. Prefer the value DeviceRegistrar already
+            //    persisted on a previous successful registration — that's a
+            //    cheap SharedPreferences read that avoids the SimInfoReader
+            //    cascade (TelephonyManager → service call iphonesubinfo →
+            //    multiple getprops → siminfo content provider → ro.serialno),
+            //    which can take several seconds AND may need to wait for the
+            //    SIM to come up on cold boot. Only fall back to the live
+            //    cascade when there's no cached value (first-ever boot, or
+            //    storage was wiped).
+            var imei: String? = DeviceRegistrar.getCachedImei(ctx)
+            if (!imei.isNullOrBlank()) {
+                Log.i(tag, "Using cached IMEI from DeviceRegistrar: $imei")
+            } else {
+                Log.i(tag, "No cached IMEI — polling SimInfoReader (every 10s, up to 10 min)")
+                val pollIntervalMs = TimeUnit.SECONDS.toMillis(10)
+                val maxPolls = 60  // 10 min total
+                for (i in 1..maxPolls) {
+                    imei = SimInfoReader.readImei(ctx)
+                    if (!imei.isNullOrBlank()) break
+                    try {
+                        Thread.sleep(pollIntervalMs)
+                    } catch (ie: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return
+                    }
+                }
+                if (imei.isNullOrBlank()) {
+                    Log.w(tag, "IMEI not readable after extended wait — skipping QR fetch")
+                    return
+                }
+                Log.i(tag, "IMEI ready (live read): $imei")
+            }
+
+            // 3. Wait for network. Mirrors DeviceRegistrar.awaitNetwork.
+            if (!NetworkUtils.isNetworkAvailable(ctx)) {
+                val lock = Object()
+                val ready = AtomicBoolean(false)
+                NetworkUtils.whenNetworkAvailable(ctx) {
+                    synchronized(lock) {
+                        ready.set(true)
+                        lock.notifyAll()
+                    }
+                }
+                synchronized(lock) {
+                    while (!ready.get()) {
+                        try {
+                            lock.wait()
+                        } catch (ie: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            return
+                        }
+                    }
+                }
+            }
+            Log.i(tag, "Network available — fetching QR code from $API_BASE")
+
+            // Re-check the dumb file size after the SIM/network waits — a
+            // concurrent code drop (e.g. an operator running
+            // automated_configuration.sh while we slept) means we don't need
+            // to hit the API at all.
+            val (_, recheckSize, _) = rootExec("stat -c %s $obFile 2>/dev/null || echo 0")
+            if ((recheckSize.toLongOrNull() ?: 0L) > 0L) {
+                Log.i(tag, "dumb file populated during wait — skipping QR fetch")
+                return
+            }
+
+            // 4. GET /qr_codes/next_available?imei=...
+            val client = OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .callTimeout(60, TimeUnit.SECONDS)
+                .build()
+            val qrUrl = "$API_BASE/qr_codes/next_available?imei=$imei"
+            val qrReq = Request.Builder().url(qrUrl).get().build()
+            Log.d(tag, "HTTP GET $qrUrl")
+
+            var qrCode: String? = null
+            var qrId: Long = -1L
+            client.newCall(qrReq).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    Log.w(tag, "qr_codes/next_available HTTP ${resp.code} body=${resp.body?.string()}")
+                    return
+                }
+                val bodyStr = resp.body?.string().orEmpty()
+                if (bodyStr.isBlank()) {
+                    Log.w(tag, "qr_codes/next_available returned empty body")
+                    return
+                }
+                try {
+                    val json = JSONObject(bodyStr)
+                    qrCode = json.optString("code", "").takeIf { it.isNotBlank() }
+                    qrId = json.optLong("id", -1L)
+                } catch (e: Exception) {
+                    Log.w(tag, "qr_codes/next_available unparseable response: $bodyStr")
+                    return
+                }
+            }
+            val code = qrCode
+            if (code.isNullOrBlank()) {
+                Log.w(tag, "qr_codes/next_available returned no usable code (id=$qrId)")
+                return
+            }
+            Log.i(tag, "QR code retrieved (id=$qrId, codePrefix=${code.take(20)}…)")
+
+            // 5a. Force-stop OpenBubbles before touching the dumb file.
+            //     OpenBubbles only reads the activation code on app launch
+            //     (its DartWorker / APNService startup path); a process that
+            //     was already running with no code stays in its
+            //     "unactivated" state until we kick it. Stopping it here
+            //     guarantees that the next time it's launched (whether by
+            //     the user, a notification, or its own foreground-service
+            //     auto-start) it picks up the freshly written code.
+            //     Best-effort — non-zero exit just means the package
+            //     wasn't running, which is exactly what we want anyway.
+            val (stopExit, stopOut, stopErr) = rootExec(
+                "am force-stop com.openbubbles.messaging"
+            )
+            if (stopExit == 0) {
+                Log.i(tag, "Force-stopped com.openbubbles.messaging before writing activation code")
+            } else {
+                Log.d(tag, "force-stop returned exit=$stopExit out=$stopOut err=$stopErr (non-fatal)")
+            }
+
+            // 5b. Write to dumb file. Base64-encode the code so the inner shell
+            //    doesn't have to deal with `=` / `+` / `/` from JWT-shaped
+            //    payloads. The base64 alphabet is shell-safe (no quotes, no
+            //    whitespace, no metacharacters) so the whole command can pass
+            //    through rootExec's shellEscape unchanged.
+            val b64 = android.util.Base64.encodeToString(
+                code.toByteArray(Charsets.UTF_8),
+                android.util.Base64.NO_WRAP
+            )
+            val writeCmd =
+                "mkdir -p $obDir && " +
+                "echo $b64 | base64 -d > $obFile && " +
+                "chown -R \$(stat -c %u:%g /data/data/com.openbubbles.messaging) $obDir"
+            val (writeExit, writeOut, writeErr) = rootExec(writeCmd)
+            if (writeExit != 0) {
+                Log.w(tag, "write dumb file failed (exit=$writeExit out=$writeOut err=$writeErr)")
+                return
+            }
+            val (_, finalSize, _) = rootExec("stat -c %s $obFile 2>/dev/null || echo 0")
+            Log.i(tag, "Wrote QR code to $obFile (size=$finalSize) ✔")
+
+            // 6. PUT /phones/{imei} {qr_code_id: id} — claim the assignment.
+            //    Same step as the "QR CODE ASSIGNMENT" stanza in
+            //    automated_configuration.sh; without it the same code can be
+            //    handed to a different phone next time.
+            if (qrId > 0L) {
+                try {
+                    val assignBody = JSONObject().put("qr_code_id", qrId)
+                    val assignReq = Request.Builder()
+                        .url("$API_BASE/phones/$imei")
+                        .put(assignBody.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    Log.d(tag, "HTTP PUT ${assignReq.url} body=$assignBody")
+                    client.newCall(assignReq).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            Log.i(tag, "QR code $qrId assigned to phone $imei (HTTP ${resp.code}) ✔")
+                        } else {
+                            Log.w(tag, "QR assignment HTTP ${resp.code} body=${resp.body?.string()}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "QR assignment failed: ${e.message}")
+                }
+            } else {
+                Log.w(tag, "Skipping QR assignment PUT — response had no usable id")
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "populateOpenBubblesActivationCode: ${e.message}", e)
         }
     }
 
