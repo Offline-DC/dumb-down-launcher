@@ -173,6 +173,61 @@ object PhoneNumberReader {
     }
 
     /**
+     * Wipe every persisted phone-number store the read path consults plus the
+     * in-process cache. Used at the start of Device Setup so a stale value
+     * left over from a previous SIM (e.g. factory-imaged number from
+     * sim_setup.sh, then a subsequent SIM swap) can't masquerade as the
+     * current SIM's number.
+     *
+     * What gets cleared, and why:
+     *   1. [cachedNumber] — process-lifetime cache; re-read on next call.
+     *   2. `Settings.Secure.device_phone_number` — written by sim_setup.sh
+     *      after a successful USSD #686# query. Survives reboots and SIM
+     *      swaps, which is exactly what makes it stale.
+     *   3. `content://telephony/siminfo` `number` column for currently-
+     *      inserted SIMs (`sim_id>=0`). Also written by sim_setup.sh and
+     *      can carry a previous SIM's value if the row was re-used after a
+     *      swap. The active-SIM filter mirrors [SimInfoReader] so we don't
+     *      touch historical (`sim_id=-1`) rows; those are harmless because
+     *      every reader filters them out.
+     *
+     * Best-effort: each step is wrapped so a failing root shell on a non-
+     * rooted build doesn't take the others down. Logged at INFO so the
+     * launcher logcat clearly shows when stale data was wiped.
+     *
+     * MUST be called from a background thread — shells out to `su` per step.
+     */
+    @JvmStatic
+    fun clearStoredNumber() {
+        cachedNumber = null
+        // Reset the su-backoff so the next read after this clear isn't
+        // silently skipped because of failures from the previous SIM.
+        suFailureCount = 0
+        suLastFailureMs = 0L
+
+        try {
+            runSuCommand("settings delete secure device_phone_number")
+            Log.i(TAG, "Cleared Settings.Secure.device_phone_number")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear Settings.Secure.device_phone_number", e)
+        }
+
+        // Use sim_id>=0 to skip historical (removed-SIM) rows; same filter
+        // as SimInfoReader.SIMINFO_ACTIVE_WHERE. `>= 0` not `!= -1` because
+        // shell-quoting `!` through su -c '…' is fragile across zsh / adb /
+        // sh / Android's `content` tool.
+        try {
+            runSuCommand(
+                "content update --uri content://telephony/siminfo " +
+                    "--bind number:s: --where \"sim_id>=0\""
+            )
+            Log.i(TAG, "Cleared siminfo.number for active SIMs")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear siminfo.number", e)
+        }
+    }
+
+    /**
      * True if we're inside the exponential-backoff window since the last
      * su-fallback failure, or if we've exceeded [SU_MAX_ATTEMPTS] and should
      * stop trying altogether for this process.
@@ -683,12 +738,16 @@ object PhoneNumberReader {
         persistPhoneNumber(result)
 
         // NOTE: USSD's CSFB-to-GSM transition can leave the modem stuck on
-        // 2G with a torn-down data PDP context. We do NOT recover here
-        // unconditionally — the recovery (toggling airplane mode via
-        // [cycleAirplaneToReattachLte]) is reactive and triggered by
-        // DeviceRegistrar when its first HTTP attempt fails with a network
-        // error. That way phones whose modems re-attach cleanly don't pay
-        // the ~15s recovery cost for a problem they don't have.
+        // 2G with a torn-down data PDP context. The recovery (toggling
+        // airplane mode via [cycleAirplaneToReattachLte]) is invoked
+        // PROACTIVELY by BootRegistrationScreen on every setup pass —
+        // every phone pays the ~5-8s toggle cost so calls/SMS are
+        // guaranteed to work after registration completes. We don't fire
+        // it from here so the proactive caller controls UI state ("finishing
+        // sim registration...") around the bounce. DeviceRegistrar still
+        // calls it reactively as a safety net if its first HTTP attempt
+        // fails — covers any path that bypasses BootRegistrationScreen
+        // (e.g. background re-registration via scheduleOnBoot).
 
         // Successful USSD invalidates the existing su backoff — Settings.Secure
         // is now populated, so the next readViaSu call is going to hit, and we
@@ -703,16 +762,31 @@ object PhoneNumberReader {
      * Toggles airplane mode on for ~3s, then off, to force the modem to drop
      * all radio state and re-attach. Required as a post-USSD recovery on
      * TCL/MediaTek + T-Mobile units where USSD's CSFB to GSM leaves the modem
-     * stuck on 2G with no usable data PDP context.
+     * stuck on 2G with no usable data PDP context — the same stuck state also
+     * breaks IMS registration, so calls/SMS would silently fail until the
+     * next reboot or manual airplane-mode toggle without this recovery.
      *
-     * Public — invoked reactively from [com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar]
-     * the first time a network HTTP call fails with a network-level error.
-     * NOT called from [readViaUssd] anymore so phones whose modems re-attach
-     * cleanly (no CSFB stuck-on-2G bug) don't pay the toggle cost.
+     * Public — invoked from two places:
+     *
+     *   1. [com.offlineinc.dumbdownlauncher.ui.BootRegistrationScreen]
+     *      PROACTIVELY on every setup pass, between the successful SIM read
+     *      and the /register HTTP call. This is the primary caller. Every
+     *      phone pays the ~7-10s toggle cost so calls/SMS are guaranteed to
+     *      work after registration completes; the alternative ("only toggle
+     *      when registration fails") leaves a window where registration
+     *      completes successfully but the modem is still stuck on 2G with
+     *      IMS down, which the user only discovers later when they try to
+     *      make a call.
+     *
+     *   2. [com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar]
+     *      REACTIVELY when its first HTTP attempt fails with a network-level
+     *      error. Safety net for code paths that bypass BootRegistrationScreen
+     *      (e.g. the passive scheduleOnBoot re-registration), and for the
+     *      rare case where the proactive bounce didn't fully restore service.
      *
      * Blocks for the full toggle cycle plus a bounded wait for the network to
      * come back as VALIDATED (i.e. Android has confirmed end-to-end IP +
-     * DNS works, not just radio attachment). Worst-case ~15s; typical ~8s.
+     * DNS works, not just radio attachment). Worst-case ~20s; typical ~7-10s.
      *
      * Fails open: if any step times out or errors, we return and the caller
      * proceeds anyway. The downstream HTTP retries in DeviceRegistrar will
@@ -731,10 +805,14 @@ object PhoneNumberReader {
             "airplane broadcast (on)"
         )
 
-        // Wait for the modem to fully drop. Empirically 3s is the sweet
-        // spot on TCL Flip Go — shorter and the modem hasn't actually
-        // detached yet, longer and we're just adding latency.
-        try { Thread.sleep(3_000L) } catch (_: InterruptedException) {}
+        // Wait for the modem to fully drop. Bumped from 3s → 5s to give
+        // the modem extra headroom — on slower MediaTek units 3s
+        // occasionally caught the radio mid-detach, which left IMS in a
+        // half-deregistered state and defeated the whole point of the
+        // bounce. The extra 2s is paid on every setup but is well within
+        // the FINISHING_SIM screen budget and worth it for guaranteed
+        // post-bounce IMS re-registration.
+        try { Thread.sleep(5_000L) } catch (_: InterruptedException) {}
 
         // Step 2: airplane off — same dual write.
         runSuWrite("settings put global airplane_mode_on 0", "airplane_mode_on=0")
@@ -958,8 +1036,21 @@ object PhoneNumberReader {
         }
 
         // Method 2: telephony siminfo (also written by setup script)
+        //
+        // The `sim_id>=0` filter pins the query to the currently-inserted SIM.
+        // Without it, the content provider returns one row per SIM the phone
+        // has ever seen — including sim_id=-1 rows for SIMs that have been
+        // removed — and the first-match regex below would happily return a
+        // previous SIM's number on a SIM-swapped phone. This mirrors the same
+        // filter SimInfoReader.SIMINFO_ACTIVE_WHERE applies for the same reason.
+        // `>= 0` (not `!= -1`) is used because shell-quoting `!` through
+        // `su -c '…'` is fragile across zsh / adb / sh / the Android `content`
+        // tool; `>= 0` is equivalent and survives every layer unescaped.
         try {
-            val cp = runSuCommand("content query --uri content://telephony/siminfo --projection number")
+            val cp = runSuCommand(
+                "content query --uri content://telephony/siminfo " +
+                    "--projection number --where \"sim_id>=0\""
+            )
             if (cp != null) {
                 val match = Regex("""number=([^,}\s]+)""").find(cp)
                 val num = match?.groupValues?.get(1)?.trim()

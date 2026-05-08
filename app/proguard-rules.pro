@@ -16,7 +16,19 @@
 -dontwarn okio.**
 
 # ── WorkManager ───────────────────────────────────────────────────────────────
-# Workers are instantiated by reflection — keep the constructor.
+# Workers are instantiated by reflection — WorkManager calls
+# `Class.forName(name).getDeclaredConstructor(Context.class, WorkerParameters.class)`
+# from its WorkerFactory. Reified PeriodicWorkRequestBuilder<T> keeps the
+# class itself, but R8 can still strip the (Context, WorkerParameters)
+# constructor because there's no static reference to it. Keep the constructor
+# on every ListenableWorker subclass — covers Worker, CoroutineWorker, and
+# any future variant we add (UpdateCheckWorker, QuackLocationRefreshWorker,
+# QuackFirstQuackWorker, CallLogCleanupWorker).
+-keep class * extends androidx.work.ListenableWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
+# Belt-and-suspenders for the original worker so an aggressive R8 update
+# can't strip its body either.
 -keep class com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker { *; }
 
 # ── Compose / Kotlin ──────────────────────────────────────────────────────────

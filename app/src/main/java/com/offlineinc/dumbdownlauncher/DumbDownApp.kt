@@ -10,8 +10,13 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
+import com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesAttachmentCleanupWorker
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps
+import com.offlineinc.dumbdownlauncher.whatsapp.WhatsAppAttachmentCleanupWorker
+import com.offlineinc.dumbdownlauncher.whatsapp.WhatsAppOps
 import com.offlineinc.dumbdownlauncher.quack.LocationConsent
 import com.offlineinc.dumbdownlauncher.quack.LocationPermissionGranter
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
@@ -69,6 +74,43 @@ class DumbDownApp : Application() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
+
+        // Nightly 2 AM cleanup of the system call log — anything older than
+        // 7 days is deleted. Keeps calllog.db small on low-storage devices
+        // (TCL Flip Go) so the dialer and launcher stay responsive. KEEP
+        // policy means re-scheduling on every boot is a no-op once the
+        // first run has been queued.
+        CallLogCleanupWorker.schedule(this)
+
+        // Weekly 2 AM wipe of OpenBubbles' attachment cache. Pairs with
+        // the openbubbles_setup_v1 migration that turns autoDownload
+        // off, so the cache only refills with attachments the user
+        // explicitly opens between runs. Skips cleanly when OpenBubbles
+        // is in the foreground (defers to the next weekly tick).
+        OpenBubblesAttachmentCleanupWorker.schedule(this)
+
+        // Nightly 2 AM rolling cleanup of WhatsApp attachments older
+        // than 7 days, restricted to three subdirs: .Links/ (link-
+        // preview thumbnails — regenerated freely from the source URL),
+        // WhatsApp Images/, and WhatsApp Video/. Voice notes, documents,
+        // animated gifs, and audio are deliberately preserved (see
+        // WhatsAppOps.TARGET_SUBDIRS). Pairs with the whatsapp_setup_v1
+        // migration that zeroes the autodownload bitmasks, so those
+        // three dirs only refill with attachments the user explicitly
+        // opens.
+        //
+        // Unlike OpenBubbles, this worker doesn't kill WhatsApp first —
+        // WhatsApp's media lives on /sdcard rather than /data/data so
+        // there's nothing to race, and the -mtime +7 predicate
+        // guarantees we never touch in-flight downloads. CRITICALLY
+        // excludes .nomedia sentinel files; deleting them would unhide
+        // WhatsApp's private/voice-note dirs in the system Photos app —
+        // see WhatsAppOps.clearOldAttachments for details.
+        //
+        // Tighter cadence than the OpenBubbles weekly wipe because
+        // .Links/ accumulates link-preview thumbnails continuously and
+        // benefits from a daily trim cycle.
+        WhatsAppAttachmentCleanupWorker.schedule(this)
 
         // ── All su-heavy boot tasks are serialised on bootExecutor ──────────
         // Previously these ran on separate Threads, causing 4–5 concurrent
@@ -511,6 +553,281 @@ class DumbDownApp : Application() {
     }
 
     /**
+     * Applies opinionated OpenBubbles defaults by editing
+     * `FlutterSharedPreferences.xml` directly.
+     *
+     * Skips cleanly if OpenBubbles isn't installed or hasn't been opened
+     * yet (the prefs file is created lazily on first launch). In the
+     * "not opened yet" case the function THROWS so the migration framework
+     * leaves the migration unapplied — it'll retry on the next boot,
+     * picking up the change as soon as the user opens OpenBubbles once.
+     *
+     * The edit pattern is upsert-style per key: if the `<boolean>` line
+     * already exists with the wrong value we replace it; if it's missing
+     * entirely (older OpenBubbles versions where the user never toggled
+     * the setting) we insert it before `</map>`. If it already matches
+     * the target value we leave it alone.
+     *
+     * Settings applied:
+     *  - `flutter.autoDownload`  -> `false`  (don't pre-download attachments)
+     *  - `flutter.highPerfMode`  -> `true`   (turn on OpenBubbles' high-perf path)
+     */
+    private fun applyOpenBubblesPerfSettings(tag: String) {
+        val obPkg = "com.openbubbles.messaging"
+
+        // Skip cleanly when OB isn't installed.
+        try { packageManager.getPackageInfo(obPkg, 0) }
+        catch (_: PackageManager.NameNotFoundException) {
+            Log.d(tag, "$obPkg not installed — skipping OB perf settings migration")
+            return
+        }
+
+        val prefsPath = "/data/data/$obPkg/shared_prefs/FlutterSharedPreferences.xml"
+
+        // The prefs file doesn't exist until OpenBubbles is launched
+        // once. Throw so the migration framework keeps it pending and
+        // retries on the next boot.
+        val (_, existsOut, _) = rootExec("test -f $prefsPath && echo y || echo n")
+        if (existsOut != "y") {
+            throw IllegalStateException(
+                "$prefsPath not present yet — open OpenBubbles once and this migration will apply on the next boot"
+            )
+        }
+
+        // Quietly kill OpenBubbles so its in-memory SharedPreferences
+        // cache can't write back over our edits. The shared helper
+        // throws if OB is currently focused (avoids the crash-look),
+        // otherwise SIGKILLs the PID — its sticky foreground service
+        // restarts automatically without a visible app-died moment.
+        OpenBubblesOps.stopQuietly(tag)
+
+        // Read current contents, capture original ownership.
+        val (catExit, content, catErr) = rootExec("cat $prefsPath")
+        if (catExit != 0) {
+            throw RuntimeException("cat $prefsPath failed (exit=$catExit): $catErr")
+        }
+        val (_, ownerOut, _) = rootExec("stat -c %u:%g $prefsPath")
+        val owner = ownerOut.trim()
+
+        val targets = mapOf(
+            "flutter.autoDownload" to "false",
+            "flutter.highPerfMode" to "true",
+        )
+
+        var modified = content
+        var changes = 0
+        for ((key, desiredValue) in targets) {
+            val pattern = Regex(
+                """<boolean\s+name="${Regex.escape(key)}"\s+value="(true|false)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                val current = match.groupValues[1]
+                if (current == desiredValue) {
+                    Log.d(tag, "OB perf migration: $key already $desiredValue — no change")
+                } else {
+                    modified = pattern.replace(
+                        modified,
+                        """<boolean name="$key" value="$desiredValue" />"""
+                    )
+                    changes++
+                    Log.d(tag, "OB perf migration: $key $current -> $desiredValue")
+                }
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <boolean name=\"$key\" value=\"$desiredValue\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "OB perf migration: $key absent — inserted as $desiredValue")
+            } else {
+                Log.w(tag, "OB perf migration: prefs file missing </map> close — skipped $key")
+            }
+        }
+
+        if (changes == 0) {
+            Log.d(tag, "OB perf migration: nothing to write")
+            return
+        }
+
+        // Stage the new content in our own cacheDir (visible to root via
+        // init's mount namespace) then `cp` into place. Avoids embedding
+        // the file content in a shell heredoc, which gets ugly fast for
+        // XML with lots of quotes.
+        val tmp = java.io.File(cacheDir, "_ob_prefs_v1.xml")
+        try {
+            tmp.writeText(modified)
+            // World-readable so root cp can definitely see it through any
+            // namespace mount weirdness (root reads anything anyway, but
+            // belt-and-suspenders).
+            tmp.setReadable(true, /* ownerOnly = */ false)
+
+            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $prefsPath")
+            if (cpExit != 0) {
+                throw RuntimeException("cp to $prefsPath failed (exit=$cpExit): $cpErr")
+            }
+            if (owner.isNotEmpty()) {
+                rootExec("chown $owner $prefsPath")
+            }
+            // 660 matches what we observed on-device for FlutterSharedPreferences.xml.
+            rootExec("chmod 660 $prefsPath")
+
+            Log.d(tag, "OB perf migration: wrote $changes change(s) to $prefsPath")
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    /**
+     * Applies opinionated WhatsApp media defaults by editing
+     * `com.whatsapp_preferences_light.xml` directly. Direct analog of
+     * [applyOpenBubblesPerfSettings] — same upsert-or-insert shape — with
+     * three WhatsApp-specific differences:
+     *
+     *   1. The XML element type is `<int>`, not `<boolean>`. WhatsApp's
+     *      auto-download settings are integer bitmasks, not booleans:
+     *      bit 1 = images, 2 = audio, 4 = video, 8 = documents. Setting
+     *      a mask to 0 disables all four media types for that network
+     *      condition.
+     *
+     *   2. Three keys instead of two — one per network condition. Per
+     *      `scripts/whatsapp_probe.sh` (run against WhatsApp 2.26.13.72
+     *      on the TCL Flip Go), only two of the three exist by default:
+     *      `autodownload_cellular_mask` and `autodownload_wifi_mask`.
+     *      `autodownload_roaming_mask` is created lazily by WhatsApp
+     *      when the user toggles the roaming auto-download setting in
+     *      the UI; we insert it pre-zeroed so that switch flip can't
+     *      surprise us later. The upsert-or-insert pattern handles
+     *      whichever set of keys is present on a given device.
+     *
+     *   3. File mode is restored to 600, not 660. The probe captured
+     *      mode 600 on this file (OpenBubbles' FlutterSharedPreferences
+     *      file is 660). Wrong mode after the cp would either prevent
+     *      WhatsApp from reading its own settings (too restrictive) or
+     *      relax permissions (too permissive); 600 is what the file had
+     *      before our edit, so we put it back.
+     *
+     * Skips cleanly if WhatsApp isn't installed. THROWS if the prefs
+     * file isn't present yet (i.e., WhatsApp has never been opened on
+     * this device — the file is created lazily on first launch). The
+     * throw makes the migration framework leave the migration unapplied
+     * and retry on the next boot.
+     *
+     * Settings applied:
+     *  - `autodownload_cellular_mask` -> 0  (no cellular auto-download)
+     *  - `autodownload_wifi_mask`     -> 0  (no wifi auto-download)
+     *  - `autodownload_roaming_mask`  -> 0  (no roaming auto-download)
+     */
+    private fun applyWhatsAppMediaSettings(tag: String) {
+        val waPkg = "com.whatsapp"
+
+        // Skip cleanly when WhatsApp isn't installed.
+        try { packageManager.getPackageInfo(waPkg, 0) }
+        catch (_: PackageManager.NameNotFoundException) {
+            Log.d(tag, "$waPkg not installed — skipping WA media settings migration")
+            return
+        }
+
+        val prefsPath = "/data/data/$waPkg/shared_prefs/com.whatsapp_preferences_light.xml"
+
+        // The prefs file doesn't exist until WhatsApp is launched once.
+        // Throw so the migration framework keeps it pending and retries
+        // on the next boot.
+        val (_, existsOut, _) = rootExec("test -f $prefsPath && echo y || echo n")
+        if (existsOut != "y") {
+            throw IllegalStateException(
+                "$prefsPath not present yet — open WhatsApp once and this migration will apply on the next boot"
+            )
+        }
+
+        // Quietly kill WhatsApp so its in-memory SharedPreferences cache
+        // can't write back over our edits. The shared helper throws if
+        // WhatsApp is currently focused (avoids the crash-look),
+        // otherwise SIGKILLs the PIDs.
+        WhatsAppOps.stopQuietly(tag)
+
+        // Read current contents, capture original ownership.
+        val (catExit, content, catErr) = rootExec("cat $prefsPath")
+        if (catExit != 0) {
+            throw RuntimeException("cat $prefsPath failed (exit=$catExit): $catErr")
+        }
+        val (_, ownerOut, _) = rootExec("stat -c %u:%g $prefsPath")
+        val owner = ownerOut.trim()
+
+        // Bitmask: 1=images, 2=audio, 4=video, 8=documents. All three
+        // masks → 0 disables auto-download on every network condition.
+        val targets = mapOf(
+            "autodownload_cellular_mask" to "0",
+            "autodownload_wifi_mask" to "0",
+            "autodownload_roaming_mask" to "0",
+        )
+
+        var modified = content
+        var changes = 0
+        for ((key, desiredValue) in targets) {
+            val pattern = Regex(
+                """<int\s+name="${Regex.escape(key)}"\s+value="(\d+)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                val current = match.groupValues[1]
+                if (current == desiredValue) {
+                    Log.d(tag, "WA media migration: $key already $desiredValue — no change")
+                } else {
+                    modified = pattern.replace(
+                        modified,
+                        """<int name="$key" value="$desiredValue" />"""
+                    )
+                    changes++
+                    Log.d(tag, "WA media migration: $key $current -> $desiredValue")
+                }
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <int name=\"$key\" value=\"$desiredValue\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "WA media migration: $key absent — inserted as $desiredValue")
+            } else {
+                Log.w(tag, "WA media migration: prefs file missing </map> close — skipped $key")
+            }
+        }
+
+        if (changes == 0) {
+            Log.d(tag, "WA media migration: nothing to write")
+            return
+        }
+
+        // Stage the new content in our own cacheDir (visible to root via
+        // init's mount namespace) then `cp` into place. Avoids embedding
+        // the file content in a shell heredoc, which gets ugly fast for
+        // XML with lots of quotes.
+        val tmp = java.io.File(cacheDir, "_wa_prefs_v1.xml")
+        try {
+            tmp.writeText(modified)
+            // World-readable so root cp can definitely see it through any
+            // namespace mount weirdness (root reads anything anyway, but
+            // belt-and-suspenders).
+            tmp.setReadable(true, /* ownerOnly = */ false)
+
+            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $prefsPath")
+            if (cpExit != 0) {
+                throw RuntimeException("cp to $prefsPath failed (exit=$cpExit): $cpErr")
+            }
+            if (owner.isNotEmpty()) {
+                rootExec("chown $owner $prefsPath")
+            }
+            // 600 matches what we observed on-device for this file
+            // (the OpenBubbles equivalent uses 660 — WhatsApp differs).
+            rootExec("chmod 600 $prefsPath")
+
+            Log.d(tag, "WA media migration: wrote $changes change(s) to $prefsPath")
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    /**
      * Runs one-time migrations keyed by name. Each migration executes at most
      * once across app updates. Add new entries to the map below.
      */
@@ -769,6 +1086,69 @@ class DumbDownApp : Application() {
                 } catch (e: Exception) {
                     Log.w(tag, "Cannot remove OpenBubbles from Doze whitelist: ${e.message}")
                 }
+            },
+            // One-time OpenBubbles settings pass. Flips two values in
+            // FlutterSharedPreferences.xml:
+            //
+            //   - flutter.autoDownload  true  -> false  (no auto-fetch of attachments)
+            //   - flutter.highPerfMode  false -> true   (high-perf path on)
+            //
+            // The file is edited directly via root because OpenBubbles
+            // exposes no IPC for these. OpenBubbles is killed quietly
+            // first (see [OpenBubblesOps.stopQuietly]) so its in-memory
+            // SharedPreferences cache can't write back over our changes.
+            //
+            // THROWS when the prefs file isn't present yet (i.e.,
+            // OpenBubbles has never been opened on this device). Throwing
+            // makes the migration framework leave the migration pending
+            // and retry on the next boot.
+            //
+            // The attachment-cache wipe that used to live alongside this
+            // migration now runs as a weekly periodic worker
+            // ([OpenBubblesAttachmentCleanupWorker]) instead — once
+            // every Sunday-ish at 2 AM. That keeps the cache from
+            // accumulating long-term without piggy-backing the wipe
+            // onto a one-time migration.
+            //
+            // This key supersedes the earlier `openbubbles_perf_settings_v1`
+            // migration; the framework keys by the full string, so the
+            // old row in migrations.xml stays around but is harmless.
+            //
+            // Bump the v-suffix (-> _v2 etc.) to force every device to
+            // re-apply the settings.
+            "openbubbles_setup_v1" to {
+                applyOpenBubblesPerfSettings(tag)
+            },
+            // One-time WhatsApp media-settings pass. Flips three values
+            // in com.whatsapp_preferences_light.xml:
+            //
+            //   - autodownload_cellular_mask  N -> 0  (no cellular auto-download)
+            //   - autodownload_wifi_mask      N -> 0  (no wifi auto-download)
+            //   - autodownload_roaming_mask   N -> 0  (no roaming auto-download)
+            //
+            // Bitmask semantics: 1=images, 2=audio, 4=video, 8=documents.
+            // All three masks → 0 = WhatsApp never auto-downloads any
+            // media on any network condition.
+            //
+            // The file is edited directly via root because WhatsApp
+            // exposes no IPC for these. WhatsApp is killed quietly
+            // first (see [WhatsAppOps.stopQuietly]) so its in-memory
+            // SharedPreferences cache can't write back over our
+            // changes. THROWS when the prefs file isn't present yet
+            // (WhatsApp has never been opened on this device); the
+            // throw makes the migration framework leave the migration
+            // pending and retry on the next boot — same behaviour as
+            // openbubbles_setup_v1 above.
+            //
+            // The attachment-cache rolling 7-day cleanup that pairs
+            // with this runs as a weekly periodic worker
+            // ([WhatsAppAttachmentCleanupWorker]) scheduled from
+            // onCreate, exactly mirroring OpenBubbles.
+            //
+            // Bump the v-suffix (-> _v2 etc.) to force every device to
+            // re-apply the settings.
+            "whatsapp_setup_v1" to {
+                applyWhatsAppMediaSettings(tag)
             },
         )
 

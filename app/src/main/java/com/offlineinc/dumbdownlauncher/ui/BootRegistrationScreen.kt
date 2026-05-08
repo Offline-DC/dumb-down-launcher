@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.offlineinc.dumbdownlauncher.R
+import com.offlineinc.dumbdownlauncher.launcher.PhoneNumberReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingApiClient
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
@@ -55,13 +56,19 @@ private const val INITIAL_WAIT_MS = 5_000L
  *
  *   WAITING         initial grace — "waiting for sim to register..."
  *   LOADING         reading SIM info (phone #, IMEI, ICCID)
+ *   FINISHING_SIM   proactive airplane-mode bounce after the *#686# USSD
+ *                   query — clears the post-USSD CSFB-stuck-on-2G state
+ *                   so the upcoming /register HTTP calls see a clean
+ *                   radio. ~7-10s typical, ~20s worst case (5s sleep with
+ *                   radio off + waiting for VALIDATED network after
+ *                   radio-on).
  *   REGISTERING     POST /api/v1/register in-flight
  *   CHECKING_BUNDLE GET /contact-sync/bundle-flags in-flight
  *   REG_ERROR       registration failed — OK retries just /register
  *   SIM_ERROR       couldn't read SIM after N retries — OK retries from scratch
  *   DONE            forwarded to [onComplete]
  */
-private enum class BootState { WAITING, LOADING, REGISTERING, CHECKING_BUNDLE, REG_ERROR, SIM_ERROR, DONE }
+private enum class BootState { WAITING, LOADING, FINISHING_SIM, REGISTERING, CHECKING_BUNDLE, REG_ERROR, SIM_ERROR, DONE }
 
 /**
  * First screen every user sees on a fresh phone — and the first screen
@@ -144,6 +151,28 @@ fun BootRegistrationScreen(
      * main thread.
      */
     suspend fun runOnce() {
+        // Wipe any previously-persisted phone number BEFORE we read the SIM.
+        //
+        // sim_setup.sh writes the carrier-resolved number to
+        // Settings.Secure.device_phone_number and to the siminfo.number
+        // column. Those writes survive reboots and SIM swaps, so a phone
+        // that was factory-imaged with a test SIM and then had its SIM
+        // replaced will keep returning the original number from the very
+        // first PhoneNumberReader fallback path — even though the new SIM
+        // has no number on file at all.
+        //
+        // Device Setup is the user's signal that they want a fresh read of
+        // the current SIM, so we clear here unconditionally. If the current
+        // SIM doesn't have a number we'd rather show SIM_ERROR (and prompt
+        // the user to call support / re-run sim_setup.sh) than confidently
+        // surface a stale value that isn't theirs anymore.
+        //
+        // Runs on Dispatchers.IO because clearStoredNumber() shells out to
+        // `su` and would ANR on the main thread otherwise.
+        withContext(Dispatchers.IO) {
+            PhoneNumberReader.clearStoredNumber()
+        }
+
         // Grace period — duck + "quack" + "waiting for sim..." while the
         // modem finishes init. Always shown (even on re-entry) so the
         // transition into Device Setup feels intentional rather than a
@@ -177,6 +206,28 @@ fun BootRegistrationScreen(
                 phoneNumber = phone
                 cachedImei = imei
                 cachedIccid = iccid
+
+                // Proactive radio re-attach. The *#686# USSD query that just
+                // populated the phone number can leave the modem stuck on 2G
+                // with a torn-down PDP context (CSFB→GSM transition), which
+                // also leaves IMS de-registered — so even if our HTTP calls
+                // succeed, the user's first call/SMS attempt after setup
+                // would silently fail until the next reboot or manual
+                // airplane-mode toggle. We pay ~7-10s of always-on cost here
+                // to guarantee voice/SMS work the moment registration
+                // completes; the alternative ("only toggle when /register
+                // fails") gives faster setup on most devices but leaves a
+                // delayed-failure mode where the user only finds out hours
+                // later that calls don't work. cycleAirplaneToReattachLte
+                // is su-only — does settings put + AIRPLANE_MODE broadcast
+                // for both legs, sleeps 5s with radio off, then blocks
+                // until network is VALIDATED again (or 15s timeout).
+                Log.i(TAG, "starting proactive radio bounce (FINISHING_SIM)")
+                state = BootState.FINISHING_SIM
+                withContext(Dispatchers.IO) {
+                    PhoneNumberReader.cycleAirplaneToReattachLte(ctx)
+                }
+                Log.i(TAG, "proactive radio bounce complete — proceeding to /register")
 
                 state = BootState.REGISTERING
                 // force=true — the user is staring at a spinner, we owe them
@@ -249,6 +300,7 @@ fun BootRegistrationScreen(
     LaunchedEffect(state) {
         showStillTrying = false
         if (state == BootState.LOADING ||
+            state == BootState.FINISHING_SIM ||
             state == BootState.REGISTERING ||
             state == BootState.CHECKING_BUNDLE) {
             delay(30_000L)
@@ -346,8 +398,8 @@ fun BootRegistrationScreen(
                     }
                     // Swallow OK in the in-flight states so it doesn't
                     // bubble out and launch the apps grid.
-                    BootState.WAITING, BootState.LOADING, BootState.REGISTERING,
-                    BootState.CHECKING_BUNDLE, BootState.DONE -> {
+                    BootState.WAITING, BootState.LOADING, BootState.FINISHING_SIM,
+                    BootState.REGISTERING, BootState.CHECKING_BUNDLE, BootState.DONE -> {
                         if (event.key == Key.Enter ||
                             event.key == Key.NumPadEnter ||
                             event.key == Key.DirectionCenter) {
@@ -407,7 +459,7 @@ fun BootRegistrationScreen(
                         )
                     }
                 }
-                BootState.LOADING, BootState.REGISTERING, BootState.CHECKING_BUNDLE -> {
+                BootState.LOADING, BootState.FINISHING_SIM, BootState.REGISTERING, BootState.CHECKING_BUNDLE -> {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
@@ -419,6 +471,7 @@ fun BootRegistrationScreen(
                         BasicText(
                             text = when (state) {
                                 BootState.LOADING -> "waiting for ur sim..."
+                                BootState.FINISHING_SIM -> "finishing sim registration..."
                                 BootState.REGISTERING -> "activating ur phone..."
                                 BootState.CHECKING_BUNDLE -> "checking bundle..."
                                 else -> ""
