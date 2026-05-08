@@ -432,7 +432,7 @@ fun BootRegistrationScreen(
             Spacer(Modifier.height(12.dp))
 
             BasicText(
-                text = "quack",
+                text = "dumb.co",
                 // Device-setup titles use the Helvetica body font — matches
                 // LinkingChoiceScreen / DeviceRegistrationScreen.
                 style = DumbTheme.Text.PageTitle.copy(fontFamily = DumbTheme.Body),
