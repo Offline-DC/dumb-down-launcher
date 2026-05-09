@@ -38,7 +38,9 @@ fun HomeScreen(
             .background(DumbTheme.Colors.Black)
             .padding(horizontal = DumbTheme.Spacing.ScreenPaddingH, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        // Center the whole content cluster vertically; as it grows it
+        // expands outward from the center while staying centered.
+        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically)
     ) {
         BasicText(
             text = "contact sync",
