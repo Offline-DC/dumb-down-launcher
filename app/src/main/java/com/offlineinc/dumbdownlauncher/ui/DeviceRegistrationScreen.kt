@@ -389,5 +389,25 @@ fun DeviceRegistrationScreen(
             onFocusChanged = { skipFocused = it },
             modifier = Modifier.align(Alignment.TopEnd)
         )
+
+        // Helper text pinned to the bottom while we're doing any of the
+        // network-bound work (SIM read / /register / bundle-flags). Sets
+        // the user's expectation that this isn't an instant operation so
+        // a 10-30s wait doesn't read as "stuck". Hidden in the terminal
+        // states (REG_ERROR / ERROR / DONE) where the screen body already
+        // tells the user what to do next.
+        if (state == RegState.LOADING ||
+            state == RegState.REGISTERING ||
+            state == RegState.CHECKING_BUNDLE
+        ) {
+            BasicText(
+                text = "this can take a few minutes",
+                style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+            )
+        }
     }
 }

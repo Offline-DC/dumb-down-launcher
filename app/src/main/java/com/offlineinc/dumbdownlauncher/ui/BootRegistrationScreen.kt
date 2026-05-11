@@ -578,5 +578,28 @@ fun BootRegistrationScreen(
                 modifier = Modifier.align(Alignment.TopEnd)
             )
         }
+
+        // Helper text pinned to the bottom while we're doing any of the
+        // SIM-bound or network-bound work. Sets the user's expectation
+        // that this isn't an instant operation so a 10-30s (occasionally
+        // up to ~105s in LOADING on slow-attach SIMs) wait doesn't read
+        // as "stuck". Hidden in the terminal states (REG_ERROR /
+        // SIM_ERROR / DONE) where the screen body already tells the user
+        // what to do next.
+        if (state == BootState.WAITING ||
+            state == BootState.LOADING ||
+            state == BootState.FINISHING_SIM ||
+            state == BootState.REGISTERING ||
+            state == BootState.CHECKING_BUNDLE
+        ) {
+            BasicText(
+                text = "this can take a few minutes",
+                style = DumbTheme.Text.Hint.copy(textAlign = TextAlign.Center),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+            )
+        }
     }
 }
