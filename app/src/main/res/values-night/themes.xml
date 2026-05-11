@@ -3,10 +3,7 @@
     <style name="Base.Theme.DumbDownLauncher" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- Customize your dark theme here. -->
         <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
-        <!-- Drawable instead of @color/black so the cold-start transition
-             shows the duck centered on black (matches BootRegistrationScreen)
-             rather than a several-hundred-ms all-black flash. -->
-        <item name="android:windowBackground">@drawable/splash_window_background</item>
+        <item name="android:windowBackground">@color/black</item>
         <item name="android:navigationBarColor">@color/black</item>
     </style>
 </resources>
