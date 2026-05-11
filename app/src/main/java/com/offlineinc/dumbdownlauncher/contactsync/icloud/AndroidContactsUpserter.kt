@@ -304,6 +304,13 @@ object AndroidContactsUpserter {
             val b = ContentProviderOperation.newInsert(dataUri)
             if (rawId != null) b.withValue(ContactsContract.Data.RAW_CONTACT_ID, rawId)
             else b.withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rawContactBackRef!!)
+            // Let the contacts provider yield (reset its 500-op-per-yield-point
+            // counter) every 100 ops. For typical contacts the batch is well
+            // under 100 ops, so this branch never fires and behavior is
+            // unchanged. Guards against pathological VCards with hundreds of
+            // TEL/EMAIL entries (e.g. a malformed peer VCF that parseMultipleVCards
+            // collapsed into a single mega-card) blowing up applyBatch().
+            if (ops.size > 0 && ops.size % 100 == 0) b.withYieldAllowed(true)
             return b
         }
 
