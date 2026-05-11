@@ -30,13 +30,11 @@ class DumbNotificationListenerService : NotificationListenerService() {
                 TAG,
                 "skip ${sbn.packageName} id=${sbn.id} flags=0x${Integer.toHexString(sbn.notification.flags)} reason=$reason"
             )
-            // For pure shade-rendering artifacts (group summaries, autogroup
-            // summaries, blank-content placeholders) we also dismiss them at
-            // the system level so SystemUI's status bar notification count
-            // reflects what the launcher actually shows. We do NOT cancel
-            // foreground-service or ongoing-event notifications — Android
-            // either rejects those or the source app re-posts immediately,
-            // which would create a noisy fight with the system.
+            // For pure shade-rendering artifacts we also dismiss them at the
+            // system level so SystemUI's status bar count reflects what the
+            // launcher actually shows. We do NOT cancel app-posted group
+            // summaries (those cascade and kill the children) and we do NOT
+            // cancel foreground-service / ongoing-event notifications.
             if (reason in CANCEL_AT_SYSTEM_REASONS) {
                 try {
                     cancelNotification(sbn.key)
@@ -188,22 +186,19 @@ class DumbNotificationListenerService : NotificationListenerService() {
          * well, not just from our list. Limited to shade-rendering artifacts
          * so we don't fight the system over foreground-service notifications.
          *
-         * NOTE: "FLAG_GROUP_SUMMARY" is deliberately NOT in this set.
-         * Cancelling an app-posted group summary via NotificationListener
-         * cascades through NotificationManagerService and also cancels every
-         * child sharing the groupKey — which means the actual per-message
-         * notifications (e.g. OpenBubbles NEW_MESSAGE_NOTIFICATION id=1,2,…)
-         * disappear from both the launcher's list and the system shade as
-         * soon as the summary at id=0 arrives. Confirmed via logcat:
-         *   POST id=0 summary → POST id=1 child → DUMB_MUTE skip id=0 →
-         *   cancelNotification(summary) → children gone, no further posts.
-         * We still filter the summary out of [NotificationStore] above so
-         * the launcher's own UI doesn't render it; we just leave the system
-         * shade to decide what to do with it.
+         * "FLAG_GROUP_SUMMARY" is deliberately absent. Cancelling an
+         * app-posted summary via the listener API cascades through
+         * NotificationManagerService.cancelGroupChildrenLocked and also
+         * cancels every child sharing the summary's groupKey — that's the
+         * bug that hid OpenBubbles messages from both our list and the
+         * system shade. The summary stays in the shade; we just filter it
+         * out of [NotificationStore] above.
          *
-         * FLAG_AUTOGROUP_SUMMARY is safe — those summaries are synthesized
-         * by SystemUI itself and have no app-owned children to cascade to.
-         * Blank-title-and-text is safe too — by definition nothing else is
+         * "FLAG_AUTOGROUP_SUMMARY" is safe to cancel — those summaries are
+         * synthesized by SystemUI itself and have no app-owned children
+         * to cascade to.
+         *
+         * "blank-title-and-text" is safe — by definition nothing else is
          * attached.
          */
         private val CANCEL_AT_SYSTEM_REASONS = setOf(
