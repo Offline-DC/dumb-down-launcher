@@ -85,6 +85,36 @@ class PairingStore(context: Context) {
         set(v) = prefs.edit().putBoolean("hide_smart_txt", v).apply()
 
     /**
+     * Beta tester opt-in. Toggled by long-pressing the "updates" entry in
+     * AllAppsActivity. When true:
+     *
+     *   1. [com.offlineinc.dumbdownlauncher.update.UpdateChecker] also
+     *      considers prerelease GitHub releases (e.g. `v4.58.0-beta.1`)
+     *      when picking the highest-version-code build to offer. The
+     *      production release flow continues to publish stable releases
+     *      with `prerelease=false`; the beta workflow tags those with
+     *      `prerelease=true`, and beta testers see both channels.
+     *
+     *   2. [com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker]
+     *      is scheduled to run once a day, posting a low-importance
+     *      "beta tester check-in" notification so the user remembers to
+     *      install new beta builds. The check piggy-backs on the existing
+     *      update-check infrastructure, so any actual update found is
+     *      surfaced with the same high-priority notification stable users
+     *      already see — the daily reminder is *additional* to those.
+     *
+     * Intentionally **not** cleared by [clear] — the opt-in is a long-
+     * lived user preference that should survive unpair/relink. The only
+     * ways to turn it off are: (a) the user long-presses "updates" again
+     * to toggle it off, or (b) `PlatformPreferences.clearAll(...)` runs
+     * during the AllAppsActivity "factory reset" long-press on Device
+     * Setup, which wipes every device-level pref including this one.
+     */
+    var betaTesterMode: Boolean
+        get() = prefs.getBoolean("beta_tester_mode", false)
+        set(v) = prefs.edit().putBoolean("beta_tester_mode", v).apply()
+
+    /**
      * Write all pairing credentials in a single atomic commit so downstream
      * readers never see a partial state (e.g. isPaired=true but secret empty).
      */

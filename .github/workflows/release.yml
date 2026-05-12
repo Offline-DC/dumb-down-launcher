@@ -3,7 +3,22 @@ name: Release
 on:
   push:
     tags:
+      # Stable releases only. The `!v*-*` negation excludes any tag with a
+      # hyphen, so prerelease tags like `v4.58.0-beta.1`, `v4.58.0-rc.1`,
+      # `v4.58.0-alpha.2` fall through to `beta-release.yml` instead of
+      # being published as stable here. Both workflows share the same
+      # signing secrets, so the beta channel installs over the stable one
+      # cleanly when a user opts in.
       - 'v*'
+      - '!v*-*'
+
+# A re-tag of the same name (rare, but happens during recovery) shouldn't
+# race a release that's already mid-build. Drop the older run in favor of
+# the new one so the GitHub Release ends up pointing at the artifact from
+# the most recent push.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-publish:

@@ -9,6 +9,7 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import androidx.work.WorkManager
 import com.offlineinc.dumbdownlauncher.BuildConfig
+import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import java.util.concurrent.TimeUnit
 
 class UpdateCheckWorker(
@@ -18,7 +19,10 @@ class UpdateCheckWorker(
 
     override fun doWork(): Result {
         return try {
-            val latest = UpdateChecker.fetchLatest()
+            // Beta testers (opted in via long-press on "updates") get
+            // prerelease builds in the same update flow as stable ones.
+            val includePrereleases = PairingStore(context).betaTesterMode
+            val latest = UpdateChecker.fetchLatest(includePrereleases)
 
             // Check launcher update
             val launcherInfo = latest["dumb-down-launcher"]
@@ -86,7 +90,8 @@ class UpdateCheckWorker(
         fun runNow(context: Context): Boolean {
             var found = false
             try {
-                val latest = UpdateChecker.fetchLatest()
+                val includePrereleases = PairingStore(context).betaTesterMode
+                val latest = UpdateChecker.fetchLatest(includePrereleases)
 
                 val launcherInfo = latest["dumb-down-launcher"]
                 if (launcherInfo != null && launcherInfo.versionCode > BuildConfig.VERSION_CODE) {

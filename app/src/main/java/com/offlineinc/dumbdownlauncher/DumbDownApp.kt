@@ -23,6 +23,8 @@ import com.offlineinc.dumbdownlauncher.quack.QuackLocationHelper
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationRefreshWorker
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
+import com.offlineinc.dumbdownlauncher.pairing.PairingStore
+import com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -74,6 +76,17 @@ class DumbDownApp : Application() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         UpdateCheckWorker.schedule(this)
+
+        // Re-arm the beta tester daily reminder if the user has opted in.
+        // The flag is persisted in PairingStore — a long-press on "updates"
+        // in AllAppsActivity flips it; this branch makes sure the periodic
+        // worker survives reboots even though WorkManager itself re-enqueues
+        // periodic work across boots (the KEEP policy makes the call safe
+        // either way). If the flag is off, do nothing — opting out cancels
+        // the unique work directly from AllAppsActivity.
+        if (PairingStore(this).betaTesterMode) {
+            BetaUpdateReminderWorker.schedule(this)
+        }
 
         // Nightly 2 AM cleanup of the system call log — anything older than
         // 7 days is deleted. Keeps calllog.db small on low-storage devices
