@@ -48,6 +48,17 @@ object UpdateChecker {
      * + stable releases against a monotonically increasing version_code, the
      * "highest wins" rule continues to do the right thing in both directions:
      * a stable release with a higher code supersedes a beta, and vice versa.
+     *
+     * Throws on network/IO failure (DNS lookup, connect refused, read timeout,
+     * TLS error, etc.) — the previous behaviour swallowed those into a `null`
+     * return, which the manual-tap path in AllAppsActivity then surfaced as
+     * "Already up to date" even when the phone had no cellular service.
+     * Callers that don't care to distinguish (the periodic workers) already
+     * catch Exception and treat it as a retry.
+     *
+     * Non-200 responses (rate limit, server error) still return `null` — those
+     * aren't connectivity issues and the caller may continue with a different
+     * API in the same pass instead of bailing on the first 429.
      */
     private fun fetchHighestRelease(apiUrl: String, includePrereleases: Boolean): AppUpdateInfo? {
         val conn = URL(apiUrl).openConnection() as HttpURLConnection
@@ -57,7 +68,7 @@ object UpdateChecker {
         // Bypass GitHub CDN cache so we always see the freshest release list
         conn.setRequestProperty("Cache-Control", "no-cache")
         conn.setRequestProperty("If-None-Match", "")
-        return try {
+        try {
             if (conn.responseCode != HttpURLConnection.HTTP_OK) return null
             val releases = JSONArray(conn.inputStream.bufferedReader().readText())
 
@@ -74,9 +85,7 @@ object UpdateChecker {
                     best = info
                 }
             }
-            best
-        } catch (_: Exception) {
-            null
+            return best
         } finally {
             conn.disconnect()
         }

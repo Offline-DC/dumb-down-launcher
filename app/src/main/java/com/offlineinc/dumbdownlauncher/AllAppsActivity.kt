@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import com.offlineinc.dumbdownlauncher.launcher.KeyDispatcher
 import com.offlineinc.dumbdownlauncher.notifications.ui.NotificationsActivity
 import com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker
+import com.offlineinc.dumbdownlauncher.update.UpdateCheckResult
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateNotificationManager
 import com.offlineinc.dumbdownlauncher.launcher.LauncherController
@@ -321,17 +322,35 @@ class AllAppsActivity : AppCompatActivity() {
                     CHECK_UPDATES -> {
                         Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
                         lifecycleScope.launch(Dispatchers.IO) {
-                            val found = UpdateCheckWorker.runNow(applicationContext)
+                            val result = UpdateCheckWorker.runNow(applicationContext)
                             withContext(Dispatchers.Main) {
-                                if (found) {
-                                    startActivity(
-                                        Intent(this@AllAppsActivity, NotificationsActivity::class.java).apply {
-                                            putExtra(NotificationsActivity.EXTRA_SCROLL_TO_UPDATE, true)
-                                        }
-                                    )
-                                    overridePendingTransition(0, 0)
-                                } else {
-                                    Toast.makeText(this@AllAppsActivity, "Already up to date", Toast.LENGTH_SHORT).show()
+                                when (result) {
+                                    UpdateCheckResult.UPDATE_FOUND -> {
+                                        startActivity(
+                                            Intent(this@AllAppsActivity, NotificationsActivity::class.java).apply {
+                                                putExtra(NotificationsActivity.EXTRA_SCROLL_TO_UPDATE, true)
+                                            }
+                                        )
+                                        overridePendingTransition(0, 0)
+                                    }
+                                    UpdateCheckResult.UP_TO_DATE -> {
+                                        Toast.makeText(
+                                            this@AllAppsActivity,
+                                            "Already up to date",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                    UpdateCheckResult.NETWORK_ERROR -> {
+                                        // Distinct message from "up to date" — the previous
+                                        // code collapsed both into the same toast, which
+                                        // misled users with no service into thinking the
+                                        // check had succeeded.
+                                        Toast.makeText(
+                                            this@AllAppsActivity,
+                                            "Failed to connect to network",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
                                 }
                             }
                         }
