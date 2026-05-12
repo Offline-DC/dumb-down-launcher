@@ -418,26 +418,33 @@ fun BootRegistrationScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Duck icon — uses R.drawable.duck_app_icon, a 1024x1024 PNG of the
-            // duck on a black background. (We intentionally do NOT use the
-            // vector ic_duck here; product wants the photo-style app-icon duck
-            // for the boot screen.)
-            Image(
-                painter = painterResource(R.drawable.duck_app_icon),
-                contentDescription = "duck",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(96.dp)
-            )
+            // Duck icon + wordmark are branding chrome we only want on the
+            // happy / in-flight path. Hidden in REG_ERROR / SIM_ERROR so the
+            // longer error copy (title + multi-line instructions + support
+            // line) has vertical room without wrapping awkwardly on
+            // 320x480-ish dumbphone displays.
+            //
+            // R.drawable.duck_app_icon is the 1024x1024 photo-style PNG —
+            // intentionally NOT the vector ic_duck; product wants the
+            // app-icon duck for the boot screen.
+            if (state != BootState.REG_ERROR && state != BootState.SIM_ERROR) {
+                Image(
+                    painter = painterResource(R.drawable.duck_app_icon),
+                    contentDescription = "duck",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(96.dp)
+                )
 
-            Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(12.dp))
 
-            BasicText(
-                text = "dumb.co",
-                // Device-setup titles use the Helvetica body font — matches
-                // LinkingChoiceScreen / DeviceRegistrationScreen.
-                style = DumbTheme.Text.PageTitle.copy(fontFamily = DumbTheme.Body),
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
+                BasicText(
+                    text = "dumb.co",
+                    // Device-setup titles use the Helvetica body font —
+                    // matches LinkingChoiceScreen / DeviceRegistrationScreen.
+                    style = DumbTheme.Text.PageTitle.copy(fontFamily = DumbTheme.Body),
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            }
 
             when (state) {
                 BootState.WAITING -> {
@@ -502,54 +509,77 @@ fun BootRegistrationScreen(
                 BootState.REG_ERROR -> {
                     // By the time we're here, SIM IMEI/ICCID/phone have all
                     // been read successfully — the failure is network/DNS,
-                    // not SIM activation. Don't show "did u activate ur sim?"
-                    // here; that message lives on SIM_ERROR where it's
-                    // actually accurate.
+                    // not SIM activation. SIM-activation copy lives on
+                    // SIM_ERROR where it's actually accurate.
+                    //
+                    // OK still retries /register (keyboard handler above) —
+                    // we just don't surface it in the copy anymore, because
+                    // the more reliable user action on a hosed radio is a
+                    // full power-cycle.
                     BasicText(
-                        text = "failed to connect to network",
+                        text = "sorry, we couldn't connect to the network",
                         style = DumbTheme.Text.BodySmall.copy(
                             color = DumbTheme.Colors.White,
                             textAlign = TextAlign.Center
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 6.dp)
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "try restarting ur phone (press and hold red button)",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
+                        text = "restart ur phone to try again.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.Yellow,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "press ok to retry or call us for help:",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                        modifier = Modifier.padding(bottom = 2.dp)
-                    )
-                    BasicText(
-                        text = "404-716-3605",
-                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
+                        text = "call 404-716-3605 if u need support.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.White,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
                 BootState.SIM_ERROR -> {
+                    // OK still retries from scratch (clears caches, resets
+                    // backoff, kicks runOnce again) via the keyboard handler
+                    // above. We don't mention it in the copy because the
+                    // more reliable user action on a SIM that didn't attach
+                    // is to actually activate it / power-cycle, not to mash
+                    // OK against the same un-activated SIM.
                     BasicText(
-                        text = "couldn't read ur phone #. is ur sim activated?",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
+                        text = "sorry, we couldn't detect an active sim",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.White,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "try restarting ur phone (press and hold red button)",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
+                        text = "make sure to activate at dumb.co/mobile. then restart ur phone by pressing and holding the red button.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.Yellow,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "press ok to retry or call us for help:",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                        modifier = Modifier.padding(bottom = 2.dp)
-                    )
-                    BasicText(
-                        text = "404-716-3605",
-                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
+                        text = "call 404-716-3605 if u need support.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.White,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 

@@ -325,46 +325,67 @@ fun DeviceRegistrationScreen(
                 }
 
                 RegState.REG_ERROR -> {
+                    // OK still retries /register via the keyboard handler
+                    // above; copy steers the user toward a power-cycle
+                    // because that's what actually unsticks a hosed radio.
                     BasicText(
-                        text = "failed to connect to network",
+                        text = "sorry, we couldn't connect to the network",
                         style = DumbTheme.Text.BodySmall.copy(
                             color = DumbTheme.Colors.White,
                             textAlign = TextAlign.Center
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 6.dp)
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "did u activate ur sim?",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
+                        text = "restart ur phone to try again.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.Yellow,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "press ok to retry or call us for help:",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                        modifier = Modifier.padding(bottom = 2.dp)
-                    )
-                    BasicText(
-                        text = "404-716-3605",
-                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
+                        text = "call 404-716-3605 if u need support.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.White,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
                 RegState.ERROR -> {
                     BasicText(
-                        text = "couldn't read ur phone #. is ur sim activated?",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.Yellow),
-                        modifier = Modifier.padding(bottom = 6.dp)
+                        text = "sorry, we couldn't detect an active sim",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.White,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "call the dumb line for help:",
-                        style = DumbTheme.Text.BodySmall.copy(color = DumbTheme.Colors.White),
-                        modifier = Modifier.padding(bottom = 2.dp)
+                        text = "make sure to activate at dumb.co/mobile. then restart ur phone by pressing and holding the red button.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.Yellow,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "404-716-3605",
-                        style = DumbTheme.Text.Subtitle.copy(color = DumbTheme.Colors.Yellow)
+                        text = "call 404-716-3605 if u need support.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.White,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
