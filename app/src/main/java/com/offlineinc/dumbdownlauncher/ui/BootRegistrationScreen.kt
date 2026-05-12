@@ -16,7 +16,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -536,12 +539,29 @@ fun BootRegistrationScreen(
                             .fillMaxWidth()
                             .padding(bottom = 12.dp)
                     )
+                    // Support line: number in Yellow so it pops as the
+                    // call-to-action; surrounding "call … if u need
+                    // support." stays primary white so it reads as
+                    // sentence rather than label.
                     BasicText(
-                        text = "call 404-716-3605 if u need support.",
-                        style = DumbTheme.Text.BodySmall.copy(
-                            color = DumbTheme.Colors.White,
-                            textAlign = TextAlign.Center
-                        ),
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = DumbTheme.Colors.White)) {
+                                append("call ")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.Yellow)) {
+                                append("404-716-3605")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.White)) {
+                                append(" or email ")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.Yellow)) {
+                                append("support@dumb.co")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.White)) {
+                                append(" if u need support.")
+                            }
+                        },
+                        style = DumbTheme.Text.BodySmall.copy(textAlign = TextAlign.Center),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -553,32 +573,61 @@ fun BootRegistrationScreen(
                     // more reliable user action on a SIM that didn't attach
                     // is to actually activate it / power-cycle, not to mash
                     // OK against the same un-activated SIM.
+                    //
+                    // Layout: title + body are left-aligned to read like a
+                    // proper error page (the centered single-line variant
+                    // was hard to scan once we expanded the copy). Color
+                    // hierarchy: title = primary white, instructions =
+                    // secondary white (Gray) with dumb.co/mobile as the
+                    // one highlighted action, support line = white with
+                    // only the dial-able number in Yellow.
                     BasicText(
                         text = "sorry, we couldn't detect an active sim",
-                        style = DumbTheme.Text.BodySmall.copy(
+                        style = DumbTheme.Text.PageTitle.copy(
+                            fontFamily = DumbTheme.Body,
                             color = DumbTheme.Colors.White,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Start
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "make sure to activate at dumb.co/mobile. then restart ur phone by pressing and holding the red button.",
-                        style = DumbTheme.Text.BodySmall.copy(
-                            color = DumbTheme.Colors.Yellow,
-                            textAlign = TextAlign.Center
-                        ),
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = DumbTheme.Colors.Gray)) {
+                                append("make sure to activate at ")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.Yellow)) {
+                                append("dumb.co/mobile")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.Gray)) {
+                                append(". then restart ur phone by pressing and holding the red button.")
+                            }
+                        },
+                        style = DumbTheme.Text.BodySmall.copy(textAlign = TextAlign.Start),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "call 404-716-3605 if u need support.",
-                        style = DumbTheme.Text.BodySmall.copy(
-                            color = DumbTheme.Colors.White,
-                            textAlign = TextAlign.Center
-                        ),
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = DumbTheme.Colors.White)) {
+                                append("call ")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.Yellow)) {
+                                append("404-716-3605")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.White)) {
+                                append(" or email ")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.Yellow)) {
+                                append("support@dumb.co")
+                            }
+                            withStyle(SpanStyle(color = DumbTheme.Colors.White)) {
+                                append(" if u need support.")
+                            }
+                        },
+                        style = DumbTheme.Text.BodySmall.copy(textAlign = TextAlign.Start),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
