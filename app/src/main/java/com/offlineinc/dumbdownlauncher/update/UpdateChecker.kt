@@ -20,11 +20,20 @@ object UpdateChecker {
     private const val SNAKE_API =
         "https://api.github.com/repos/Offline-DC/snake/releases?per_page=10"
 
-    fun fetchLatest(): Map<String, AppUpdateInfo> {
+    /**
+     * @param includePrereleases when true, also considers GitHub releases
+     *   flagged `prerelease=true` (e.g. those published by the
+     *   `.github/workflows/beta-release.yml` workflow for `v*-beta*`/`v*-rc*`
+     *   tags). Beta testers opt in by long-pressing "updates" in
+     *   AllAppsActivity; see [com.offlineinc.dumbdownlauncher.pairing.PairingStore.betaTesterMode].
+     *   Drafts are still always skipped — they aren't visible to unauthenticated
+     *   API calls anyway.
+     */
+    fun fetchLatest(includePrereleases: Boolean = false): Map<String, AppUpdateInfo> {
         return buildMap {
-            fetchHighestRelease(LAUNCHER_API)?.let { put("dumb-down-launcher", it) }
+            fetchHighestRelease(LAUNCHER_API, includePrereleases)?.let { put("dumb-down-launcher", it) }
             // Contact sync is now integrated into the launcher — no separate update check needed
-            fetchHighestRelease(SNAKE_API)?.let { put("snake", it) }
+            fetchHighestRelease(SNAKE_API, includePrereleases)?.let { put("snake", it) }
         }
     }
 
@@ -33,8 +42,25 @@ object UpdateChecker {
      * This avoids relying on GitHub's /latest endpoint which is based on creation
      * date rather than version number — so publishing releases out of order or
      * re-creating releases could cause /latest to point to an older version.
+     *
+     * When [includePrereleases] is true, prerelease builds (the beta channel)
+     * compete with stable ones on version_code alone. Because we publish beta
+     * + stable releases against a monotonically increasing version_code, the
+     * "highest wins" rule continues to do the right thing in both directions:
+     * a stable release with a higher code supersedes a beta, and vice versa.
+     *
+     * Throws on network/IO failure (DNS lookup, connect refused, read timeout,
+     * TLS error, etc.) — the previous behaviour swallowed those into a `null`
+     * return, which the manual-tap path in AllAppsActivity then surfaced as
+     * "Already up to date" even when the phone had no cellular service.
+     * Callers that don't care to distinguish (the periodic workers) already
+     * catch Exception and treat it as a retry.
+     *
+     * Non-200 responses (rate limit, server error) still return `null` — those
+     * aren't connectivity issues and the caller may continue with a different
+     * API in the same pass instead of bailing on the first 429.
      */
-    private fun fetchHighestRelease(apiUrl: String): AppUpdateInfo? {
+    private fun fetchHighestRelease(apiUrl: String, includePrereleases: Boolean): AppUpdateInfo? {
         val conn = URL(apiUrl).openConnection() as HttpURLConnection
         conn.connectTimeout = 10_000
         conn.readTimeout = 10_000
@@ -42,25 +68,24 @@ object UpdateChecker {
         // Bypass GitHub CDN cache so we always see the freshest release list
         conn.setRequestProperty("Cache-Control", "no-cache")
         conn.setRequestProperty("If-None-Match", "")
-        return try {
+        try {
             if (conn.responseCode != HttpURLConnection.HTTP_OK) return null
             val releases = JSONArray(conn.inputStream.bufferedReader().readText())
 
             var best: AppUpdateInfo? = null
             for (i in 0 until releases.length()) {
                 val release = releases.getJSONObject(i)
-                // Skip drafts and prereleases
+                // Always skip drafts
                 if (release.optBoolean("draft", false)) continue
-                if (release.optBoolean("prerelease", false)) continue
+                // Skip prereleases unless the caller opted in (beta tester mode)
+                if (!includePrereleases && release.optBoolean("prerelease", false)) continue
 
                 val info = parseRelease(release) ?: continue
                 if (best == null || info.versionCode > best.versionCode) {
                     best = info
                 }
             }
-            best
-        } catch (_: Exception) {
-            null
+            return best
         } finally {
             conn.disconnect()
         }

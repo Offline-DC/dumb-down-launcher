@@ -1,0 +1,153 @@
+# Beta release workflow.
+#
+# Mirrors `.github/workflows/release.yml` but for the prerelease channel.
+# Triggers on tags matching `v*-beta*`, `v*-rc*`, or `v*-alpha*` and publishes
+# the resulting APK as a GitHub Release with `prerelease=true`. The launcher's
+# update checker, when running in beta tester mode (long-press "updates" in
+# AllAppsActivity), surfaces these alongside stable builds and offers them
+# to the user.
+#
+# Signing:
+#   Uses the SAME keystore + secrets as the stable workflow (KEYSTORE_BASE64,
+#   KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD). This is intentional — a beta
+#   build must install over the user's existing stable build (and vice versa),
+#   so the package name and signing certificate have to match. If you ever
+#   want side-by-side beta + stable installs, that requires a build flavor
+#   with a different applicationId (e.g. `com.offlineinc.dumbdownlauncher.beta`)
+#   AND a different keystore — a bigger refactor than this workflow.
+#
+# Versioning:
+#   `versionCode` in `app/build.gradle.kts` must be bumped manually for each
+#   release (same as stable). Use a monotonically increasing code across
+#   both channels: e.g. stable 117 → beta 118 → beta 119 → stable 120. The
+#   highest-code-wins update logic in UpdateChecker.fetchHighestRelease()
+#   then does the right thing in both directions.
+#
+# Tag examples that fire this workflow:
+#   v4.58.0-beta.1     (pre-stable beta)
+#   v4.58.0-rc.1       (release candidate)
+#   v4.58.0-alpha.3    (early-stage alpha)
+#
+# Tag examples that fire the stable workflow instead:
+#   v4.58.0            (stable)
+#   v5.0.0             (stable)
+
+name: Beta Release
+
+on:
+  push:
+    tags:
+      - 'v*-beta*'
+      - 'v*-rc*'
+      - 'v*-alpha*'
+
+# Drop in-flight runs if a fresher push comes in for the same ref. Same
+# reasoning as the stable workflow — a re-tag should publish the newer
+# artifact, not race the previous one.
+concurrency:
+  group: beta-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # Only need write access to releases to upload the APK and mark the
+      # release as prerelease. Every other permission stays at the default
+      # "none" so a compromised step can't, say, push to the repo.
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # Sanity check: the trigger filter should already guarantee this, but
+      # belt-and-suspenders against future tag-pattern changes. If a stable
+      # tag somehow reaches this workflow we want to fail fast rather than
+      # publish an "accidental prerelease" of a stable build.
+      - name: Verify tag is a prerelease
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" != *-* ]]; then
+            echo "::error::Tag $TAG has no '-' suffix; this workflow only handles prerelease tags (vX.Y.Z-beta.N / -rc.N / -alpha.N)."
+            exit 1
+          fi
+          echo "Building prerelease for tag: $TAG"
+
+      - name: Decode keystore
+        # Same keystore as the stable workflow so beta installs over stable
+        # without a signature-mismatch error. The base64 secret is decoded
+        # to a workspace file that the next step references via KEYSTORE_PATH.
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore.jks
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/keystore.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        # assembleRelease produces the same minified+signed APK as the
+        # stable workflow. ProGuard rules and signing config come straight
+        # out of app/build.gradle.kts — no flavor switch.
+        run: ./gradlew assembleRelease
+
+      - name: Locate and rename APK
+        id: apk
+        run: |
+          SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -z "$SRC" ]; then
+            echo "::error::No APK found under app/build/outputs/apk/release"
+            exit 1
+          fi
+          cp "$SRC" dumb-down-launcher-beta.apk
+          echo "sha256=$(sha256sum dumb-down-launcher-beta.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Parse version code
+        id: version
+        # Extracted with the same grep as the stable workflow so the
+        # release body format stays identical — UpdateChecker.parseRelease
+        # expects `version_code=<int>` on its own line.
+        run: |
+          echo "code=$(grep 'versionCode' app/build.gradle.kts | grep -oP '\d+' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify keystore signature
+        # Sanity check that the APK is actually signed (and with our key)
+        # before publishing. Catches silent signing-config failures where
+        # an unsigned APK gets through assembleRelease — the build won't
+        # install on a phone that already has stable installed, and the
+        # mistake is hard to spot from the artifact alone.
+        run: |
+          $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)/apksigner verify --verbose dumb-down-launcher-beta.apk
+
+      - name: Create GitHub Release (prerelease)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          # `prerelease: true` is the load-bearing flag. UpdateChecker reads
+          # the `prerelease` field of the GitHub release JSON and only
+          # surfaces these builds when the user has opted into beta tester
+          # mode (PairingStore.betaTesterMode = true).
+          prerelease: true
+          body: |
+            version_code=${{ steps.version.outputs.code }}
+            sha256=${{ steps.apk.outputs.sha256 }}
+
+            ⚠️ This is a **beta** build. Long-press the "updates" entry in All Apps to opt into the beta channel and receive these updates automatically.
+          files: dumb-down-launcher-beta.apk
+
+      # The runner is ephemeral and gets destroyed at job end, but being
+      # explicit about deleting the keystore file is cheap insurance against
+      # future caching/artifact changes that might inadvertently retain it.
+      - name: Clean up keystore
+        if: always()
+        run: rm -f keystore.jks
