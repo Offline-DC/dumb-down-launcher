@@ -328,9 +328,9 @@ fun DeviceRegistrationScreen(
                 }
 
                 RegState.REG_ERROR -> {
-                    // OK still retries /register via the keyboard handler
-                    // above; copy steers the user toward a power-cycle
-                    // because that's what actually unsticks a hosed radio.
+                    // OK retries /register via the keyboard handler above —
+                    // surface that as the primary CTA, with power-cycle as
+                    // the fallback for a hosed radio that retries can't fix.
                     BasicText(
                         text = "sorry, we couldn't connect to the network",
                         style = DumbTheme.Text.BodySmall.copy(
@@ -342,7 +342,17 @@ fun DeviceRegistrationScreen(
                             .padding(bottom = 12.dp)
                     )
                     BasicText(
-                        text = "restart ur phone to try again.",
+                        text = "press OK to retry.",
+                        style = DumbTheme.Text.BodySmall.copy(
+                            color = DumbTheme.Colors.Yellow,
+                            textAlign = TextAlign.Center
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    )
+                    BasicText(
+                        text = "or restart ur phone to try again.",
                         style = DumbTheme.Text.BodySmall.copy(
                             color = DumbTheme.Colors.Yellow,
                             textAlign = TextAlign.Center
