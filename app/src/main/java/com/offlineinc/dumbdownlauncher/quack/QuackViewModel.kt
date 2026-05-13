@@ -13,9 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
@@ -244,30 +242,6 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Suspend wrapper around QuackLocationHelper. Returns null if the helper
-     * fails (e.g. providers disabled, hard timeout reached with no fallback).
-     */
-    private suspend fun requestLocation(): Pair<Double, Double>? =
-        suspendCancellableCoroutine { cont ->
-            val helper = QuackLocationHelper(getApplication(), object : QuackLocationHelper.Callback {
-                private var resumed = false
-                override fun onLocation(lat: Double, lng: Double) {
-                    if (resumed) return
-                    resumed = true
-                    if (cont.isActive) cont.resume(lat to lng)
-                }
-                override fun onError(reason: String) {
-                    if (resumed) return
-                    resumed = true
-                    Log.w(TAG, "requestLocation error: $reason")
-                    if (cont.isActive) cont.resume(null)
-                }
-            })
-            cont.invokeOnCancellation { helper.cancel() }
-            helper.request()
-        }
-
     /** Read the persisted location (any age up to STALE_MAX_AGE_MS). Non-blocking. */
     private fun readPersistedLocation(): Pair<Double, Double>? =
         QuackLocationStore.loadIfUsable(getApplication())
@@ -276,8 +250,8 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(mode = QuackMode.LOADING)
         viewModelScope.launch {
             try {
-                Log.d(TAG, "loadFeed: fetching posts (using QuackLocationHelper)")
-                val loc = requestLocation()
+                Log.d(TAG, "loadFeed: fetching posts (using LocationProvider)")
+                val loc = LocationProvider.fetch(getApplication())
                 if (loc == null) {
                     Log.w(TAG, "loadFeed: no location fix — surfacing location error")
                     _state.value = _state.value.copy(

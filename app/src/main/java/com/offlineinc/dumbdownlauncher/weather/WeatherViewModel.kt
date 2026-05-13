@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.offlineinc.dumbdownlauncher.quack.LocationProvider
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,20 +64,21 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
     private var lastFetchedAt: Long = 0L
 
     /**
-     * Load weather using the location saved by Quack's location system.
-     * Reads from QuackLocationStore — the same persisted location that
-     * quack uses and that gets refreshed by the boot prewarm + periodic worker.
+     * Load weather using [LocationProvider.fetch] — persisted-if-fresh,
+     * else a live fix via QuackLocationHelper. Shared with QuackViewModel
+     * so the two apps request location the same way, and either can be
+     * the user's first stop after granting consent.
      */
     fun loadWeather() {
         _state.value = _state.value.copy(mode = WeatherMode.LOADING)
         viewModelScope.launch {
             try {
-                val loc = QuackLocationStore.loadIfUsable(getApplication())
+                val loc = LocationProvider.fetch(getApplication())
                 if (loc == null) {
-                    Log.w(TAG, "No persisted location available")
+                    Log.w(TAG, "No location available (persisted or live)")
                     _state.value = _state.value.copy(
                         mode = WeatherMode.ERROR,
-                        errorMessage = "no location available.\nopen quack first to set your location.",
+                        errorMessage = LOCATION_ERROR_MSG,
                     )
                     return@launch
                 }
@@ -259,6 +261,11 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
 
     companion object {
         private const val REFRESH_COOLDOWN_MS = 30 * 60 * 1000L // 30 minutes
+        // Surfaced when QuackLocationHelper can't deliver any fix (cold GPS,
+        // no Network provider, no persisted/system cache). Matches the
+        // phrasing quack uses so the two apps stay consistent.
+        private const val LOCATION_ERROR_MSG =
+            "location unavailable. step outside with a clear view of the sky and try again."
 
         fun weatherCodeToDescription(code: Int, wind: Double): String {
             val windy = if (wind > 20) " & Windy" else ""
