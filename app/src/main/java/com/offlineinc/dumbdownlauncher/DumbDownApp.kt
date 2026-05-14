@@ -198,6 +198,21 @@ class DumbDownApp : Application() {
             com.offlineinc.dumbdownlauncher.quack.QuackMondayAlarmReceiver.scheduleNext(this)
         }
 
+        // 2nd Tuesday / 4th Sunday "add wifi 2 save on data" reminder.
+        // Two parts:
+        //   1. scheduleNext re-arms the recurring alarm chain — idempotent
+        //      and cheap to call on every boot (same pattern as the quack
+        //      alarm above).
+        //   2. nudgeOnBootIfOffline fires on every launcher process start
+        //      (so: every cold boot, plus app updates). After a 30 s
+        //      grace period to let the Wi-Fi supplicant associate with a
+        //      saved network, it posts the same nudge iff the device is
+        //      not currently connected to Wi-Fi. Single notification id,
+        //      so a stale shade entry from the previous boot is updated
+        //      in-place rather than stacked.
+        com.offlineinc.dumbdownlauncher.wifinudge.WifiNudgeAlarmReceiver.scheduleNext(this)
+        com.offlineinc.dumbdownlauncher.wifinudge.WifiNudgeAlarmReceiver.nudgeOnBootIfOffline(this)
+
         // 4. Update FlipMouse (DumbMouse) binary if a newer version is bundled
         bootExecutor.execute { FlipMouseUpdater.checkAndUpdate(this) }
 

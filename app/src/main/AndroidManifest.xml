@@ -122,6 +122,24 @@
             android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
 
+        <!-- Headless trampoline for the "add wifi 2 save on data" nudge.
+             Tapping the notification (from the shade or the in-app
+             Notifications page) lands here; it cancels the notification
+             and forwards to the system Wi-Fi settings activity, then
+             finishes immediately with no visible UI.
+
+             Translucent theme + excludeFromRecents + noHistory keep the
+             trampoline invisible: no flash, no Recents entry, no back-
+             stack residue. -->
+        <activity
+            android:name=".wifinudge.WifiNudgeTapActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".MouseAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
@@ -181,6 +199,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- 2nd Tuesday / 4th Sunday "add wifi 2 save on data" nudge alarm.
+             Re-armed on every boot from DumbDownApp.onCreate, so
+             AlarmManager losing the schedule on reboot or app update
+             self-heals on the next launcher process start.
+             Tap handling lives in WifiNudgeTapActivity, not here — see
+             that class for the Android 10+ background-activity-start
+             rationale. -->
+        <receiver
+            android:name=".wifinudge.WifiNudgeAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.WIFI_NUDGE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Manual trigger for the call-log cleanup worker. Lets the
              deletion logic be exercised on demand from adb, bypassing
              WorkManager / JobScheduler entirely. Exported so `am broadcast`
@@ -217,6 +250,24 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.offlineinc.dumbdownlauncher.RUN_WA_ATTACHMENT_CLEANUP" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Manual triggers for the "add wifi 2 save on data" nudge. Lets
+             the four code paths (scheduled alarm, boot-time check, force
+             post, cancel) be exercised on demand from adb, bypassing the
+             real 2nd-Tuesday / 4th-Sunday cadence. See
+             WifiNudgeTriggerReceiver for the per-action contracts.
+             Worst-case effect of an unsolicited fire is one dismissable
+             notification. -->
+        <receiver
+            android:name=".wifinudge.WifiNudgeTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_WIFI_NUDGE_ALARM" />
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_WIFI_NUDGE_BOOT" />
+                <action android:name="com.offlineinc.dumbdownlauncher.FORCE_POST_WIFI_NUDGE" />
+                <action android:name="com.offlineinc.dumbdownlauncher.CANCEL_WIFI_NUDGE" />
             </intent-filter>
         </receiver>
 
