@@ -27,7 +27,10 @@ EOF
   exit 1
 fi
 
-mapfile -t DEVICES < <(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+DEVICES=()
+while IFS= read -r _line; do
+  [[ -n "$_line" ]] && DEVICES+=("$_line")
+done < <(adb devices | awk 'NR>1 && $2=="device" {print $1}')
 if [[ ${#DEVICES[@]} -eq 0 ]]; then
   echo "error: no devices connected. plug the phone in, accept the USB-debug prompt, then re-run." >&2
   adb devices >&2
