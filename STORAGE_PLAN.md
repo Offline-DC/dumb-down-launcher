@@ -4,6 +4,34 @@ Phones (TCL Flip 2) ship with 8 GB internal. The launcher already runs three Wor
 
 Decisions locked in: cleanups run **nightly at 4 AM**, Storage UI is a **summary screen with per-app "clear" buttons**, swap is **removed for everyone on next update**, **no changes** to `dumb-phone-configuration`.
 
+## 0. What the first audit revealed (TCL Flip 2 / model 4058R)
+
+Run on a real device, 17 May 2026. `/data` is **4.5 GB total, 3.6 GB used, 922 MB free — 80% full**. Headline numbers:
+
+| Target | Size on device | Notes |
+|---|---|---|
+| `/data/swapfile` | 256 MB | The one-time migration we're removing |
+| zram (`/dev/block/zram0`) | 671 MB virtual, 654 MB used | **Stays.** Kernel-managed compressed-RAM swap, independent of disk swap. The device is under real memory pressure; we are only removing the *disk* swap. |
+| AntennaPod total | 137 MB (109 MB `/data/data/de.danoeh.antennapod` + 28 MB `/data/media/0/Android/data/de.danoeh.antennapod`) | Biggest single recurring waste. Highest-priority new worker. |
+| OpenBubbles | 117 MB total, **78 MB in `app_flutter/attachments`** (39 files) | Already covered by existing weekly worker — moving to nightly turns this into ~78 MB recurring reclaim. |
+| WhatsApp | 84 MB `/data/data/com.whatsapp` (message DB — untouchable) + **10 MB on `/sdcard/Android/media/...`** | The disk-media path is already tiny. Existing worker is doing its job. Going from 7d→0d retention gains very little here; keep the existing cleanup but down-prioritise tightening this one. |
+| Apple Music | 49 MB | Only 6.6 MB visible in cache + 0.5 MB MediaLibraryCore — the other 42 MB is in subdirs the first audit didn't surface. Second run with deeper queries pending. |
+| Spotify | 8.4 MB | This user barely downloads offline. Worker is still worth shipping for users who do. |
+| Chrome | 38 MB (mostly `app_chrome`, only 1.3 MB cache) | Modest win. |
+| Total app cache | **~246 MB** (sum of `/data/data/*/cache` + `code_cache`) | `pm trim-caches` reclaims a sizable chunk of this nightly. |
+| Launcher itself | 2.5 MB | Fine. |
+| `/sdcard/Download`, `DCIM`, `Pictures`, `Music`, `Podcasts` | All <8 MB combined | Not a concern. |
+| `/data/anr`, `/data/tombstones`, `/data/system/dropbox` | <4 MB combined | Not worth a special cleanup. |
+
+**Migration prefs confirmed**: `create_swap_256m: true` is present, alongside `delete_type_sync_channel`, `disable_wifi_scan_throttle`, `remove_openbubbles_doze_whitelist`, `whatsapp_setup_v1`, `uninstall_snake_apk`, `disable_tcl_fota`, `openbubbles_setup_v1`, `grant_openbubbles_contact_perms`. The `remove_swap_256m_v1` migration slots in next to these.
+
+**Estimated one-time + nightly reclaim** if every part of this plan ships:
+- **One-time (next update boot):** ~256 MB from swap removal.
+- **First nightly run:** ~78 MB OpenBubbles attachments + ~130 MB AntennaPod episodes + ~150–200 MB from `pm trim-caches`. Order-of-magnitude: **~360–410 MB recurring**, on top of the 256 MB one-time.
+- Spotify / Apple Music workers add variable amounts for users who download offline (this audited device: ~tens of MB).
+
+Total: roughly **620–670 MB recovered** within 24 hours of the next launcher update on this device. That moves a 922-MB-free phone to ~1.5–1.6 GB free.
+
 ## 1. Move all cleanup workers to nightly 4 AM, more aggressive
 
 The current 2 AM schedule and the once-a-week OpenBubbles cadence both go away. Single unified cleanup pass at 4 AM.
