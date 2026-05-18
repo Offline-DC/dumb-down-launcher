@@ -15,7 +15,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.offlineinc.dumbdownlauncher.R
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
@@ -51,11 +54,17 @@ internal fun DuckTarget(
             )
             .hoverable(interactionSource = interactionSource, enabled = enabled)
             .then(
-                if (enabled) Modifier.clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    onClick = onClick
-                ) else Modifier
+                // When enabled, advertise this as a clickable target so a physical
+                // mouse / Magic Mouse swaps to the hand-pointer cursor on hover
+                // (matches standard "this is a button" affordance).
+                if (enabled) Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        role = Role.Button,
+                        onClick = onClick
+                    ) else Modifier
             ),
         contentAlignment = Alignment.Center
     ) {
