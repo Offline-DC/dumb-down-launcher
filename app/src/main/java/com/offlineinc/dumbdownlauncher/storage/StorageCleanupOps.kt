@@ -71,6 +71,9 @@ object StorageCleanupOps {
     private const val SPOTIFY_CACHE_DIR =
         "/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache"
 
+    /** Filesystem path of AntennaPod's episode cache. */
+    private const val ANTENNAPOD_CACHE_DIR = "/data/data/de.danoeh.antennapod/cache"
+
     // ── Public types ──────────────────────────────────────────────────────
 
     /**
@@ -103,10 +106,11 @@ object StorageCleanupOps {
      * label explicit about that.
      *
      * `pm trim-caches` doesn't print bytes-freed; we approximate by
-     * `du`-summing `/data/data/*/cache` and `/data/data/*/code_cache`
-     * before the trim. Inflated slightly because not every app's cache
-     * is reclaimable (apps that called [android.os.storage.StorageManager.allocateBytes]
-     * lock their cache against the trim), but close enough for a UI row.
+     * du-summing every `/data/data/<pkg>/cache` and the matching
+     * `code_cache` dir before the trim. Inflated slightly because not
+     * every app's cache is reclaimable (apps that called
+     * [android.os.storage.StorageManager.allocateBytes] lock their cache
+     * against the trim), but close enough for a UI row.
      */
     @JvmStatic
     fun trimAppCaches(context: Context, tag: String = TAG): ClearResult {
@@ -141,8 +145,7 @@ object StorageCleanupOps {
      */
     @JvmStatic
     fun clearAntennaPodEpisodes(context: Context, tag: String = TAG): ClearResult {
-        val dir = "/data/data/de.danoeh.antennapod/cache"
-        return clearDirectoryContents(context, Target.ANTENNAPOD, dir, tag)
+        return clearDirectoryContents(context, Target.ANTENNAPOD, ANTENNAPOD_CACHE_DIR, tag)
     }
 
     /**
@@ -257,14 +260,27 @@ object StorageCleanupOps {
      * Returns the size of [path] in bytes via `du -sk`. Zero if the path
      * doesn't exist, isn't a directory, or the call failed. Cheap — `du`
      * stat-walks one subtree, no read I/O.
+     *
+     * Private because cross-file callers (`FreeUpSpaceScreen`) ran into
+     * a Kotlin / build-cache resolution issue against this overload when
+     * called as `StorageCleanupOps.directorySizeBytes(literal)` — see
+     * [antennaPodSizeBytes] and [spotifyOfflineSizeBytes] for the no-arg
+     * wrappers callers should use instead.
      */
-    @JvmStatic
-    fun directorySizeBytes(path: String): Long {
+    private fun directorySizeBytes(path: String): Long {
         val (_, exists, _) = rootExec("test -d $path && echo y || echo n")
         if (exists != "y") return 0L
         val (_, out, _) = rootExec("du -sk $path 2>/dev/null")
         return out.split(Regex("\\s+")).firstOrNull()?.toLongOrNull()?.times(1024L) ?: 0L
     }
+
+    /** Size of AntennaPod's episode cache in bytes, 0 if missing. */
+    @JvmStatic
+    fun antennaPodSizeBytes(): Long = directorySizeBytes(ANTENNAPOD_CACHE_DIR)
+
+    /** Size of Spotify's combined cache + downloads dir in bytes, 0 if missing. */
+    @JvmStatic
+    fun spotifyOfflineSizeBytes(): Long = directorySizeBytes(SPOTIFY_CACHE_DIR)
 
     /**
      * Heuristic size for Apple Music offline downloads — matches the same

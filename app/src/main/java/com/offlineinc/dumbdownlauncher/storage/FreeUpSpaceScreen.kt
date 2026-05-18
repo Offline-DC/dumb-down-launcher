@@ -41,8 +41,6 @@ import androidx.compose.ui.unit.dp
 import com.offlineinc.dumbdownlauncher.ui.SoftKeyBar
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -376,28 +374,24 @@ private suspend fun loadEverything(
     val free = stat.availableBlocksLong * stat.blockSizeLong
     onTotals(free, total)
 
-    // Size queries run in parallel on IO so the slow ones (du walks) overlap.
-    val sizesDeferred = listOf(
-        async(Dispatchers.IO) {
-            StorageCleanupOps.Target.ANTENNAPOD to
-                StorageCleanupOps.directorySizeBytes("/data/data/de.danoeh.antennapod/cache")
-        },
-        async(Dispatchers.IO) {
-            StorageCleanupOps.Target.SPOTIFY_OFFLINE to
-                StorageCleanupOps.directorySizeBytes(
-                    "/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache"
-                )
-        },
-        async(Dispatchers.IO) {
-            StorageCleanupOps.Target.APPLE_MUSIC_OFFLINE to
-                StorageCleanupOps.appleMusicOfflineSizeBytes()
-        },
-        async(Dispatchers.IO) {
-            StorageCleanupOps.Target.APP_CACHES to
-                StorageCleanupOps.totalAppCachesSizeBytes()
-        },
-    )
-    val sizesMap = sizesDeferred.awaitAll().toMap()
+    // Size queries run sequentially on IO. The result is a flat
+    // mutable map populated with explicit put() calls — earlier shapes
+    // (parallel async, `to`-infix list, sequential mapOf {...}) all
+    // tripped the same Kotlin resolution failure where call-site
+    // references to StorageCleanupOps members were marked unresolved
+    // despite the symbols being clearly present in the source.
+    val sizesMap: MutableMap<StorageCleanupOps.Target, Long> =
+        mutableMapOf()
+    withContext(Dispatchers.IO) {
+        sizesMap[StorageCleanupOps.Target.ANTENNAPOD] =
+            StorageCleanupOps.antennaPodSizeBytes()
+        sizesMap[StorageCleanupOps.Target.SPOTIFY_OFFLINE] =
+            StorageCleanupOps.spotifyOfflineSizeBytes()
+        sizesMap[StorageCleanupOps.Target.APPLE_MUSIC_OFFLINE] =
+            StorageCleanupOps.appleMusicOfflineSizeBytes()
+        sizesMap[StorageCleanupOps.Target.APP_CACHES] =
+            StorageCleanupOps.totalAppCachesSizeBytes()
+    }
 
     // Build rows in display order. Hide anything under the threshold so
     // the screen stays a list of *useful* actions.
