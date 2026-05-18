@@ -62,11 +62,16 @@ internal fun CoverNotificationOverlay(overlay: OverlayState?) {
         }
         if (o.kind == OverlayKind.CALL) {
             Spacer(Modifier.height(overlayLabelToSub))
+            // Phone numbers are wider than contact names — shrink the font for raw
+            // numbers so they don't get truncated on the 128px cover display, but
+            // keep contact names at the full 8.sp.
+            val isPhoneNumber = o.line2.isNotBlank() &&
+                o.line2.all { it.isDigit() || it in "+-()., " }
             BasicText(
                 text     = o.line2,
                 style    = TextStyle(
                     fontFamily = font,
-                    fontSize   = 8.sp,
+                    fontSize   = if (isPhoneNumber) 6.5.sp else 8.sp,
                     color      = White,
                     textAlign  = TextAlign.Center,
                 ),
