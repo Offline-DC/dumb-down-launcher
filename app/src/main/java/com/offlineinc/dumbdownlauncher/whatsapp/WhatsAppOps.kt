@@ -1,5 +1,7 @@
 package com.offlineinc.dumbdownlauncher.whatsapp
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
 import java.util.concurrent.TimeUnit
 
@@ -246,6 +248,135 @@ object WhatsAppOps {
                 "${TARGET_SUBDIRS.size} subdir(s) of $MEDIA_ROOT (was $display)"
         )
         return ClearResult(filesDeleted = totalDeleted, bytesFreedDisplay = display)
+    }
+
+    /** Where WhatsApp stores the auto-download bitmask prefs. */
+    private const val PREFS_PATH =
+        "/data/data/$PKG/shared_prefs/com.whatsapp_preferences_light.xml"
+
+    /**
+     * Re-applies the opinionated WhatsApp auto-download-off masks that
+     * are also set at provisioning time by the `whatsapp_setup_v1` migration
+     * in [com.offlineinc.dumbdownlauncher.DumbDownApp]. Safe to call any
+     * number of times — when the values on disk already match, no writes
+     * happen.
+     *
+     * Settings asserted (bitmask: 1=images, 2=audio, 4=video, 8=documents):
+     *  - `autodownload_cellular_mask` → 0  (no cellular auto-download)
+     *  - `autodownload_wifi_mask`     → 0  (no wifi auto-download)
+     *  - `autodownload_roaming_mask`  → 0  (no roaming auto-download)
+     *
+     * Defense-in-depth: WhatsApp rewrites this XML on its own schedule,
+     * and an app update could revert these values. The
+     * [WhatsAppAttachmentCleanupWorker] calls this nightly so a drift can
+     * cause at most one day of auto-downloads.
+     *
+     * Behaviour:
+     *  - Returns benignly when WhatsApp isn't installed.
+     *  - Returns benignly when the prefs file doesn't exist yet (WhatsApp
+     *    has never been opened — file is created lazily on first launch).
+     *  - Calls [stopQuietly] before editing — so this method also THROWS
+     *    [IllegalStateException] when WhatsApp is focused. Callers should
+     *    catch and skip.
+     *  - Uses [context]'s cacheDir to stage the new content, then `cp` via
+     *    root into the target path. Restores original ownership and 600
+     *    file mode (matches what com.whatsapp_preferences_light.xml ships
+     *    with — note: 600, not 660 like the OpenBubbles equivalent).
+     */
+    @JvmStatic
+    fun applyAutoDownloadMaskZero(context: Context, tag: String = TAG) {
+        // Skip cleanly when WhatsApp isn't installed.
+        try {
+            context.packageManager.getPackageInfo(PKG, 0)
+        } catch (_: PackageManager.NameNotFoundException) {
+            Log.d(tag, "WA applyAutoDownloadMaskZero: $PKG not installed — skipping")
+            return
+        }
+
+        // The prefs file doesn't exist until WhatsApp is launched once.
+        val (_, existsOut, _) = rootExec("test -f $PREFS_PATH && echo y || echo n")
+        if (existsOut != "y") {
+            Log.d(
+                tag,
+                "WA applyAutoDownloadMaskZero: $PREFS_PATH not present yet " +
+                    "— skipping (WA has never been opened)"
+            )
+            return
+        }
+
+        // Quietly kill WhatsApp so its in-memory SharedPreferences cache
+        // can't write back over our edits. Throws if WA is currently focused.
+        stopQuietly(tag)
+
+        // Read current contents, capture original ownership.
+        val (catExit, content, catErr) = rootExec("cat $PREFS_PATH")
+        if (catExit != 0) {
+            Log.w(tag, "WA applyAutoDownloadMaskZero: cat failed (exit=$catExit): $catErr")
+            return
+        }
+        val (_, ownerOut, _) = rootExec("stat -c %u:%g $PREFS_PATH")
+        val owner = ownerOut.trim()
+
+        val targets = mapOf(
+            "autodownload_cellular_mask" to "0",
+            "autodownload_wifi_mask" to "0",
+            "autodownload_roaming_mask" to "0",
+        )
+
+        var modified = content
+        var changes = 0
+        for ((key, desiredValue) in targets) {
+            val pattern = Regex(
+                """<int\s+name="${Regex.escape(key)}"\s+value="(\d+)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                val current = match.groupValues[1]
+                if (current == desiredValue) continue
+                modified = pattern.replace(
+                    modified,
+                    """<int name="$key" value="$desiredValue" />"""
+                )
+                changes++
+                Log.d(tag, "WA applyAutoDownloadMaskZero: $key $current -> $desiredValue")
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <int name=\"$key\" value=\"$desiredValue\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "WA applyAutoDownloadMaskZero: $key absent — inserted as $desiredValue")
+            } else {
+                Log.w(
+                    tag,
+                    "WA applyAutoDownloadMaskZero: prefs file missing </map> close — skipped $key"
+                )
+            }
+        }
+
+        if (changes == 0) {
+            Log.d(tag, "WA applyAutoDownloadMaskZero: already in desired state — no write")
+            return
+        }
+
+        // Stage in cacheDir then cp into place — avoids embedding XML in a
+        // shell heredoc. Same approach the migration used.
+        val tmp = java.io.File(context.cacheDir, "_wa_prefs_apply.xml")
+        try {
+            tmp.writeText(modified)
+            tmp.setReadable(true, /* ownerOnly = */ false)
+            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $PREFS_PATH")
+            if (cpExit != 0) {
+                Log.w(tag, "WA applyAutoDownloadMaskZero: cp failed (exit=$cpExit): $cpErr")
+                return
+            }
+            if (owner.isNotEmpty()) rootExec("chown $owner $PREFS_PATH")
+            // 600 matches what we observed on-device for this file.
+            rootExec("chmod 600 $PREFS_PATH")
+            Log.i(tag, "WA applyAutoDownloadMaskZero: wrote $changes change(s)")
+        } finally {
+            tmp.delete()
+        }
     }
 
     /**

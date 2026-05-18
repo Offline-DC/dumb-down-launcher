@@ -163,6 +163,16 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
+            // Free up space — built-in storage cleanup tile. Always shown
+            // so users on tight-storage devices (TCL Flip 2 etc.) have
+            // a one-tap way to recover MBs.
+            appItems.add(AppItem(
+                packageName = FREE_UP_SPACE,
+                label = "free up space",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+
             // Show smart txt when platform is chosen (iOS → OpenBubbles, Android → Google Messages)
             val platform = PlatformPreferences.getChoice(context)
             val smartTxtPkg = when (platform) {
@@ -388,6 +398,13 @@ class AllAppsActivity : AppCompatActivity() {
                     WEATHER -> {
                         startActivity(
                             Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.weather.WeatherActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
+                    FREE_UP_SPACE -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.storage.FreeUpSpaceActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         )
                         overridePendingTransition(0, 0)

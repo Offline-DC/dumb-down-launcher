@@ -24,6 +24,7 @@ import com.offlineinc.dumbdownlauncher.quack.QuackLocationRefreshWorker
 import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
+import com.offlineinc.dumbdownlauncher.storage.SpotifyOfflineCleanupWorker
 import com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 import okhttp3.MediaType.Companion.toMediaType
@@ -46,7 +47,18 @@ class DumbDownApp : Application() {
         private const val MIGRATION_BOOT_DELAY_MS: Long = 30_000L
 
         internal const val MIGRATIONS_PREFS = "migrations"
-        internal const val MIGRATION_SWAP_KEY = "create_swap_256m"
+
+        /**
+         * One-time migration that disables and deletes `/data/swapfile`.
+         * The historic `create_swap_256m` migration allocated a 256 MB
+         * disk-backed swap file on every device; with `/data` capped at
+         * ~4.5 GB on the TCL Flip 2 that was 5–6% of the partition
+         * dedicated to swap on top of the kernel-managed zram, and was
+         * the biggest single recovery the audit identified.
+         *
+         * Bump the v-suffix to `_v2` etc. to force re-run on every device.
+         */
+        internal const val MIGRATION_REMOVE_SWAP_KEY = "remove_swap_256m_v1"
 
         /**
          * Offline backend base URL — kept in sync with [DeviceRegistrar.API_BASE]
@@ -88,42 +100,42 @@ class DumbDownApp : Application() {
             BetaUpdateReminderWorker.schedule(this)
         }
 
-        // Nightly 2 AM cleanup of the system call log — anything older than
-        // 7 days is deleted. Keeps calllog.db small on low-storage devices
-        // (TCL Flip Go) so the dialer and launcher stay responsive. KEEP
-        // policy means re-scheduling on every boot is a no-op once the
-        // first run has been queued.
+        // Unified 4 AM nightly storage-cleanup window. All three workers
+        // run at the same hour so the device's su / eMMC pressure peaks
+        // once per night, not three times. KEEP policy on each makes
+        // re-scheduling on every boot a no-op; the v2 work-name bump in
+        // each worker also explicitly cancels the pre-4-AM schedule.
+        //
+        // Nightly call-log cleanup — keeps newest 25 rows in calllog.db
+        // so the system DB doesn't bloat on low-storage devices (TCL
+        // Flip 2). Older rows are deleted via the content provider.
         CallLogCleanupWorker.schedule(this)
 
-        // Weekly 2 AM wipe of OpenBubbles' attachment cache. Pairs with
-        // the openbubbles_setup_v1 migration that turns autoDownload
-        // off, so the cache only refills with attachments the user
-        // explicitly opens between runs. Skips cleanly when OpenBubbles
-        // is in the foreground (defers to the next weekly tick).
+        // Nightly wipe of OpenBubbles' attachment cache. Pairs with the
+        // openbubbles_setup_v1 migration that turns autoDownload off —
+        // and the worker now also re-asserts that setting on every run
+        // (defense-in-depth against Flutter or app-update reverts).
+        // Skips cleanly when OpenBubbles is in the foreground.
         OpenBubblesAttachmentCleanupWorker.schedule(this)
 
-        // Nightly 2 AM rolling cleanup of WhatsApp attachments older
-        // than 7 days, restricted to three subdirs: .Links/ (link-
-        // preview thumbnails — regenerated freely from the source URL),
-        // WhatsApp Images/, and WhatsApp Video/. Voice notes, documents,
-        // animated gifs, and audio are deliberately preserved (see
-        // WhatsAppOps.TARGET_SUBDIRS). Pairs with the whatsapp_setup_v1
-        // migration that zeroes the autodownload bitmasks, so those
-        // three dirs only refill with attachments the user explicitly
-        // opens.
-        //
-        // Unlike OpenBubbles, this worker doesn't kill WhatsApp first —
-        // WhatsApp's media lives on /sdcard rather than /data/data so
-        // there's nothing to race, and the -mtime +7 predicate
-        // guarantees we never touch in-flight downloads. CRITICALLY
+        // Nightly wipe of WhatsApp media in .Links/, WhatsApp Images/,
+        // and WhatsApp Video/. Voice notes, documents, animated gifs,
+        // and audio are deliberately preserved. Pairs with the
+        // whatsapp_setup_v1 migration that zeroes the autodownload
+        // bitmasks, and now re-asserts those masks nightly. CRITICALLY
         // excludes .nomedia sentinel files; deleting them would unhide
         // WhatsApp's private/voice-note dirs in the system Photos app —
         // see WhatsAppOps.clearOldAttachments for details.
-        //
-        // Tighter cadence than the OpenBubbles weekly wipe because
-        // .Links/ accumulates link-preview thumbnails continuously and
-        // benefits from a daily trim cycle.
         WhatsAppAttachmentCleanupWorker.schedule(this)
+
+        // Nightly wipe of Spotify's on-disk streaming cache (the
+        // `spotifycache/` dir on device-encrypted storage). The audit
+        // captured this growing to 1.3 GB; Spotify Android ignores the
+        // desktop `storage.size=` prefs trick, so the external wipe is
+        // the only available cap. Will also drop user-marked offline
+        // downloads — they share the same dir by Spotify's design — at
+        // the cost of a one-time Wi-Fi re-download next play.
+        SpotifyOfflineCleanupWorker.schedule(this)
 
         // ── All su-heavy boot tasks are serialised on bootExecutor ──────────
         // Previously these ran on separate Threads, causing 4–5 concurrent
@@ -134,8 +146,7 @@ class DumbDownApp : Application() {
         //   3. Location prewarm — populates the quack cache
         //   4. FlipMouse binary update
         //   5. OpenBubbles dumb file
-        //   6. Swap enable (fast swapon, no dd)
-        //   7. (after 30s delay) One-time migrations incl. swap creation
+        //   6. (after 30s delay) One-time migrations
 
         // 1. Ensure the mouse accessibility service is bound at startup so
         //    it's ready before the user toggles TypeSync for the first time.
@@ -246,20 +257,14 @@ class DumbDownApp : Application() {
             }
         }, "DumbDownActivation").apply { isDaemon = true }.start()
 
-        // 6. Enable swap if the file exists — swap doesn't survive reboot,
-        // but as the HOME launcher our onCreate runs on every boot.
-        // Internally defers to the create_swap_256m migration on first run
-        // to avoid racing its dd/mkswap/swapon sequence.
-        bootExecutor.execute { enableSwapIfPresent() }
-
-        // 7. One-time migrations that run once per version bump.
-        // Deferred ~30s on cold boot so the first-time swap-file creation
-        // (9+ seconds of `dd`) and root commands don't compete with modem/SIM
-        // init, WorkManager startup, and first-frame rendering. Subsequent
-        // boots still pay the 30s wait but it's invisible to the user — the
-        // loop short-circuits immediately when everything's already been
-        // applied. Submitted to the same executor so it waits for earlier
-        // tasks to finish before sleeping, avoiding overlap.
+        // 6. One-time migrations that run once per version bump.
+        // Deferred ~30s on cold boot so root commands don't compete with
+        // modem/SIM init, WorkManager startup, and first-frame rendering.
+        // Subsequent boots still pay the 30s wait but it's invisible to
+        // the user — the loop short-circuits immediately when everything's
+        // already been applied. Submitted to the same executor so it
+        // waits for earlier tasks to finish before sleeping, avoiding
+        // overlap.
         bootExecutor.execute {
             try { Thread.sleep(MIGRATION_BOOT_DELAY_MS) }
             catch (ie: InterruptedException) { Thread.currentThread().interrupt(); return@execute }
@@ -581,278 +586,80 @@ class DumbDownApp : Application() {
     }
 
     /**
-     * Applies opinionated OpenBubbles defaults by editing
-     * `FlutterSharedPreferences.xml` directly.
+     * Applies opinionated OpenBubbles defaults by delegating to
+     * [OpenBubblesOps.applyAutoDownloadOff]. The Ops helper is also
+     * called nightly by [OpenBubblesAttachmentCleanupWorker] so a
+     * drift in OpenBubbles' Flutter SharedPreferences can be repaired
+     * within ~24 h of any boot.
      *
-     * Skips cleanly if OpenBubbles isn't installed or hasn't been opened
-     * yet (the prefs file is created lazily on first launch). In the
-     * "not opened yet" case the function THROWS so the migration framework
-     * leaves the migration unapplied — it'll retry on the next boot,
-     * picking up the change as soon as the user opens OpenBubbles once.
-     *
-     * The edit pattern is upsert-style per key: if the `<boolean>` line
-     * already exists with the wrong value we replace it; if it's missing
-     * entirely (older OpenBubbles versions where the user never toggled
-     * the setting) we insert it before `</map>`. If it already matches
-     * the target value we leave it alone.
-     *
-     * Settings applied:
-     *  - `flutter.autoDownload`  -> `false`  (don't pre-download attachments)
-     *  - `flutter.highPerfMode`  -> `true`   (turn on OpenBubbles' high-perf path)
+     * Wrapped here so the migration framework's "retry on next boot"
+     * semantics can apply when OpenBubbles hasn't been opened yet
+     * (the Ops helper logs and returns; we throw to defer the
+     * migration so the `openbubbles_setup_v1` flag isn't set until
+     * the edit has actually landed).
      */
     private fun applyOpenBubblesPerfSettings(tag: String) {
-        val obPkg = "com.openbubbles.messaging"
-
-        // Skip cleanly when OB isn't installed.
-        try { packageManager.getPackageInfo(obPkg, 0) }
-        catch (_: PackageManager.NameNotFoundException) {
-            Log.d(tag, "$obPkg not installed — skipping OB perf settings migration")
-            return
-        }
-
-        val prefsPath = "/data/data/$obPkg/shared_prefs/FlutterSharedPreferences.xml"
-
-        // The prefs file doesn't exist until OpenBubbles is launched
-        // once. Throw so the migration framework keeps it pending and
-        // retries on the next boot.
-        val (_, existsOut, _) = rootExec("test -f $prefsPath && echo y || echo n")
-        if (existsOut != "y") {
-            throw IllegalStateException(
-                "$prefsPath not present yet — open OpenBubbles once and this migration will apply on the next boot"
-            )
-        }
-
-        // Quietly kill OpenBubbles so its in-memory SharedPreferences
-        // cache can't write back over our edits. The shared helper
-        // throws if OB is currently focused (avoids the crash-look),
-        // otherwise SIGKILLs the PID — its sticky foreground service
-        // restarts automatically without a visible app-died moment.
-        OpenBubblesOps.stopQuietly(tag)
-
-        // Read current contents, capture original ownership.
-        val (catExit, content, catErr) = rootExec("cat $prefsPath")
-        if (catExit != 0) {
-            throw RuntimeException("cat $prefsPath failed (exit=$catExit): $catErr")
-        }
-        val (_, ownerOut, _) = rootExec("stat -c %u:%g $prefsPath")
-        val owner = ownerOut.trim()
-
-        val targets = mapOf(
-            "flutter.autoDownload" to "false",
-            "flutter.highPerfMode" to "true",
-        )
-
-        var modified = content
-        var changes = 0
-        for ((key, desiredValue) in targets) {
-            val pattern = Regex(
-                """<boolean\s+name="${Regex.escape(key)}"\s+value="(true|false)"\s*/>"""
-            )
-            val match = pattern.find(modified)
-            if (match != null) {
-                val current = match.groupValues[1]
-                if (current == desiredValue) {
-                    Log.d(tag, "OB perf migration: $key already $desiredValue — no change")
-                } else {
-                    modified = pattern.replace(
-                        modified,
-                        """<boolean name="$key" value="$desiredValue" />"""
-                    )
-                    changes++
-                    Log.d(tag, "OB perf migration: $key $current -> $desiredValue")
-                }
-            } else if (modified.contains("</map>")) {
-                modified = modified.replace(
-                    "</map>",
-                    "    <boolean name=\"$key\" value=\"$desiredValue\" />\n</map>"
+        // If OB has never been opened, FlutterSharedPreferences.xml
+        // doesn't exist yet — the Ops helper no-ops in that case.
+        // Detect that here so the migration retries on the next boot.
+        val prefsPath = "/data/data/${OpenBubblesOps.PKG}/shared_prefs/FlutterSharedPreferences.xml"
+        val probe = ProcessBuilder(
+            "su", "-c",
+            "nsenter -t 1 -m -- sh -c 'test -f $prefsPath && echo y || echo n'",
+        ).start()
+        val exists = probe.inputStream.bufferedReader().readText().trim()
+        probe.errorStream.bufferedReader().readText()
+        probe.waitFor()
+        if (exists != "y") {
+            // Soft-skip on a fresh device that has never run OB. The
+            // openbubbles_setup_v1 migration only commits its flag when
+            // the action completes without throwing — throw so it
+            // retries on the next boot once the user has opened OB.
+            try {
+                packageManager.getPackageInfo(OpenBubblesOps.PKG, 0)
+                throw IllegalStateException(
+                    "$prefsPath not present yet — open OpenBubbles once and this migration will apply on the next boot"
                 )
-                changes++
-                Log.d(tag, "OB perf migration: $key absent — inserted as $desiredValue")
-            } else {
-                Log.w(tag, "OB perf migration: prefs file missing </map> close — skipped $key")
+            } catch (_: PackageManager.NameNotFoundException) {
+                // Not installed at all — let the migration commit as
+                // "done"; the nightly worker will also no-op forever
+                // until OB is installed.
+                return
             }
         }
-
-        if (changes == 0) {
-            Log.d(tag, "OB perf migration: nothing to write")
-            return
-        }
-
-        // Stage the new content in our own cacheDir (visible to root via
-        // init's mount namespace) then `cp` into place. Avoids embedding
-        // the file content in a shell heredoc, which gets ugly fast for
-        // XML with lots of quotes.
-        val tmp = java.io.File(cacheDir, "_ob_prefs_v1.xml")
-        try {
-            tmp.writeText(modified)
-            // World-readable so root cp can definitely see it through any
-            // namespace mount weirdness (root reads anything anyway, but
-            // belt-and-suspenders).
-            tmp.setReadable(true, /* ownerOnly = */ false)
-
-            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $prefsPath")
-            if (cpExit != 0) {
-                throw RuntimeException("cp to $prefsPath failed (exit=$cpExit): $cpErr")
-            }
-            if (owner.isNotEmpty()) {
-                rootExec("chown $owner $prefsPath")
-            }
-            // 660 matches what we observed on-device for FlutterSharedPreferences.xml.
-            rootExec("chmod 660 $prefsPath")
-
-            Log.d(tag, "OB perf migration: wrote $changes change(s) to $prefsPath")
-        } finally {
-            tmp.delete()
-        }
+        OpenBubblesOps.applyAutoDownloadOff(this, tag)
     }
 
     /**
-     * Applies opinionated WhatsApp media defaults by editing
-     * `com.whatsapp_preferences_light.xml` directly. Direct analog of
-     * [applyOpenBubblesPerfSettings] — same upsert-or-insert shape — with
-     * three WhatsApp-specific differences:
+     * Applies opinionated WhatsApp media defaults by delegating to
+     * [WhatsAppOps.applyAutoDownloadMaskZero]. The Ops helper is also
+     * called nightly by [WhatsAppAttachmentCleanupWorker] so a drift in
+     * `com.whatsapp_preferences_light.xml` can be repaired within ~24 h
+     * of any boot.
      *
-     *   1. The XML element type is `<int>`, not `<boolean>`. WhatsApp's
-     *      auto-download settings are integer bitmasks, not booleans:
-     *      bit 1 = images, 2 = audio, 4 = video, 8 = documents. Setting
-     *      a mask to 0 disables all four media types for that network
-     *      condition.
-     *
-     *   2. Three keys instead of two — one per network condition. Per
-     *      `scripts/whatsapp_probe.sh` (run against WhatsApp 2.26.13.72
-     *      on the TCL Flip Go), only two of the three exist by default:
-     *      `autodownload_cellular_mask` and `autodownload_wifi_mask`.
-     *      `autodownload_roaming_mask` is created lazily by WhatsApp
-     *      when the user toggles the roaming auto-download setting in
-     *      the UI; we insert it pre-zeroed so that switch flip can't
-     *      surprise us later. The upsert-or-insert pattern handles
-     *      whichever set of keys is present on a given device.
-     *
-     *   3. File mode is restored to 600, not 660. The probe captured
-     *      mode 600 on this file (OpenBubbles' FlutterSharedPreferences
-     *      file is 660). Wrong mode after the cp would either prevent
-     *      WhatsApp from reading its own settings (too restrictive) or
-     *      relax permissions (too permissive); 600 is what the file had
-     *      before our edit, so we put it back.
-     *
-     * Skips cleanly if WhatsApp isn't installed. THROWS if the prefs
-     * file isn't present yet (i.e., WhatsApp has never been opened on
-     * this device — the file is created lazily on first launch). The
-     * throw makes the migration framework leave the migration unapplied
-     * and retry on the next boot.
-     *
-     * Settings applied:
-     *  - `autodownload_cellular_mask` -> 0  (no cellular auto-download)
-     *  - `autodownload_wifi_mask`     -> 0  (no wifi auto-download)
-     *  - `autodownload_roaming_mask`  -> 0  (no roaming auto-download)
+     * Wrapped here so the migration framework's "retry on next boot"
+     * semantics apply when WhatsApp hasn't been opened yet.
      */
     private fun applyWhatsAppMediaSettings(tag: String) {
-        val waPkg = "com.whatsapp"
-
-        // Skip cleanly when WhatsApp isn't installed.
-        try { packageManager.getPackageInfo(waPkg, 0) }
-        catch (_: PackageManager.NameNotFoundException) {
-            Log.d(tag, "$waPkg not installed — skipping WA media settings migration")
-            return
-        }
-
-        val prefsPath = "/data/data/$waPkg/shared_prefs/com.whatsapp_preferences_light.xml"
-
-        // The prefs file doesn't exist until WhatsApp is launched once.
-        // Throw so the migration framework keeps it pending and retries
-        // on the next boot.
-        val (_, existsOut, _) = rootExec("test -f $prefsPath && echo y || echo n")
-        if (existsOut != "y") {
-            throw IllegalStateException(
-                "$prefsPath not present yet — open WhatsApp once and this migration will apply on the next boot"
-            )
-        }
-
-        // Quietly kill WhatsApp so its in-memory SharedPreferences cache
-        // can't write back over our edits. The shared helper throws if
-        // WhatsApp is currently focused (avoids the crash-look),
-        // otherwise SIGKILLs the PIDs.
-        WhatsAppOps.stopQuietly(tag)
-
-        // Read current contents, capture original ownership.
-        val (catExit, content, catErr) = rootExec("cat $prefsPath")
-        if (catExit != 0) {
-            throw RuntimeException("cat $prefsPath failed (exit=$catExit): $catErr")
-        }
-        val (_, ownerOut, _) = rootExec("stat -c %u:%g $prefsPath")
-        val owner = ownerOut.trim()
-
-        // Bitmask: 1=images, 2=audio, 4=video, 8=documents. All three
-        // masks → 0 disables auto-download on every network condition.
-        val targets = mapOf(
-            "autodownload_cellular_mask" to "0",
-            "autodownload_wifi_mask" to "0",
-            "autodownload_roaming_mask" to "0",
-        )
-
-        var modified = content
-        var changes = 0
-        for ((key, desiredValue) in targets) {
-            val pattern = Regex(
-                """<int\s+name="${Regex.escape(key)}"\s+value="(\d+)"\s*/>"""
-            )
-            val match = pattern.find(modified)
-            if (match != null) {
-                val current = match.groupValues[1]
-                if (current == desiredValue) {
-                    Log.d(tag, "WA media migration: $key already $desiredValue — no change")
-                } else {
-                    modified = pattern.replace(
-                        modified,
-                        """<int name="$key" value="$desiredValue" />"""
-                    )
-                    changes++
-                    Log.d(tag, "WA media migration: $key $current -> $desiredValue")
-                }
-            } else if (modified.contains("</map>")) {
-                modified = modified.replace(
-                    "</map>",
-                    "    <int name=\"$key\" value=\"$desiredValue\" />\n</map>"
+        val prefsPath = "/data/data/${WhatsAppOps.PKG}/shared_prefs/com.whatsapp_preferences_light.xml"
+        val probe = ProcessBuilder(
+            "su", "-c",
+            "nsenter -t 1 -m -- sh -c 'test -f $prefsPath && echo y || echo n'",
+        ).start()
+        val exists = probe.inputStream.bufferedReader().readText().trim()
+        probe.errorStream.bufferedReader().readText()
+        probe.waitFor()
+        if (exists != "y") {
+            try {
+                packageManager.getPackageInfo(WhatsAppOps.PKG, 0)
+                throw IllegalStateException(
+                    "$prefsPath not present yet — open WhatsApp once and this migration will apply on the next boot"
                 )
-                changes++
-                Log.d(tag, "WA media migration: $key absent — inserted as $desiredValue")
-            } else {
-                Log.w(tag, "WA media migration: prefs file missing </map> close — skipped $key")
+            } catch (_: PackageManager.NameNotFoundException) {
+                return
             }
         }
-
-        if (changes == 0) {
-            Log.d(tag, "WA media migration: nothing to write")
-            return
-        }
-
-        // Stage the new content in our own cacheDir (visible to root via
-        // init's mount namespace) then `cp` into place. Avoids embedding
-        // the file content in a shell heredoc, which gets ugly fast for
-        // XML with lots of quotes.
-        val tmp = java.io.File(cacheDir, "_wa_prefs_v1.xml")
-        try {
-            tmp.writeText(modified)
-            // World-readable so root cp can definitely see it through any
-            // namespace mount weirdness (root reads anything anyway, but
-            // belt-and-suspenders).
-            tmp.setReadable(true, /* ownerOnly = */ false)
-
-            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $prefsPath")
-            if (cpExit != 0) {
-                throw RuntimeException("cp to $prefsPath failed (exit=$cpExit): $cpErr")
-            }
-            if (owner.isNotEmpty()) {
-                rootExec("chown $owner $prefsPath")
-            }
-            // 600 matches what we observed on-device for this file
-            // (the OpenBubbles equivalent uses 660 — WhatsApp differs).
-            rootExec("chmod 600 $prefsPath")
-
-            Log.d(tag, "WA media migration: wrote $changes change(s) to $prefsPath")
-        } finally {
-            tmp.delete()
-        }
+        WhatsAppOps.applyAutoDownloadMaskZero(this, tag)
     }
 
     /**
@@ -910,104 +717,63 @@ class DumbDownApp : Application() {
                     Log.d(tag, "Deleted old type_sync notification channel")
                 }
             },
-            // Create a 256 MB swap file to give low-RAM devices more headroom
-            // for memory-hungry apps (Uber Lite, WhatsApp, Chrome, etc.).
-            // Removes any existing swap file first to avoid wasting space.
-            MIGRATION_SWAP_KEY to {
-                val swapTag = "SwapSetup"
+            // Remove the 256 MB swap file that an earlier build (the
+            // historic `create_swap_256m` migration) allocated. With
+            // `/data` capped at ~4.5 GB on the TCL Flip 2 the swap was
+            // ~5–6% of the partition; the kernel-managed zram (~671 MB
+            // virtual) handles RAM-pressure swap-out independently, so
+            // removing the disk swap reclaims ~256 MB of storage with
+            // no observed effect on memory headroom.
+            //
+            // Idempotent: swapoff and rm both no-op cleanly if the swap
+            // is already off / the file is already gone, so this is
+            // safe to run on devices that never had the disk swap.
+            MIGRATION_REMOVE_SWAP_KEY to {
+                val swapTag = "SwapRemoval"
                 val swapFile = "/data/swapfile"
-                val sizeMb = 256
-                val targetBytes = sizeMb.toLong() * 1024L * 1024L
                 try {
-                    Log.i(swapTag, "━━━ Starting $sizeMb MB swap setup ━━━")
+                    // 1. swapoff. Stderr "swapoff failed: Invalid argument" is
+                    //    expected when the swap isn't currently active and is
+                    //    not a real failure — we treat it as a no-op.
+                    val offProc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "swapoff $swapFile 2>&1")
+                    )
+                    val offOut = offProc.inputStream.bufferedReader().readText().trim()
+                    val offExit = offProc.waitFor()
+                    Log.i(
+                        swapTag,
+                        "swapoff: exit=$offExit ${if (offOut.isNotEmpty()) "output=$offOut" else "(no output)"}"
+                    )
 
-                    // Short-circuit: if a swap file at the right size already
-                    // exists (e.g. a previous install created it but the
-                    // migration key was cleared), just ensure swapon and exit.
-                    // Avoids a 9+ second `dd` that could block the su daemon
-                    // and re-trigger the cold-boot jank we just fixed.
-                    val statProc = Runtime.getRuntime().exec(
-                        arrayOf("su", "-c", "stat -c %s $swapFile 2>/dev/null || echo 0"))
-                    val existingBytes = statProc.inputStream.bufferedReader()
-                        .readText().trim().toLongOrNull() ?: 0L
-                    statProc.waitFor()
-                    if (existingBytes == targetBytes) {
-                        Log.i(swapTag, "Swap file already exists at target size ($sizeMb MB) — ensuring swapon and skipping recreate")
-                        val swapsProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat /proc/swaps"))
-                        val swaps = swapsProc.inputStream.bufferedReader().readText()
-                        swapsProc.waitFor()
-                        if (!swaps.contains(swapFile)) {
-                            val onProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "swapon $swapFile 2>&1"))
-                            val onOut = onProc.inputStream.bufferedReader().readText().trim()
-                            val onExit = onProc.waitFor()
-                            Log.i(swapTag, "swapon: exit=$onExit ${if (onOut.isNotEmpty()) "output=$onOut" else ""}")
-                        } else {
-                            Log.i(swapTag, "Swap already active")
-                        }
-                        logSwapStatus(swapTag)
-                        return@to
-                    }
+                    // 2. rm -f the file. -f is critical so missing file isn't an error.
+                    val rmProc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "rm -f $swapFile 2>&1")
+                    )
+                    val rmOut = rmProc.inputStream.bufferedReader().readText().trim()
+                    val rmExit = rmProc.waitFor()
+                    Log.i(
+                        swapTag,
+                        "rm -f $swapFile: exit=$rmExit ${if (rmOut.isNotEmpty()) "output=$rmOut" else "(no output)"}"
+                    )
 
-                    // Disable + remove any existing swap file (wrong size or missing)
-                    val checkProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "test -f $swapFile && echo exists || echo missing"))
+                    // 3. Verify the file is gone. If rm failed, throw to defer the
+                    //    migration so the next boot retries. If the file genuinely
+                    //    no longer exists, the migration is done.
+                    val checkProc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "test -f $swapFile && echo exists || echo missing")
+                    )
                     val checkOut = checkProc.inputStream.bufferedReader().readText().trim()
                     checkProc.waitFor()
-                    if (checkOut == "exists") {
-                        Log.i(swapTag, "Old swap file found (size=$existingBytes) — disabling and removing")
-                        val offProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "swapoff $swapFile 2>&1"))
-                        val offOut = offProc.inputStream.bufferedReader().readText().trim()
-                        offProc.waitFor()
-                        Log.i(swapTag, "swapoff: exit=${offProc.exitValue()} ${if (offOut.isNotEmpty()) "output=$offOut" else ""}")
-                        Runtime.getRuntime().exec(arrayOf("su", "-c", "rm -f $swapFile")).waitFor()
-                        Log.i(swapTag, "Deleted old swap file")
+                    if (checkOut != "missing") {
+                        throw RuntimeException(
+                            "$swapFile still present after rm — migration will retry on next boot"
+                        )
                     }
-
-                    // Create new file
-                    Log.i(swapTag, "Creating $sizeMb MB swap file with dd…")
-                    val startMs = System.currentTimeMillis()
-                    val ddProc = Runtime.getRuntime().exec(arrayOf("su", "-c",
-                        "dd if=/dev/zero of=$swapFile bs=1048576 count=$sizeMb 2>&1"))
-                    val ddOut = ddProc.inputStream.bufferedReader().readText().trim()
-                    val ddExit = ddProc.waitFor()
-                    val elapsed = System.currentTimeMillis() - startMs
-                    Log.i(swapTag, "dd finished: exit=$ddExit time=${elapsed}ms output=$ddOut")
-                    if (ddExit != 0) {
-                        Log.e(swapTag, "❌ dd FAILED — aborting swap setup")
-                        return@to
-                    }
-
-                    // Verify file size
-                    val lsProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "ls -la $swapFile"))
-                    val lsOut = lsProc.inputStream.bufferedReader().readText().trim()
-                    lsProc.waitFor()
-                    Log.i(swapTag, "File created: $lsOut")
-
-                    // Secure permissions
-                    val chmodProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "chmod 600 $swapFile"))
-                    chmodProc.waitFor()
-                    Log.i(swapTag, "chmod 600: exit=${chmodProc.exitValue()}")
-
-                    // Format as swap
-                    val mkswapProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "mkswap $swapFile 2>&1"))
-                    val mkswapOut = mkswapProc.inputStream.bufferedReader().readText().trim()
-                    mkswapProc.waitFor()
-                    Log.i(swapTag, "mkswap: exit=${mkswapProc.exitValue()} output=$mkswapOut")
-
-                    // Enable
-                    val swapOnProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "swapon $swapFile 2>&1"))
-                    val swapOnOut = swapOnProc.inputStream.bufferedReader().readText().trim()
-                    val swapExit = swapOnProc.waitFor()
-                    Log.i(swapTag, "swapon: exit=$swapExit ${if (swapOnOut.isNotEmpty()) "output=$swapOnOut" else ""}")
-
-                    logSwapStatus(swapTag)
-
-                    if (swapExit == 0) {
-                        Log.i(swapTag, "✅ Swap file created and enabled ($sizeMb MB)")
-                    } else {
-                        Log.e(swapTag, "❌ swapon failed after creation")
-                    }
+                    Log.i(swapTag, "✅ /data/swapfile removed — ~256 MB reclaimed")
                 } catch (e: Exception) {
-                    Log.e(swapTag, "❌ Swap setup failed: ${e.message}", e)
+                    // Re-throw so runOneTimeMigrations leaves the flag unset
+                    // and tries again on the next boot.
+                    throw e
                 }
             },
             // Disable TCL OTA updater so carrier/OEM updates don't nag or auto-install
@@ -1194,103 +960,6 @@ class DumbDownApp : Application() {
             } catch (e: Exception) {
                 Log.w(tag, "Migration failed: $key — ${e.message}")
             }
-        }
-    }
-
-    /** Logs current swap and memory info so `adb logcat -s SwapSetup SwapBoot` shows the state. */
-    private fun logSwapStatus(tag: String) {
-        try {
-            val swapsProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat /proc/swaps"))
-            val swaps = swapsProc.inputStream.bufferedReader().readText().trim()
-            swapsProc.waitFor()
-            Log.i(tag, "/proc/swaps:\n$swaps")
-
-            val memProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat /proc/meminfo"))
-            val memAll = memProc.inputStream.bufferedReader().readText().trim()
-            memProc.waitFor()
-
-            // Parse key values (in kB) for a human-readable summary
-            val kv = memAll.lines()
-                .mapNotNull { line ->
-                    val parts = line.split(Regex("\\s+"))
-                    if (parts.size >= 2) parts[0].trimEnd(':') to (parts[1].toLongOrNull() ?: 0L)
-                    else null
-                }.toMap()
-
-            val memTotalMb  = (kv["MemTotal"] ?: 0) / 1024
-            val memAvailMb  = (kv["MemAvailable"] ?: 0) / 1024
-            val swapTotalMb = (kv["SwapTotal"] ?: 0) / 1024
-            val swapFreeMb  = (kv["SwapFree"] ?: 0) / 1024
-            val swapUsedMb  = swapTotalMb - swapFreeMb
-
-            Log.i(tag, "Memory: ${memAvailMb}MB available / ${memTotalMb}MB total")
-            Log.i(tag, "Swap:   ${swapUsedMb}MB used / ${swapTotalMb}MB total (${swapFreeMb}MB free)")
-            if (swapUsedMb > 0) {
-                Log.i(tag, "✅ Swap is actively being used — apps have ${swapUsedMb}MB paged out")
-            } else if (swapTotalMb > 0) {
-                Log.i(tag, "Swap enabled but 0 MB used (normal right after boot — will grow as apps run)")
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "logSwapStatus failed: ${e.message}")
-        }
-    }
-
-    /**
-     * Activates the swap file if it exists and isn't already active.
-     * The file is created by the "create_swap_256m" migration; this just
-     * re-enables it after every reboot.
-     */
-    private fun enableSwapIfPresent() {
-        val tag = "SwapBoot"
-        try {
-            // If the create_swap_256m migration hasn't been applied yet, leave
-            // swap setup entirely to that migration. It does the full
-            // dd → mkswap → swapon sequence and we'd otherwise race it,
-            // producing the misleading "swapon failed: No such file" error we
-            // saw after the v3 → v4 upgrade.
-            val migrationsApplied = getSharedPreferences(MIGRATIONS_PREFS, Context.MODE_PRIVATE)
-                .getBoolean(MIGRATION_SWAP_KEY, false)
-            if (!migrationsApplied) {
-                Log.i(tag, "Swap-create migration not yet applied — deferring swapon to migration thread")
-                return
-            }
-
-            val swapFile = "/data/swapfile"
-            Log.i(tag, "━━━ Checking swap on boot ━━━")
-
-            // Quick check: file exists?
-            val check = Runtime.getRuntime().exec(arrayOf("su", "-c", "test -f $swapFile && echo y || echo n"))
-            val exists = check.inputStream.bufferedReader().readText().trim()
-            check.waitFor()
-            if (exists != "y") {
-                Log.i(tag, "No swap file at $swapFile — skipping")
-                return
-            }
-            Log.i(tag, "Swap file exists")
-
-            // Already active?
-            val active = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat /proc/swaps"))
-            val swaps = active.inputStream.bufferedReader().readText()
-            active.waitFor()
-            Log.i(tag, "/proc/swaps:\n$swaps")
-            if (swaps.contains(swapFile)) {
-                Log.i(tag, "✅ Swap already active — nothing to do")
-                logSwapStatus(tag)
-                return
-            }
-
-            Log.i(tag, "Swap not active — enabling…")
-            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "swapon $swapFile 2>&1"))
-            val out = proc.inputStream.bufferedReader().readText().trim()
-            val exit = proc.waitFor()
-            if (exit == 0) {
-                Log.i(tag, "✅ Swap enabled on boot")
-            } else {
-                Log.e(tag, "❌ swapon failed: exit=$exit ${if (out.isNotEmpty()) "output=$out" else ""}")
-            }
-            logSwapStatus(tag)
-        } catch (e: Exception) {
-            Log.e(tag, "❌ enableSwapIfPresent failed: ${e.message}", e)
         }
     }
 

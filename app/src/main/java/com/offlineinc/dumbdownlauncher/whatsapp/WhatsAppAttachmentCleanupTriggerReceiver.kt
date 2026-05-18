@@ -65,9 +65,10 @@ class WhatsAppAttachmentCleanupTriggerReceiver : BroadcastReceiver() {
          * Same value as [WhatsAppAttachmentCleanupWorker]'s `CUTOFF_DAYS`.
          * Hardcoded here too rather than exposed publicly because the
          * trigger broadcast is meant to exercise the EXACT production
-         * path, not a configurable one.
+         * path, not a configurable one. `-mtime +0` means "older than
+         * 24 h" — anything received in the past day is preserved.
          */
-        private const val CUTOFF_DAYS = 7
+        private const val CUTOFF_DAYS = 0
 
         const val ACTION_RUN_CLEANUP =
             "com.offlineinc.dumbdownlauncher.RUN_WA_ATTACHMENT_CLEANUP"

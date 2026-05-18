@@ -1,5 +1,7 @@
 package com.offlineinc.dumbdownlauncher.openbubbles
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
 import java.util.concurrent.TimeUnit
 
@@ -135,6 +137,133 @@ object OpenBubblesOps {
 
         Log.d(tag, "OB clear attachments: cleared $ATTACHMENTS_DIR (was $display)")
         return ClearResult(bytesFreedDisplay = display)
+    }
+
+    /** Where OpenBubbles stores its Flutter SharedPreferences XML. */
+    private const val FLUTTER_PREFS_PATH =
+        "/data/data/$PKG/shared_prefs/FlutterSharedPreferences.xml"
+
+    /**
+     * Re-applies the opinionated OpenBubbles defaults that are also set at
+     * provisioning time by the `openbubbles_setup_v1` migration in
+     * [com.offlineinc.dumbdownlauncher.DumbDownApp]. Safe to call any number
+     * of times — when the values on disk already match, no writes happen.
+     *
+     * Settings asserted:
+     *  - `flutter.autoDownload`  → `false`  (no auto-fetch of attachments)
+     *  - `flutter.highPerfMode`  → `true`   (OpenBubbles' high-perf path on)
+     *
+     * Defense-in-depth: Flutter rewrites its prefs file frequently, and an
+     * OpenBubbles update could revert these values. The
+     * [OpenBubblesAttachmentCleanupWorker] calls this nightly so a drift can
+     * cause at most one day of auto-downloads.
+     *
+     * Behaviour:
+     *  - Returns benignly when OpenBubbles isn't installed.
+     *  - Returns benignly when the prefs file doesn't exist yet (OB has
+     *    never been opened on this device — file is created lazily on
+     *    first launch). The setup migration uses this signal to retry on
+     *    the next boot; the nightly worker just no-ops and tries again
+     *    tomorrow.
+     *  - Calls [stopQuietly] before editing — so this method also THROWS
+     *    [IllegalStateException] when OpenBubbles is focused. Callers
+     *    should catch and skip.
+     *  - Uses [context]'s cacheDir to stage the new content, then `cp` via
+     *    root into the target path. Restores original ownership and 660
+     *    file mode (matches what FlutterSharedPreferences.xml ships with).
+     */
+    @JvmStatic
+    fun applyAutoDownloadOff(context: Context, tag: String = TAG) {
+        // Skip cleanly when OB isn't installed.
+        try {
+            context.packageManager.getPackageInfo(PKG, 0)
+        } catch (_: PackageManager.NameNotFoundException) {
+            Log.d(tag, "OB applyAutoDownloadOff: $PKG not installed — skipping")
+            return
+        }
+
+        // The prefs file doesn't exist until OpenBubbles is launched once.
+        val (_, existsOut, _) = rootExec("test -f $FLUTTER_PREFS_PATH && echo y || echo n")
+        if (existsOut != "y") {
+            Log.d(
+                tag,
+                "OB applyAutoDownloadOff: $FLUTTER_PREFS_PATH not present yet " +
+                    "— skipping (OB has never been opened)"
+            )
+            return
+        }
+
+        // Quietly kill OpenBubbles so its in-memory SharedPreferences cache
+        // can't write back over our edits. Throws if OB is currently focused.
+        stopQuietly(tag)
+
+        // Read current contents, capture original ownership.
+        val (catExit, content, catErr) = rootExec("cat $FLUTTER_PREFS_PATH")
+        if (catExit != 0) {
+            Log.w(tag, "OB applyAutoDownloadOff: cat failed (exit=$catExit): $catErr")
+            return
+        }
+        val (_, ownerOut, _) = rootExec("stat -c %u:%g $FLUTTER_PREFS_PATH")
+        val owner = ownerOut.trim()
+
+        val targets = mapOf(
+            "flutter.autoDownload" to "false",
+            "flutter.highPerfMode" to "true",
+        )
+
+        var modified = content
+        var changes = 0
+        for ((key, desiredValue) in targets) {
+            val pattern = Regex(
+                """<boolean\s+name="${Regex.escape(key)}"\s+value="(true|false)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                val current = match.groupValues[1]
+                if (current == desiredValue) continue
+                modified = pattern.replace(
+                    modified,
+                    """<boolean name="$key" value="$desiredValue" />"""
+                )
+                changes++
+                Log.d(tag, "OB applyAutoDownloadOff: $key $current -> $desiredValue")
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <boolean name=\"$key\" value=\"$desiredValue\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "OB applyAutoDownloadOff: $key absent — inserted as $desiredValue")
+            } else {
+                Log.w(
+                    tag,
+                    "OB applyAutoDownloadOff: prefs file missing </map> close — skipped $key"
+                )
+            }
+        }
+
+        if (changes == 0) {
+            Log.d(tag, "OB applyAutoDownloadOff: already in desired state — no write")
+            return
+        }
+
+        // Stage in cacheDir then cp into place — avoids embedding XML in a
+        // shell heredoc. Same approach the migration used.
+        val tmp = java.io.File(context.cacheDir, "_ob_prefs_apply.xml")
+        try {
+            tmp.writeText(modified)
+            tmp.setReadable(true, /* ownerOnly = */ false)
+            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $FLUTTER_PREFS_PATH")
+            if (cpExit != 0) {
+                Log.w(tag, "OB applyAutoDownloadOff: cp failed (exit=$cpExit): $cpErr")
+                return
+            }
+            if (owner.isNotEmpty()) rootExec("chown $owner $FLUTTER_PREFS_PATH")
+            rootExec("chmod 660 $FLUTTER_PREFS_PATH")
+            Log.i(tag, "OB applyAutoDownloadOff: wrote $changes change(s)")
+        } finally {
+            tmp.delete()
+        }
     }
 
     /**

@@ -13,37 +13,32 @@ import java.util.concurrent.TimeUnit
 private const val TAG = "WAAttachmentWorker"
 
 /**
- * Nightly rolling cleanup of WhatsApp attachments older than 7 days,
- * restricted to the three subdirs in [WhatsAppOps.TARGET_SUBDIRS] —
- * `.Links/`, `WhatsApp Images/`, and `WhatsApp Video/`.
+ * Nightly cleanup of WhatsApp media — every file in `.Links/`,
+ * `WhatsApp Images/`, and `WhatsApp Video/` gets wiped each run.
  *
  * Pairs with the autodownload-disable migration applied via
  * `whatsapp_setup_v1` in [com.offlineinc.dumbdownlauncher.DumbDownApp] —
- * together they keep WhatsApp's media footprint to roughly the last week
- * of stuff the user explicitly opened, in the categories where the
- * "view on primary phone" or "tap to redownload" recovery paths actually
- * work. Voice notes and documents are deliberately preserved (see
- * [WhatsAppOps.TARGET_SUBDIRS] for rationale).
+ * and which this worker now also **re-asserts** on every run, so a
+ * WhatsApp update or in-app toggle can cause at most one day of
+ * auto-downloads before being papered back over.
  *
- * Runs once every 24 hours, anchored to the next 2 AM local time —
- * same hour as [com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker]
- * and [com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesAttachmentCleanupWorker].
- * Phone is idle, no calls landing, no one looking at the dialer. (OB's
- * cleanup is currently weekly; this one runs nightly because the
- * `.Links/` thumbnail dir grows continuously and benefits from a tighter
- * trim cycle.)
+ * Voice notes, documents, animated GIFs, audio, stickers, and the
+ * `.nomedia` sentinels are preserved — only the three high-churn,
+ * easily-redownloaded categories get wiped (see [WhatsAppOps] for
+ * rationale).
  *
- * Implementation delegates to [WhatsAppOps.clearOldAttachments], which
- * excludes `.nomedia` sentinels (critical: deleting them would unhide
- * WhatsApp's private/voice-note dirs in the system Photos app) and
- * skips any of the three target subdirs that don't exist yet on a fresh
- * install.
+ * Runs once every 24 hours, anchored to the next 4 AM local time — the
+ * unified storage-cleanup window across all workers. Phone is idle,
+ * no calls landing.
  *
- * Unlike its OpenBubbles sibling, this worker does NOT stop WhatsApp
- * first. WhatsApp's media lives on `/sdcard` rather than in `/data/data`,
- * so there's no in-memory cache to race; and the `-mtime +7` predicate
- * means we never touch a file currently being downloaded (those are
- * by definition < 8 days old).
+ * Two-step run:
+ *   1. [WhatsAppOps.applyAutoDownloadMaskZero] re-asserts the three
+ *      auto-download bitmasks to 0. No-ops cleanly if already correct.
+ *      Killing WhatsApp here is fine; user is asleep at 4 AM.
+ *   2. [WhatsAppOps.clearOldAttachments] wipes the three target media
+ *      subdirs. Uses `CUTOFF_DAYS = 0`, which `-mtime +0` translates
+ *      to "files older than 24h" — so something received in the past
+ *      day is preserved, anything older is gone.
  */
 class WhatsAppAttachmentCleanupWorker(
     context: Context,
@@ -52,6 +47,17 @@ class WhatsAppAttachmentCleanupWorker(
 
     override fun doWork(): Result {
         return try {
+            // Re-apply the autodownload-off prefs first. Throws if
+            // WhatsApp is currently focused — we catch below and defer
+            // to the next nightly tick.
+            try {
+                WhatsAppOps.applyAutoDownloadMaskZero(applicationContext, TAG)
+            } catch (e: IllegalStateException) {
+                Log.i(TAG, "doWork: prefs re-apply deferred — ${e.message}")
+                // Don't return — clearing media still works even if
+                // WhatsApp is focused (different rationale, see
+                // WhatsAppOps.clearOldAttachments).
+            }
             val result = WhatsAppOps.clearOldAttachments(CUTOFF_DAYS, TAG)
             Log.i(
                 TAG,
@@ -68,31 +74,44 @@ class WhatsAppAttachmentCleanupWorker(
     }
 
     companion object {
-        private const val WORK_NAME = "whatsapp_attachment_cleanup"
+        /**
+         * Pre-v2 work name from when the worker ran at 2 AM with a
+         * 7-day rolling retention. Cancelled in [schedule] so devices
+         * upgrading from an older build don't end up with both
+         * schedules queued.
+         */
+        private const val OLD_WORK_NAME = "whatsapp_attachment_cleanup"
+        private const val WORK_NAME = "whatsapp_attachment_cleanup_v2"
         /** Nightly cadence (24 h between fires). */
         private const val PERIOD_DAYS = 1L
         /**
          * Files strictly older than this many days are eligible for
-         * deletion. `find -mtime +N` means "more than N*24h ago", so
-         * `CUTOFF_DAYS = 7` deletes files at least 8 days old — which
-         * matches "older than 7 days" in conversational English.
+         * deletion. `find -mtime +0` means "more than 0*24h ago" —
+         * so files older than 24 h get wiped, and anything received
+         * in the past day is preserved. (Previously: 7 days; tightened
+         * to 0 to keep WhatsApp media at near-zero on disk.)
          */
-        private const val CUTOFF_DAYS = 7
-        private const val TARGET_HOUR_LOCAL = 2  // 2 AM local time
+        private const val CUTOFF_DAYS = 0
+        private const val TARGET_HOUR_LOCAL = 4  // 4 AM local time
 
         /**
          * Schedules the nightly cleanup. First fire is anchored to the
-         * next 2 AM local time, subsequent fires are 24 hours apart.
+         * next 4 AM local time, subsequent fires are 24 hours apart.
          * [ExistingPeriodicWorkPolicy.KEEP] so re-scheduling on every
          * boot (we are the HOME launcher) is a no-op once queued.
          *
-         * Note: if a prior install of this app queued this worker under
-         * the same WORK_NAME but with a different period (e.g., during
-         * dev iteration when the cadence was weekly), KEEP means the old
-         * schedule survives. To force the new schedule on a device with
-         * a stale entry, clear app data or call [cancel] + reschedule.
+         * On upgrade from a build that scheduled this worker under
+         * [OLD_WORK_NAME] with a different period / hour, the explicit
+         * `cancelUniqueWork(OLD_WORK_NAME)` call below drops that stale
+         * entry so the new schedule takes effect.
          */
         fun schedule(context: Context) {
+            // Cancel the pre-v2 schedule (2 AM / 7-day retention) so a
+            // device upgrading from an older build doesn't end up with
+            // both schedules queued. No-op on devices that never had
+            // the old entry.
+            WorkManager.getInstance(context).cancelUniqueWork(OLD_WORK_NAME)
+
             val initialDelayMs = millisUntilNextTargetHour()
             val request = PeriodicWorkRequestBuilder<WhatsAppAttachmentCleanupWorker>(
                 PERIOD_DAYS, TimeUnit.DAYS,

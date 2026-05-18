@@ -19,7 +19,7 @@ private const val TAG = "CallLogCleanupWorker"
 /**
  * Nightly cleanup of the system call log.
  *
- * Keeps the newest [MAX_KEPT_ENTRIES] (currently 50) rows in
+ * Keeps the newest [MAX_KEPT_ENTRIES] (currently 25) rows in
  * `content://call_log/calls` and deletes the rest. The TCL Flip Go's
  * `calllog.db` grows to tens of thousands of rows over a few months of
  * normal use and the stock dialer / our launcher both get sluggish once
@@ -54,16 +54,28 @@ class CallLogCleanupWorker(
     }
 
     companion object {
-        private const val WORK_NAME = "call_log_cleanup"
+        /**
+         * Pre-v2 work name from when the worker fired at 2 AM and kept 50
+         * entries. We explicitly cancel this in [schedule] so devices
+         * upgrading from an older build don't end up with both schedules
+         * queued. Keep this constant — removing it would break the
+         * cancel-on-upgrade behaviour for those devices.
+         */
+        private const val OLD_WORK_NAME = "call_log_cleanup"
+        private const val WORK_NAME = "call_log_cleanup_v2"
 
         /**
          * How many of the most recent call-log rows to keep. Anything older
          * than the [MAX_KEPT_ENTRIES]-th newest row is deleted on each run.
          */
-        const val MAX_KEPT_ENTRIES = 50
+        const val MAX_KEPT_ENTRIES = 25
 
-        /** Target local-time hour for the nightly run. */
-        private const val TARGET_HOUR_LOCAL = 2  // 2 AM local time
+        /**
+         * Target local-time hour for the nightly run. 4 AM matches the
+         * unified storage-cleanup window across all workers; phone is
+         * idle, no calls landing, no one looking at the dialer.
+         */
+        private const val TARGET_HOUR_LOCAL = 4  // 4 AM local time
 
         /**
          * Synchronous cleanup. Self-grants `WRITE_CALL_LOG` via root if
@@ -128,7 +140,7 @@ class CallLogCleanupWorker(
             // use `<` rather than `<=` so any tied-timestamp rows at the
             // boundary are kept — date is in milliseconds so ties are
             // essentially impossible in practice, but keeping a couple
-            // extra rows is benign while accidentally pruning the 50th
+            // extra rows is benign while accidentally pruning the 25th
             // would not be.
             return try {
                 val deleted = ctx.contentResolver.delete(
@@ -198,6 +210,12 @@ class CallLogCleanupWorker(
          * reboots and version upgrades without resetting the timer.
          */
         fun schedule(context: Context) {
+            // Cancel the pre-v2 schedule (2 AM, retention 50) so a device
+            // upgrading from an older build doesn't end up with both
+            // schedules queued. No-op on devices that never had the old
+            // entry. Cheap; the WorkManager DB lookup is in-process.
+            WorkManager.getInstance(context).cancelUniqueWork(OLD_WORK_NAME)
+
             val initialDelayMs = millisUntilNextTargetHour()
             val request = PeriodicWorkRequestBuilder<CallLogCleanupWorker>(24, TimeUnit.HOURS)
                 .setInitialDelay(initialDelayMs, TimeUnit.MILLISECONDS)
