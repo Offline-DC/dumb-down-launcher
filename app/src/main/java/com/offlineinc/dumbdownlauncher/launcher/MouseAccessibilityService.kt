@@ -1025,7 +1025,7 @@ class MouseAccessibilityService : AccessibilityService() {
                 val output = proc.inputStream.bufferedReader().readText().trim()
                 proc.waitFor()
                 val loggedIn = output.lines().any { it.trim() == "yes" }
-                setDensity(if (loggedIn) 120 else 100)
+                setDensity(if (loggedIn) 120 else 90)
             } catch (t: Throwable) {
                 Log.e("MOUSE_SVC", "handleWhatsAppDensity failed: ${t.message}")
             }
