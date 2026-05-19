@@ -38,7 +38,7 @@ import com.offlineinc.dumbdownlauncher.ui.DpadDirection
 import com.offlineinc.dumbdownlauncher.ui.HomeScreen
 import com.offlineinc.dumbdownlauncher.ui.IntentChoiceScreen
 import com.offlineinc.dumbdownlauncher.ui.LinkingChoiceScreen
-import com.offlineinc.dumbdownlauncher.ui.MouseTutorialScreen
+import com.offlineinc.dumbdownlauncher.ui.mousetutorial.MouseTutorialScreen
 import com.offlineinc.dumbdownlauncher.ui.PairingScreen
 import com.offlineinc.dumbdownlauncher.ui.SkipSetupConfirmationScreen
 

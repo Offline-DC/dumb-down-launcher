@@ -288,6 +288,25 @@ class AllAppsActivity : AppCompatActivity() {
                             "Setup cleared — restart to go through setup again",
                             Toast.LENGTH_LONG
                         ).show()
+                    } else if (item.packageName == "com.android.settings") {
+                        // Long-press on the "settings" row opens Magisk — a
+                        // hidden escape hatch for power users. If Magisk isn't
+                        // installed, surface a Toast in the same style as the
+                        // "OpenBubbles not installed" / "Failed to connect to
+                        // network" notifications used elsewhere for the
+                        // updates / smart-txt long-press flows.
+                        val launchIntent = packageManager.getLaunchIntentForPackage("com.topjohnwu.magisk")
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(launchIntent)
+                            overridePendingTransition(0, 0)
+                        } else {
+                            Toast.makeText(
+                                this@AllAppsActivity,
+                                "Magisk not installed",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
                     } else if (item.packageName == CHECK_UPDATES) {
                         // Beta tester opt-in/out toggle. The AppListScreen
                         // long-press fires after ~300 ms of D-pad center hold;
