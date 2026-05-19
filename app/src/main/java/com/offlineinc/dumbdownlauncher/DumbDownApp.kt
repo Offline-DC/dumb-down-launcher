@@ -25,6 +25,7 @@ import com.offlineinc.dumbdownlauncher.registration.DeviceRegistrar
 import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.storage.SpotifyOfflineCleanupWorker
+import com.offlineinc.dumbdownlauncher.storage.StorageScanWorker
 import com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
 import okhttp3.MediaType.Companion.toMediaType
@@ -136,6 +137,13 @@ class DumbDownApp : Application() {
         // downloads — they share the same dir by Spotify's design — at
         // the cost of a one-time Wi-Fi re-download next play.
         SpotifyOfflineCleanupWorker.schedule(this)
+
+        // Nightly storage-size scan. Runs in the same 4 AM window so
+        // the snapshot it caches reflects the post-cleanup state.
+        // Free Up Space and the storage info page consult the snapshot
+        // via StorageSnapshotCache so they render instantly on open
+        // instead of paying the multi-second su+nsenter startup cost.
+        StorageScanWorker.schedule(this)
 
         // ── All su-heavy boot tasks are serialised on bootExecutor ──────────
         // Previously these ran on separate Threads, causing 4–5 concurrent
@@ -934,10 +942,11 @@ class DumbDownApp : Application() {
             // pending and retry on the next boot — same behaviour as
             // openbubbles_setup_v1 above.
             //
-            // The attachment-cache rolling 7-day cleanup that pairs
-            // with this runs as a weekly periodic worker
+            // The attachment-cache cleanup that pairs with this runs
+            // as a nightly periodic worker
             // ([WhatsAppAttachmentCleanupWorker]) scheduled from
-            // onCreate, exactly mirroring OpenBubbles.
+            // onCreate, exactly mirroring OpenBubbles. Both workers
+            // wipe their target media unconditionally each night.
             //
             // Bump the v-suffix (-> _v2 etc.) to force every device to
             // re-apply the settings.

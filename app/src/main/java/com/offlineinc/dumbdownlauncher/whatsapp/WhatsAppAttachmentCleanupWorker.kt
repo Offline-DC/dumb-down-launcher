@@ -15,6 +15,13 @@ private const val TAG = "WAAttachmentWorker"
 /**
  * Nightly cleanup of WhatsApp media — every file in `.Links/`,
  * `WhatsApp Images/`, and `WhatsApp Video/` gets wiped each run.
+ * Unconditional: no rolling window, no age filter.
+ *
+ * The media is removed from THIS device only. WhatsApp keeps the
+ * messages themselves intact, and the originals stay on the user's
+ * other devices and on WhatsApp's CDN within retention — so anything
+ * deleted here can still be re-fetched on demand from the primary
+ * phone or by tapping the thumbnail in a chat.
  *
  * Pairs with the autodownload-disable migration applied via
  * `whatsapp_setup_v1` in [com.offlineinc.dumbdownlauncher.DumbDownApp] —
@@ -35,10 +42,8 @@ private const val TAG = "WAAttachmentWorker"
  *   1. [WhatsAppOps.applyAutoDownloadMaskZero] re-asserts the three
  *      auto-download bitmasks to 0. No-ops cleanly if already correct.
  *      Killing WhatsApp here is fine; user is asleep at 4 AM.
- *   2. [WhatsAppOps.clearOldAttachments] wipes the three target media
- *      subdirs. Uses `CUTOFF_DAYS = 0`, which `-mtime +0` translates
- *      to "files older than 24h" — so something received in the past
- *      day is preserved, anything older is gone.
+ *   2. [WhatsAppOps.clearOldAttachments] wipes every photo/video in
+ *      the three target media subdirs.
  */
 class WhatsAppAttachmentCleanupWorker(
     context: Context,
@@ -85,13 +90,16 @@ class WhatsAppAttachmentCleanupWorker(
         /** Nightly cadence (24 h between fires). */
         private const val PERIOD_DAYS = 1L
         /**
-         * Files strictly older than this many days are eligible for
-         * deletion. `find -mtime +0` means "more than 0*24h ago" —
-         * so files older than 24 h get wiped, and anything received
-         * in the past day is preserved. (Previously: 7 days; tightened
-         * to 0 to keep WhatsApp media at near-zero on disk.)
+         * Age cutoff in days. When `>= 0`, only files strictly older
+         * than this many days get deleted (the `find -mtime +N`
+         * predicate). When negative, the predicate is dropped entirely
+         * and the cleanup removes every photo/video in the target
+         * subdirs — including ones received within the last 24 h.
+         * History: 7 → 0 → -1 → 7 → -1. The current unconditional
+         * shape matches the user's intent of "delete all whatsapp
+         * media every night, the originals stay on other devices."
          */
-        private const val CUTOFF_DAYS = 0
+        private const val CUTOFF_DAYS = -1
         private const val TARGET_HOUR_LOCAL = 4  // 4 AM local time
 
         /**

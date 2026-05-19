@@ -101,11 +101,14 @@ object WhatsAppOps {
      *
      *   * No-op if WhatsApp isn't running.
      *
-     * The cleanup worker does NOT call this method. WhatsApp's media lives
-     * on /sdcard, not /data/data, so file deletes there don't race
-     * WhatsApp's in-memory state, and the `-mtime +N` predicate guarantees
-     * we never touch a file currently being downloaded (in-flight files
-     * are by definition < 1 day old).
+     * The cleanup worker does NOT call this method. WhatsApp's media
+     * lives on /sdcard, not /data/data, so file deletes there don't
+     * race WhatsApp's in-memory state in a way that crashes the app.
+     * With the current `delete everything` cutoff an in-flight
+     * download could be unlinked mid-write — worst case WhatsApp
+     * retries the download on its next sync. The user explicitly
+     * opted into this trade-off by asking for "delete all whatsapp
+     * media every night."
      */
     @JvmStatic
     fun stopQuietly(tag: String = TAG) {
@@ -151,10 +154,18 @@ object WhatsAppOps {
     )
 
     /**
-     * Deletes WhatsApp media files older than [days] days from the three
-     * [TARGET_SUBDIRS] under [MEDIA_ROOT]. Other top-level subdirs (Voice
-     * Notes, Documents, Animated Gifs, etc.) are NOT touched — see
-     * [TARGET_SUBDIRS] for the rationale.
+     * Deletes WhatsApp media files from the three [TARGET_SUBDIRS] under
+     * [MEDIA_ROOT]. Other top-level subdirs (Voice Notes, Documents,
+     * Animated Gifs, etc.) are NOT touched — see [TARGET_SUBDIRS] for
+     * the rationale.
+     *
+     * Age cutoff: when [days] is `>= 0` we keep `-mtime +N` (files
+     * strictly older than N*24h). When [days] is negative — the
+     * current default for the nightly cron and the Free Up Space
+     * button — we omit the `-mtime` predicate entirely and remove
+     * every matching file in the target subdirs. The rolling-window
+     * mode is preserved for callers that may want it later, but no
+     * production path uses it today.
      *
      * **Critical: excludes `.nomedia` sentinel files.** WhatsApp creates
      * one in nearly every media subdirectory at install time
@@ -211,20 +222,25 @@ object WhatsAppOps {
                 continue
             }
 
+            // The age predicate is only included when `days >= 0`; the
+            // negative-sentinel path drops it so we wipe every matching
+            // file. Composed once, used by both the count and delete
+            // passes so they can't drift.
+            val agePredicate = if (days >= 0) "-mtime +$days " else ""
+
             // Count first so the per-subdir log line is informative.
             // Cheap; find walks the same tree the delete pass will.
             val (_, countOut, _) = rootExec(
-                "find \"$subPath\" -type f -mtime +$days ! -name .nomedia | wc -l"
+                "find \"$subPath\" -type f $agePredicate! -name .nomedia | wc -l"
             )
             val n = countOut.trim().toIntOrNull() ?: 0
 
-            // The actual rolling delete. `-mtime +N` means strictly more
-            // than N*24h ago, so days=7 deletes files at least 8 days old —
-            // which matches "older than 7 days" in conversational English.
-            // The `! -name .nomedia` predicate is non-negotiable; see the
-            // method-level doc-comment.
+            // The actual delete. With days<0 the agePredicate above is
+            // empty, so the find matches every file in the subdir
+            // (still excluding the `.nomedia` sentinel — that exclusion
+            // is non-negotiable; see the method-level doc-comment).
             val (delExit, _, delErr) = rootExec(
-                "find \"$subPath\" -type f -mtime +$days ! -name .nomedia -delete"
+                "find \"$subPath\" -type f $agePredicate! -name .nomedia -delete"
             )
             if (delExit != 0) {
                 // Don't fall back to `rm -rf` style wipes — those would

@@ -62,11 +62,11 @@ This device has heavy AntennaPod + Spotify use, light WhatsApp, light Apple Musi
 ### 0.6 Estimated one-time + nightly reclaim on this device
 
 - **One-time at next-update boot:** ~256 MB from swap removal.
-- **First nightly run (auto only):** ~78 MB OpenBubbles attachments + small change from WhatsApp. Spotify *won't* fire on the audit device because its cache is currently well under the 500 MB threshold; on a device with a heavy listener and a 1+ GB cache, Spotify adds ~1 GB to the auto recovery the night it crosses the threshold.
+- **First nightly run (auto only):** ~78 MB OpenBubbles attachments + small change from WhatsApp. Spotify *won't* fire on the audit device because its cache is currently well under the 400 MB threshold; on a device with a heavy listener and a 1+ GB cache, Spotify adds ~1 GB to the auto recovery the night it crosses the threshold.
 - **If the user also taps every "Clear" button in the Free Up Space screen on day one:** another ~110 MB Spotify offline + ~105 MB AntennaPod episodes + ~50–150 MB from `pm trim-caches` (whatever portion of the 246 MB cache total is actually evictable) + small change from Apple Music.
 - **Total recovered within 24 hours: ~600–700 MB** (auto + manual combined) on a heavy-Spotify device. A 922-MB-free phone becomes a ~1.5–1.6-GB-free phone.
 
-Recurring win for heavy Spotify users: the auto tier is bursty by design — nothing happens night-to-night while the cache is under 500 MB, then a single ~500 MB+ wipe when it crosses. Light listeners and users with only downloads stay below the threshold indefinitely and see no auto-clearing of Spotify at all. Either way, the cache is bounded — it can't reach the 1.3 GB figure observed in the wild without triggering a wipe within 24 hours.
+Recurring win for heavy Spotify users: the auto tier is bursty by design — nothing happens night-to-night while the cache is under 400 MB, then a single ~400 MB+ wipe when it crosses. Light listeners and users with only downloads stay below the threshold indefinitely and see no auto-clearing of Spotify at all. Either way, the cache is bounded — it can't reach the 1.3 GB figure observed in the wild without triggering a wipe within 24 hours.
 
 ## 1. Two tiers: nightly auto (low-surprise) vs. manual-only (user-curated content)
 

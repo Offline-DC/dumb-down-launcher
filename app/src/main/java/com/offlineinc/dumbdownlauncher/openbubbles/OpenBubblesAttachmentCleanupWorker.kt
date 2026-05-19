@@ -13,7 +13,17 @@ import java.util.concurrent.TimeUnit
 private const val TAG = "OBAttachmentWorker"
 
 /**
- * Nightly cleanup of OpenBubbles' attachment cache.
+ * Nightly cleanup of OpenBubbles' attachment cache — every subdirectory
+ * (and its contents) under `app_flutter/attachments` gets wiped each
+ * run. Unconditional: no rolling window, no age filter.
+ *
+ * Same unconditional shape as
+ * [com.offlineinc.dumbdownlauncher.whatsapp.WhatsAppAttachmentCleanupWorker]:
+ * the attachment files are a download cache that OB lazily repopulates
+ * on demand when the user scrolls back to a message (and the originals
+ * live on the user's other Apple devices via iMessage). Wiping every
+ * night reclaims the full 50–100 MB the dir typically grows to without
+ * affecting message history.
  *
  * Pairs with the `flutter.autoDownload = false` setting that the
  * `openbubbles_setup_v1` migration in
@@ -52,7 +62,7 @@ class OpenBubblesAttachmentCleanupWorker(
             // skipped too — both ops kill OB so they can't run while
             // the user is looking at it.
             OpenBubblesOps.applyAutoDownloadOff(applicationContext, TAG)
-            val result = OpenBubblesOps.clearAttachments(TAG)
+            val result = OpenBubblesOps.clearAttachments(tag = TAG)
             Log.i(TAG, "doWork: cleared OB attachments (was ${result.bytesFreedDisplay})")
             Result.success()
         } catch (e: IllegalStateException) {

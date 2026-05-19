@@ -33,7 +33,7 @@ private const val TAG = "SpotifyOfflineWorker"
  * compromise:
  *
  *  - Cache under [StorageCleanupOps.SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES]
- *    (500 MB) → no wipe. Users with no downloads + light listening, or
+ *    (400 MB) → no wipe. Users with no downloads + light listening, or
  *    a handful of downloaded albums, stay under this and are never
  *    touched by the auto path.
  *  - Cache at or above the threshold → wipe runs. The 1.3 GB bloat
@@ -49,9 +49,7 @@ private const val TAG = "SpotifyOfflineWorker"
  * Single-step run — delegates to
  * [StorageCleanupOps.clearSpotifyOfflineIfOverThreshold], which when
  * over-threshold further delegates to the same `clearSpotifyOffline`
- * op that backs the manual button and the adb trigger receiver, so
- * `last_run_at_ms` + `bytes_freed` are recorded the same way and the
- * Free Up Space UI's "last cleared" subtitles stay consistent.
+ * op that backs the manual button and the adb trigger receiver.
  *
  * Runs once every 24 hours, anchored to the next 4 AM local time — the
  * unified storage-cleanup window across all workers. No prefs-assertion

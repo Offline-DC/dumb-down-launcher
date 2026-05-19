@@ -28,8 +28,8 @@ import android.util.Log
  * unchanged.
  *
  * Exported with no permission — the action name is launcher-namespaced
- * and the worst case if another app fires it is running the same 7-day
- * rolling cleanup the worker performs nightly at 2 AM, which is the
+ * and the worst case if another app fires it is running the same
+ * rolling cleanup the worker performs nightly at 4 AM, which is the
  * user's intended retention policy.
  */
 class WhatsAppAttachmentCleanupTriggerReceiver : BroadcastReceiver() {
@@ -65,10 +65,11 @@ class WhatsAppAttachmentCleanupTriggerReceiver : BroadcastReceiver() {
          * Same value as [WhatsAppAttachmentCleanupWorker]'s `CUTOFF_DAYS`.
          * Hardcoded here too rather than exposed publicly because the
          * trigger broadcast is meant to exercise the EXACT production
-         * path, not a configurable one. `-mtime +0` means "older than
-         * 24 h" — anything received in the past day is preserved.
+         * path, not a configurable one. -1 → unconditional delete:
+         * every photo and video in the target subdirs is removed, no
+         * rolling-window protection. Same as the nightly worker.
          */
-        private const val CUTOFF_DAYS = 0
+        private const val CUTOFF_DAYS = -1
 
         const val ACTION_RUN_CLEANUP =
             "com.offlineinc.dumbdownlauncher.RUN_WA_ATTACHMENT_CLEANUP"

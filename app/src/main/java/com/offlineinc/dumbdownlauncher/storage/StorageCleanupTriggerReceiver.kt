@@ -6,8 +6,8 @@ import android.content.Intent
 import android.util.Log
 
 /**
- * Manual triggers for the four [StorageCleanupOps] cleanup paths so each
- * can be exercised from adb without going through the Free Up Space UI:
+ * Manual triggers for the [StorageCleanupOps] cleanup paths so each can
+ * be exercised from adb without going through the Free Up Space UI:
  *
  * ```
  * adb shell am broadcast \
@@ -25,6 +25,14 @@ import android.util.Log
  * adb shell am broadcast \
  *   -a com.offlineinc.dumbdownlauncher.RUN_CLEAR_APPLE_MUSIC_OFFLINE \
  *   -n com.offlineinc.dumbdownlauncher/.storage.StorageCleanupTriggerReceiver
+ *
+ * adb shell am broadcast \
+ *   -a com.offlineinc.dumbdownlauncher.RUN_CLEAR_WHATSAPP_MEDIA \
+ *   -n com.offlineinc.dumbdownlauncher/.storage.StorageCleanupTriggerReceiver
+ *
+ * adb shell am broadcast \
+ *   -a com.offlineinc.dumbdownlauncher.RUN_CLEAR_OPENBUBBLES_ATTACHMENTS \
+ *   -n com.offlineinc.dumbdownlauncher/.storage.StorageCleanupTriggerReceiver
  * ```
  *
  * Exported with no permission — actions are launcher-namespaced and the
@@ -32,6 +40,12 @@ import android.util.Log
  * would have done from the UI anyway. Mirrors the receiver shapes used
  * by [com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupTriggerReceiver]
  * and friends.
+ *
+ * The two messaging cleanups duplicate behaviour that's also exposed via
+ * the per-app trigger receivers
+ * [com.offlineinc.dumbdownlauncher.whatsapp.WhatsAppAttachmentCleanupTriggerReceiver]
+ * and the OpenBubbles equivalent — kept here too so all storage cleanups
+ * have a single, consistent broadcast surface.
  */
 class StorageCleanupTriggerReceiver : BroadcastReceiver() {
 
@@ -59,6 +73,14 @@ class StorageCleanupTriggerReceiver : BroadcastReceiver() {
                         val r = StorageCleanupOps.clearAppleMusicOffline(ctx, TAG)
                         Log.i(TAG, "clear Apple Music offline finished — freed=${r.bytesFreedDisplay}")
                     }
+                    ACTION_CLEAR_WHATSAPP_MEDIA -> {
+                        val r = StorageCleanupOps.clearWhatsAppOldMedia(ctx, TAG)
+                        Log.i(TAG, "clear WhatsApp media finished — freed=${r.bytesFreedDisplay}")
+                    }
+                    ACTION_CLEAR_OPENBUBBLES_ATTACHMENTS -> {
+                        val r = StorageCleanupOps.clearOpenBubblesAttachments(ctx, TAG)
+                        Log.i(TAG, "clear OpenBubbles attachments finished — freed=${r.bytesFreedDisplay}")
+                    }
                     else -> Log.w(TAG, "unknown action: $action")
                 }
             } catch (e: Exception) {
@@ -79,5 +101,9 @@ class StorageCleanupTriggerReceiver : BroadcastReceiver() {
             "com.offlineinc.dumbdownlauncher.RUN_CLEAR_SPOTIFY_OFFLINE"
         const val ACTION_CLEAR_APPLE_MUSIC_OFFLINE =
             "com.offlineinc.dumbdownlauncher.RUN_CLEAR_APPLE_MUSIC_OFFLINE"
+        const val ACTION_CLEAR_WHATSAPP_MEDIA =
+            "com.offlineinc.dumbdownlauncher.RUN_CLEAR_WHATSAPP_MEDIA"
+        const val ACTION_CLEAR_OPENBUBBLES_ATTACHMENTS =
+            "com.offlineinc.dumbdownlauncher.RUN_CLEAR_OPENBUBBLES_ATTACHMENTS"
     }
 }

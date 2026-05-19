@@ -87,20 +87,38 @@ object OpenBubblesOps {
     data class ClearResult(val bytesFreedDisplay: String)
 
     /**
-     * Wipes OpenBubbles' attachment cache by deleting every subdirectory
-     * (and its contents) under [ATTACHMENTS_DIR]. The parent directory
-     * itself is preserved so OpenBubbles doesn't trip when it next tries
-     * to write a new attachment.
+     * Wipes OpenBubbles' attachment cache, optionally bounded by an age
+     * window. The parent [ATTACHMENTS_DIR] is preserved so OpenBubbles
+     * doesn't trip when it next tries to write a new attachment.
+     *
+     * Age cutoff:
+     *  - `days < 0` (the default, and what every current caller uses)
+     *    → omit the `-mtime` predicate and remove every entry under
+     *    the dir. OB attachments are a download cache that the app
+     *    lazily re-fetches from the iMessage relay when the user
+     *    scrolls back to a message, so wiping unconditionally is safe
+     *    and reclaims the full per-night growth.
+     *  - `days >= 0` → only files older than N*24h (`-mtime +N`) are
+     *    removed. Empty per-GUID parent dirs are then pruned with
+     *    `find -type d -empty -delete` so the listing stays tidy. No
+     *    caller exercises this branch today; it's preserved for a
+     *    future affordance that wants a rolling-window trim instead.
      *
      * Calls [stopQuietly] first — so this method ALSO throws
      * [IllegalStateException] when OpenBubbles is focused. Callers in a
      * worker context should catch and treat it as "skip this run".
      *
      * Returns a [ClearResult] containing the human-readable "before"
-     * size so the caller can include it in its log line.
+     * size so the caller can include it in its log line. The size is
+     * captured from `du -sh` over the whole dir before the trim,
+     * matching the old shape — it slightly overestimates the bytes
+     * freed when `days >= 0` (since recent attachments survive), but
+     * the [StorageCleanupOps] callers compute their own
+     * age-filtered before-size for the row's "just cleared $N MB"
+     * banner, so this only affects the in-worker log line.
      */
     @JvmStatic
-    fun clearAttachments(tag: String = TAG): ClearResult {
+    fun clearAttachments(days: Int = -1, tag: String = TAG): ClearResult {
         // Bail benignly if the dir simply doesn't exist (fresh device
         // that has never received an attachment).
         val (_, existsOut, _) = rootExec("test -d $ATTACHMENTS_DIR && echo y || echo n")
@@ -118,24 +136,45 @@ object OpenBubblesOps {
         // Throws if OB is focused — caller decides what to do.
         stopQuietly(tag)
 
-        // `find … -mindepth 1 -delete` removes every entry inside the
-        // directory but preserves the directory itself. Toybox find on
-        // Android 6+ supports both `-mindepth` and `-delete`.
-        val (rmExit, _, rmErr) = rootExec("find $ATTACHMENTS_DIR -mindepth 1 -delete")
-        if (rmExit != 0) {
-            // Fall back to the brute-force form. Less ideal because
-            // empty-glob behaviour varies across shells, but worth
-            // trying before giving up.
-            val (rm2Exit, _, rm2Err) = rootExec("rm -rf $ATTACHMENTS_DIR/*")
-            if (rm2Exit != 0) {
-                throw RuntimeException(
-                    "OB clear attachments: both find -delete and rm -rf failed " +
-                        "(find err='$rmErr', rm err='$rm2Err')"
+        if (days >= 0) {
+            // Age-filtered file delete + empty-dir prune. -prune-by-empty
+            // walks bottom-up so a fully-trimmed GUID subdir is removed
+            // after its contents are gone in the same pass.
+            val (rmExit, _, rmErr) = rootExec(
+                "find $ATTACHMENTS_DIR -mindepth 1 -type f -mtime +$days -delete 2>/dev/null; " +
+                    "find $ATTACHMENTS_DIR -mindepth 1 -type d -empty -delete 2>/dev/null; " +
+                    "exit 0"
+            )
+            if (rmExit != 0) {
+                // The trailing `exit 0` should keep us out of this branch,
+                // but log defensively if some future shell flagged the
+                // pipeline as a failure.
+                Log.w(
+                    tag,
+                    "OB clear attachments: age-filtered delete reported exit=$rmExit — " +
+                        "err='$rmErr' (continuing, file removal may have partially succeeded)"
                 )
+            }
+        } else {
+            // `find … -mindepth 1 -delete` removes every entry inside
+            // the directory but preserves the directory itself. Toybox
+            // find on Android 6+ supports both `-mindepth` and `-delete`.
+            val (rmExit, _, rmErr) = rootExec("find $ATTACHMENTS_DIR -mindepth 1 -delete")
+            if (rmExit != 0) {
+                // Fall back to the brute-force form. Less ideal because
+                // empty-glob behaviour varies across shells, but worth
+                // trying before giving up.
+                val (rm2Exit, _, rm2Err) = rootExec("rm -rf $ATTACHMENTS_DIR/*")
+                if (rm2Exit != 0) {
+                    throw RuntimeException(
+                        "OB clear attachments: both find -delete and rm -rf failed " +
+                            "(find err='$rmErr', rm err='$rm2Err')"
+                    )
+                }
             }
         }
 
-        Log.d(tag, "OB clear attachments: cleared $ATTACHMENTS_DIR (was $display)")
+        Log.d(tag, "OB clear attachments: cleared $ATTACHMENTS_DIR (was $display, days=$days)")
         return ClearResult(bytesFreedDisplay = display)
     }
 

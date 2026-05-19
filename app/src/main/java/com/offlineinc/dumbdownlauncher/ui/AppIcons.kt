@@ -3,6 +3,7 @@ package com.offlineinc.dumbdownlauncher.ui
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.History
@@ -17,6 +18,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.offlineinc.dumbdownlauncher.CONTACT_SYNC
 import com.offlineinc.dumbdownlauncher.DEVICE_SETUP
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
+import com.offlineinc.dumbdownlauncher.FREE_UP_SPACE
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
 import com.offlineinc.dumbdownlauncher.QUACK
 import com.offlineinc.dumbdownlauncher.SNAKE
@@ -55,6 +57,7 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     DEVICE_SETUP                      to Icons.Filled.Link,
     CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
     WEATHER                           to Icons.Filled.WbSunny,
+    FREE_UP_SPACE                     to Icons.Filled.CleaningServices,
 )
 
 /**

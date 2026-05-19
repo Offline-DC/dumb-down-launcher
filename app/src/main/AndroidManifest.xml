@@ -260,12 +260,12 @@
             </intent-filter>
         </receiver>
 
-        <!-- Manual triggers for the four StorageCleanupOps paths exposed
-             from the "free up space" UI. Lets each cleanup be fired on
-             demand from adb for testing without going through the
-             screen. Same exposure rationale as the other triggers —
-             worst case is performing a cleanup the user would have run
-             from the UI anyway. -->
+        <!-- Manual triggers for the StorageCleanupOps paths exposed from
+             the "free up space" UI. Lets each cleanup be fired on demand
+             from adb for testing without going through the screen. Same
+             exposure rationale as the other triggers — worst case is
+             performing a cleanup the user would have run from the UI
+             anyway. -->
         <receiver
             android:name=".storage.StorageCleanupTriggerReceiver"
             android:exported="true">
@@ -274,6 +274,8 @@
                 <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_ANTENNAPOD" />
                 <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_SPOTIFY_OFFLINE" />
                 <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_APPLE_MUSIC_OFFLINE" />
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_WHATSAPP_MEDIA" />
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_OPENBUBBLES_ATTACHMENTS" />
             </intent-filter>
         </receiver>
 
