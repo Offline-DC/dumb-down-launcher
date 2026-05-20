@@ -87,6 +87,15 @@ class DumbDownApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+
+        // Battery-drain diagnostics. Re-start the foreground sampling service
+        // on every process start if the user has opted in via the hidden
+        // long-press-on-quack screen. No-op when BuildConfig.DIAGNOSTICS_ENABLED
+        // is false (production builds compile the path out) or when the
+        // opt-in flag is unset. See battery-diagnostics-plan.md for the full
+        // investigation plan.
+        com.offlineinc.dumbdownlauncher.diagnostics.DiagnosticsService.startIfEnabled(this)
+
         UpdateCheckWorker.schedule(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.

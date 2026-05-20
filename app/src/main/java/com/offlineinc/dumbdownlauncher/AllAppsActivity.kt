@@ -307,6 +307,19 @@ class AllAppsActivity : AppCompatActivity() {
                                 Toast.LENGTH_SHORT,
                             ).show()
                         }
+                    } else if (item.packageName == QUACK && BuildConfig.DIAGNOSTICS_ENABLED) {
+                        // Long-press on the "quack" row opens the hidden
+                        // battery-diagnostics screen. Mirrors the existing
+                        // DEVICE_SETUP / settings / CHECK_UPDATES long-press
+                        // pattern above — gated by BuildConfig.DIAGNOSTICS_ENABLED
+                        // so production builds compile the branch out.
+                        startActivity(
+                            Intent(
+                                this@AllAppsActivity,
+                                com.offlineinc.dumbdownlauncher.diagnostics.DiagnosticsActivity::class.java,
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
                     } else if (item.packageName == CHECK_UPDATES) {
                         // Beta tester opt-in/out toggle. The AppListScreen
                         // long-press fires after ~300 ms of D-pad center hold;

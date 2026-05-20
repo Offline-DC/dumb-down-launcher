@@ -38,6 +38,15 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Battery diagnostics (gated by BuildConfig.DIAGNOSTICS_ENABLED).
+         DiagnosticsService runs as a foreground service so the per-minute
+         battery sampling loop and broadcast receivers survive doze/idle. The
+         privileged dumpsys/logcat snapshots are executed via `su -c` (root
+         via Magisk) rather than directly, so READ_LOGS / BATTERY_STATS /
+         DUMP / PACKAGE_USAGE_STATS aren't required on the app itself. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Read pairing data from contact-sync app (legacy migration) -->
     <uses-permission android:name="com.offlineinc.dumbcontactsync.DEVICE_LINK_READ"/>
 
@@ -128,6 +137,26 @@
             android:launchMode="singleTop"
             android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- Battery diagnostics hidden screen. Opened by long-pressing the
+             "quack" row in All Apps. Gated by BuildConfig.DIAGNOSTICS_ENABLED
+             at runtime — the diag beta build sets it true. See
+             battery-diagnostics-plan.md for the full investigation plan. -->
+        <activity
+            android:name=".diagnostics.DiagnosticsActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- Battery diagnostics foreground service. Per-minute battery
+             sampling, broadcast receivers for screen/power/doze, and an
+             hourly privileged dumpsys snapshot scheduler. Runs only when
+             the user has opted in via DiagnosticsActivity. -->
+        <service
+            android:name=".diagnostics.DiagnosticsService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Headless trampoline for the "add wifi 2 save on data" nudge.
              Tapping the notification (from the shade or the in-app

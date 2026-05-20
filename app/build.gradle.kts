@@ -17,6 +17,13 @@ android {
         versionCode = 132
         versionName = "4.68.0-beta.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Battery diagnostics — compile-time gate for the DiagnosticsService,
+        // DiagnosticsActivity, and the long-press-on-quack hook in AllAppsActivity.
+        // Production builds set this false so the privileged dumpsys / logcat
+        // collection code is excluded entirely; the diag beta build (see
+        // battery-diagnostics-plan.md) flips it to true.
+        buildConfigField("boolean", "DIAGNOSTICS_ENABLED", "true")
     }
 
     signingConfigs {
