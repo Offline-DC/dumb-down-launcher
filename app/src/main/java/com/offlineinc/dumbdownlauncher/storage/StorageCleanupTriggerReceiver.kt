@@ -11,10 +11,6 @@ import android.util.Log
  *
  * ```
  * adb shell am broadcast \
- *   -a com.offlineinc.dumbdownlauncher.RUN_TRIM_APP_CACHES \
- *   -n com.offlineinc.dumbdownlauncher/.storage.StorageCleanupTriggerReceiver
- *
- * adb shell am broadcast \
  *   -a com.offlineinc.dumbdownlauncher.RUN_CLEAR_ANTENNAPOD \
  *   -n com.offlineinc.dumbdownlauncher/.storage.StorageCleanupTriggerReceiver
  *
@@ -57,10 +53,6 @@ class StorageCleanupTriggerReceiver : BroadcastReceiver() {
             try {
                 val ctx = context.applicationContext
                 when (action) {
-                    ACTION_TRIM_APP_CACHES -> {
-                        val r = StorageCleanupOps.trimAppCaches(ctx, TAG)
-                        Log.i(TAG, "trim app caches finished — freed=${r.bytesFreedDisplay}")
-                    }
                     ACTION_CLEAR_ANTENNAPOD -> {
                         val r = StorageCleanupOps.clearAntennaPodEpisodes(ctx, TAG)
                         Log.i(TAG, "clear AntennaPod finished — freed=${r.bytesFreedDisplay}")
@@ -93,8 +85,6 @@ class StorageCleanupTriggerReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "StorageCleanupTrigger"
-        const val ACTION_TRIM_APP_CACHES =
-            "com.offlineinc.dumbdownlauncher.RUN_TRIM_APP_CACHES"
         const val ACTION_CLEAR_ANTENNAPOD =
             "com.offlineinc.dumbdownlauncher.RUN_CLEAR_ANTENNAPOD"
         const val ACTION_CLEAR_SPOTIFY_OFFLINE =

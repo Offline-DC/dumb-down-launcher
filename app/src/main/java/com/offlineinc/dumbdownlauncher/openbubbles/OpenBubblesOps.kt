@@ -114,8 +114,8 @@ object OpenBubblesOps {
      * matching the old shape — it slightly overestimates the bytes
      * freed when `days >= 0` (since recent attachments survive), but
      * the [StorageCleanupOps] callers compute their own
-     * age-filtered before-size for the row's "just cleared $N MB"
-     * banner, so this only affects the in-worker log line.
+     * age-filtered before-size for the post-clear toast, so this
+     * only affects the in-worker log line.
      */
     @JvmStatic
     fun clearAttachments(days: Int = -1, tag: String = TAG): ClearResult {

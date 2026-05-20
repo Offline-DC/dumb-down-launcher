@@ -74,8 +74,15 @@ import kotlinx.coroutines.withContext
  *  - [Mode.CLEARING]  — root call in flight (shows the row's spinner)
  */
 
-/** Bytes below which a row hides itself — keeps the list focused. */
-private const val SIZE_HIDE_THRESHOLD_BYTES: Long = 10L * 1024L * 1024L  // 10 MB
+/**
+ * Bytes below which a row hides itself — keeps the list focused on
+ * cleanups that actually matter on a low-storage flip phone. 200 MB
+ * is the user-set "this is worth doing" cutoff: anything smaller
+ * isn't going to move the needle on a 4–8 GB device and just clutters
+ * the screen. If every bucket is under the threshold the screen falls
+ * through to Mode.EMPTY ("you're all set — nothing worth clearing").
+ */
+private const val SIZE_HIDE_THRESHOLD_BYTES: Long = 200L * 1024L * 1024L  // 200 MB
 
 private enum class Mode { LOADING, EMPTY, LIST, CONFIRM, CLEARING }
 
@@ -106,14 +113,13 @@ fun FreeUpSpaceScreen(onBack: () -> Unit) {
     val rows: SnapshotStateList<Suggestion> = remember { mutableStateListOf() }
     var selectedIdx by remember { mutableIntStateOf(0) }
     var pendingRowIdx by remember { mutableIntStateOf(0) }
-    var lastFreedDisplay by remember { mutableStateOf("") }
     var freeBytes by remember { mutableStateOf(0L) }
     var totalBytes by remember { mutableStateOf(0L) }
 
     // Info-page overlay state. Toggled by the d-pad center / OK key in
     // LIST mode (soft-key labeled "info"). Stays inside this composable
-    // rather than spinning up a second activity so `lastFreedDisplay`
-    // and the row list survive a peek-and-return.
+    // rather than spinning up a second activity so the row list
+    // survives a peek-and-return.
     var showInfo by remember { mutableStateOf(false) }
 
     val focusRequester = remember { FocusRequester() }
@@ -198,7 +204,23 @@ fun FreeUpSpaceScreen(onBack: () -> Unit) {
                                 val result = withContext(Dispatchers.IO) {
                                     runCleanupFor(context, target)
                                 }
-                                lastFreedDisplay = result.bytesFreedDisplay
+                                // Confirmation via the system toast
+                                // (the "default notification thing") —
+                                // shorter to glance at than a sticky
+                                // header line, and disappears on its
+                                // own. Skip when bytesFreedDisplay is
+                                // empty (e.g. an under-threshold
+                                // no-op or a failed root call): the
+                                // user already saw the deleting…
+                                // panel, so a "cleared 0" toast would
+                                // just be noise.
+                                if (result.bytesFreedDisplay.isNotEmpty()) {
+                                    Toast.makeText(
+                                        context,
+                                        "cleared ${result.bytesFreedDisplay}",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
                                 // Switch from CLEARING to LOADING so the
                                 // "deleting…" UI doesn't linger during the
                                 // size-refresh pass that follows. LOADING
@@ -208,16 +230,12 @@ fun FreeUpSpaceScreen(onBack: () -> Unit) {
                                 // open — same visual, same expectation.
                                 mode = Mode.LOADING
                                 rows.clear()
-                                // Post-clear: bypass the snapshot cache —
-                                // it would still show the pre-clear sizes
-                                // for whichever bucket the user just trimmed.
-                                loadEverything(
-                                    context, rows,
-                                    onTotals = { f, t ->
-                                        freeBytes = f; totalBytes = t
-                                    },
-                                    forceRefresh = true,
-                                )
+                                // Post-clear: same live-scan path as
+                                // the initial open. Always reflects
+                                // the just-cleared state.
+                                loadEverything(context, rows, onTotals = { f, t ->
+                                    freeBytes = f; totalBytes = t
+                                })
                                 mode = if (rows.isEmpty()) Mode.EMPTY else Mode.LIST
                                 selectedIdx = selectedIdx.coerceIn(0, rows.lastIndex.coerceAtLeast(0))
                             }
@@ -258,15 +276,6 @@ fun FreeUpSpaceScreen(onBack: () -> Unit) {
             style = DumbTheme.Text.Subtitle,
             modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
         )
-
-        if (lastFreedDisplay.isNotEmpty()) {
-            Spacer(Modifier.height(2.dp))
-            BasicText(
-                text = "just cleared $lastFreedDisplay",
-                style = DumbTheme.Text.Hint.copy(color = DumbTheme.Colors.Green),
-                modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
-            )
-        }
 
         Spacer(Modifier.height(DumbTheme.Spacing.SectionGap))
 
@@ -545,7 +554,6 @@ private suspend fun loadEverything(
     context: Context,
     rows: SnapshotStateList<Suggestion>,
     onTotals: (free: Long, total: Long) -> Unit,
-    forceRefresh: Boolean = false,
 ) = coroutineScope {
     // StatFs gives us the partition-level free figure (`/data` available
     // blocks). Cheap, no root, no thread switch.
@@ -553,12 +561,12 @@ private suspend fun loadEverything(
     val stat = StatFs(data.absolutePath)
     val free = stat.availableBlocksLong * stat.blockSizeLong
 
-    // Initial open uses [StorageSnapshotCache.loadCachedOrCompute] —
-    // returns the nightly-cached snapshot if it's <24h old, else falls
-    // through to a live compute via [StorageCleanupOps.allSizesBytes]
-    // and persists the result for next time. The post-clear refresh
-    // path passes `forceRefresh = true` to bypass the freshness gate
-    // and write a brand-new snapshot reflecting the just-cleared state.
+    // Every open runs a fresh scan. We used to read a nightly-cached
+    // snapshot for instant render, but the 24h freshness window made
+    // the screen wrong whenever the user had just downloaded something
+    // (Spotify songs, photos, etc.) and wanted to free space NOW. The
+    // user opens Free Up Space precisely *because* something changed,
+    // so accuracy beats the ~2s "checking storage…" load cost.
     //
     // Per-section timing is logged inside `allSizesBytes` (see its
     // Log.i in StorageCleanupOps); if any single section creeps back
@@ -567,11 +575,7 @@ private suspend fun loadEverything(
     val sizesMap: MutableMap<StorageCleanupOps.Target, Long> =
         mutableMapOf()
     withContext(Dispatchers.IO) {
-        val snapshot = if (forceRefresh) {
-            StorageSnapshotCache.recomputeAndCache(context)
-        } else {
-            StorageSnapshotCache.loadCachedOrCompute(context)
-        }
+        val snapshot = StorageCleanupOps.allSizesBytes()
         // Default every known Target to 0 so missing-dir / no-root
         // cases don't leave a row with size=null down the line.
         for (t in StorageCleanupOps.Target.values()) {
@@ -613,7 +617,6 @@ private suspend fun loadEverything(
         StorageCleanupOps.Target.SPOTIFY_OFFLINE,
         StorageCleanupOps.Target.ANTENNAPOD,
         StorageCleanupOps.Target.APPLE_MUSIC_OFFLINE,
-        StorageCleanupOps.Target.APP_CACHES,
     )
     val built = mutableListOf<Suggestion>()
     for (t in candidates) {
@@ -656,13 +659,6 @@ private fun rowFor(
         sizeBytes = sizeBytes,
         confirmBody = "your downloaded songs will be removed. you'll need wi-fi to download them again for offline listening.",
     )
-    StorageCleanupOps.Target.APP_CACHES -> Suggestion(
-        target = target,
-        title = "app caches",
-        description = "thumbnails & previews",
-        sizeBytes = sizeBytes,
-        confirmBody = "caches across all apps will be cleared. podcast downloads are handled separately. apps will rebuild thumbnails and previews as you use them.",
-    )
     StorageCleanupOps.Target.WHATSAPP_MEDIA -> Suggestion(
         target = target,
         title = "whatsapp media",
@@ -688,7 +684,6 @@ private fun runCleanupFor(
     context: Context,
     target: StorageCleanupOps.Target,
 ): StorageCleanupOps.ClearResult = when (target) {
-    StorageCleanupOps.Target.APP_CACHES -> StorageCleanupOps.trimAppCaches(context)
     StorageCleanupOps.Target.ANTENNAPOD -> StorageCleanupOps.clearAntennaPodEpisodes(context)
     // SPOTIFY_OFFLINE is normally short-circuited in the UI via
     // launchSpotify() before reaching runCleanupFor. This branch is

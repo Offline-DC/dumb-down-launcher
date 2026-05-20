@@ -270,7 +270,6 @@
             android:name=".storage.StorageCleanupTriggerReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.offlineinc.dumbdownlauncher.RUN_TRIM_APP_CACHES" />
                 <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_ANTENNAPOD" />
                 <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_SPOTIFY_OFFLINE" />
                 <action android:name="com.offlineinc.dumbdownlauncher.RUN_CLEAR_APPLE_MUSIC_OFFLINE" />

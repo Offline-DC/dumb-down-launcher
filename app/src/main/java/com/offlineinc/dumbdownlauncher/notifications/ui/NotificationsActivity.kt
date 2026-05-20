@@ -42,7 +42,22 @@ class NotificationsActivity : AppCompatActivity() {
         })
 
         setContent {
-            val items by NotificationStore.items().observeAsState(initial = emptyList())
+            val rawItems by NotificationStore.items().observeAsState(initial = emptyList())
+            // Cap the page to the latest [MAX_VISIBLE_NOTIFICATIONS]. The
+            // store publishes newest-first by postTime (see
+            // NotificationStore.publish), so `take` gives the 50 most
+            // recent. We slice here at the activity boundary — NOT in
+            // the store — so the cover-display badge count and any
+            // other observers of `NotificationStore.items()` keep
+            // seeing the full set. The activity-side slice only
+            // affects this screen's render + selection / dismiss /
+            // open scope; older notifications are still tracked by
+            // the listener service and will reappear if newer ones
+            // get dismissed.
+            val items = remember(rawItems) {
+                if (rawItems.size <= MAX_VISIBLE_NOTIFICATIONS) rawItems
+                else rawItems.take(MAX_VISIBLE_NOTIFICATIONS)
+            }
             val muted by dndMuteManager.muted.collectAsState()
             var scrollToKey by remember { mutableStateOf<String?>(null) }
             val scrollToUpdate = intent.getBooleanExtra(EXTRA_SCROLL_TO_UPDATE, false)
@@ -111,5 +126,16 @@ class NotificationsActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_SCROLL_TO_UPDATE = "scroll_to_update"
+
+        /**
+         * Hard cap on how many notifications the in-app list renders.
+         * Anything older falls off the bottom on this screen, but
+         * remains in [NotificationStore] (and so the cover badge
+         * still counts it). 50 picked because the d-pad list on a
+         * flip phone is unreasonable to scroll past anyway, and
+         * notifications that fall off the visible tail typically
+         * aren't ones the user is going to act on.
+         */
+        private const val MAX_VISIBLE_NOTIFICATIONS = 50
     }
 }

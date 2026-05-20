@@ -36,9 +36,10 @@ private const val TAG = "StorageCleanupOps"
  * record so the UI could show a "last cleared 2h ago" subtitle on each
  * row. That history is no longer surfaced (rows always render their
  * static description), and the persistence step has been removed to
- * keep this object stateless. The transient "just cleared $N MB" green
- * banner at the top of the Free Up Space screen is driven from the
- * returned [ClearResult] directly, so it survives without the prefs.
+ * keep this object stateless. The transient "cleared $N MB" toast
+ * the Free Up Space screen shows after a successful clear is driven
+ * from the returned [ClearResult] directly, so it survives without
+ * the prefs.
  */
 object StorageCleanupOps {
 
@@ -129,7 +130,6 @@ object StorageCleanupOps {
 
     /** Stable IDs used by the UI + receiver to identify each op. */
     enum class Target(internal val logKey: String) {
-        APP_CACHES("app_caches"),
         ANTENNAPOD("antennapod"),
         SPOTIFY_OFFLINE("spotify_offline"),
         APPLE_MUSIC_OFFLINE("apple_music_offline"),
@@ -159,69 +159,6 @@ object StorageCleanupOps {
     // ── Public API ────────────────────────────────────────────────────────
 
     /**
-     * Drains every app's `cache/` and `code_cache/` dirs **except**
-     * AntennaPod's — that one is split out into its own
-     * [clearAntennaPodEpisodes] row in [FreeUpSpaceScreen] so the user
-     * controls it independently, and stays out of this bucket's size
-     * estimate too (see [totalAppCachesSizeBytes]).
-     *
-     * Previously this called `pm trim-caches 99999999999`, which is the
-     * OS-blessed "trim everyone" command but takes no exclusion list and
-     * thus wiped AntennaPod alongside everything else. We swap to a
-     * direct `find -delete` per cache dir (we have root) with the
-     * AntennaPod package skipped. The trade-off: we lose the
-     * [android.os.storage.StorageManager.allocateBytes] lock protection
-     * that `pm trim-caches` honours. That's intentional — cache/ is
-     * safe-to-wipe by Android contract and the locks rarely apply on
-     * the featurephone-class devices this app targets.
-     *
-     * Bytes-freed is computed as before-du minus after-du across the
-     * same set of dirs we ran the delete on (AntennaPod excluded), so
-     * the figure is consistent with what the row's size estimate said.
-     */
-    @JvmStatic
-    fun trimAppCaches(context: Context, tag: String = TAG): ClearResult {
-        val before = duSumKb(appCachesSumCmd(excludePackage = ANTENNAPOD_PKG))
-
-        val (delExit, _, delErr) = rootExec(appCachesDeleteCmd(excludePackage = ANTENNAPOD_PKG))
-        if (delExit != 0) {
-            Log.w(tag, "trimAppCaches: find -delete failed exit=$delExit err=$delErr")
-            return record(context, Target.APP_CACHES, 0L)
-        }
-
-        val after = duSumKb(appCachesSumCmd(excludePackage = ANTENNAPOD_PKG))
-        val freedKb = (before - after).coerceAtLeast(0L)
-        val freedBytes = freedKb * 1024L
-        Log.i(tag, "trimAppCaches: freed ~${freedKb / 1024} MB (before=${before}KB, after=${after}KB)")
-        return record(context, Target.APP_CACHES, freedBytes)
-    }
-
-    /**
-     * Builds the shell snippet that iterates `/data/data/<pkg>/cache` and
-     * `code_cache/` for every package, skipping [excludePackage], and
-     * runs `du -sk` on each so the caller can pipe through `awk` to sum.
-     */
-    private fun appCachesSumCmd(excludePackage: String): String =
-        "for d in /data/data/*/cache /data/data/*/code_cache; do " +
-            "[ -d \"\$d\" ] || continue; " +
-            "case \"\$d\" in /data/data/$excludePackage/*) continue ;; esac; " +
-            "du -sk \"\$d\" 2>/dev/null; " +
-            "done | awk '{s+=\$1} END {print s+0}'"
-
-    /**
-     * Builds the shell snippet that empties every cache/ and code_cache/
-     * dir, skipping [excludePackage]. Mirrors [appCachesSumCmd] so the
-     * size estimate and the actual delete pass agree on which dirs are
-     * in-scope.
-     */
-    private fun appCachesDeleteCmd(excludePackage: String): String =
-        "for d in /data/data/*/cache /data/data/*/code_cache; do " +
-            "[ -d \"\$d\" ] || continue; " +
-            "case \"\$d\" in /data/data/$excludePackage/*) continue ;; esac; " +
-            "find \"\$d\" -mindepth 1 -delete 2>/dev/null; " +
-            "done; exit 0"
-
-    /**
      * Wipes every dir AntennaPod is known to store downloaded episodes
      * in — see [ANTENNAPOD_CLEAR_DIRS] for the list and the rationale.
      *
@@ -233,7 +170,7 @@ object StorageCleanupOps {
      * Returns a single [ClearResult] for the [Target.ANTENNAPOD] row
      * with the summed bytes — the per-dir calls to [clearDirectoryContents]
      * each construct their own result, but only the summed one is
-     * returned and shown to the UI as the "just cleared $N MB" banner.
+     * returned and surfaced to the UI in the post-clear toast.
      */
     @JvmStatic
     fun clearAntennaPodEpisodes(context: Context, tag: String = TAG): ClearResult {
@@ -600,18 +537,6 @@ object StorageCleanupOps {
         directorySizeBytes(OpenBubblesOps.ATTACHMENTS_DIR)
 
     /**
-     * Sum of every app's cache/ and code_cache/ in bytes, **excluding
-     * AntennaPod** — its episode cache is surfaced as its own row in
-     * [FreeUpSpaceScreen] via [antennaPodSizeBytes], and the matching
-     * [trimAppCaches] delete pass also skips it, so this bucket's
-     * displayed size matches what the "app caches" button will actually
-     * reclaim.
-     */
-    @JvmStatic
-    fun totalAppCachesSizeBytes(): Long =
-        duSumKb(appCachesSumCmd(excludePackage = ANTENNAPOD_PKG)) * 1024L
-
-    /**
      * Snapshot returned by [allSizesBytes] — sizes plus per-section
      * timing so a slow load can be tracked down without re-running each
      * section in isolation.
@@ -655,9 +580,11 @@ object StorageCleanupOps {
             append("KB=\$(du -sk $antennaPodPaths 2>/dev/null | awk '{s+=\$1} END {print s+0}')\n")
             append("echo \"antennapod \$KB \$(date +%s%N)\"\n")
 
-            // spotify — single combined cache + downloads dir.
+            // spotify — single combined cache + downloads dir. Same
+            // ${KB:-0} default as the openbubbles section, in case
+            // the dir is missing and `du` produces no stdout.
             append("KB=\$(du -sk $SPOTIFY_CACHE_DIR 2>/dev/null | awk '{print \$1+0}')\n")
-            append("echo \"spotify \$KB \$(date +%s%N)\"\n")
+            append("echo \"spotify \${KB:-0} \$(date +%s%N)\"\n")
 
             // apple music — extension-matched find inside no_backup/assets.
             append("KB=\$(${appleMusicMatchCmd("-exec du -sk {} +")} ")
@@ -683,14 +610,12 @@ object StorageCleanupOps {
 
             // openbubbles — flat attachments dir, total size (the OB
             // cleanup is unconditional, so the row's displayed size
-            // matches whatever du sees).
+            // matches whatever du sees). The `${KB:-0}` default in
+            // the echo guards against an empty `du` (missing dir,
+            // root unavailable) being misparsed as the trailing
+            // timestamp by the Kotlin side.
             append("KB=\$(du -sk ${OpenBubblesOps.ATTACHMENTS_DIR} 2>/dev/null | awk '{print \$1+0}')\n")
-            append("echo \"openbubbles \$KB \$(date +%s%N)\"\n")
-
-            // app caches — the loop is reused verbatim from
-            // appCachesSumCmd so this row and the actual trim pass agree.
-            append("KB=\$(${appCachesSumCmd(excludePackage = ANTENNAPOD_PKG)})\n")
-            append("echo \"appcaches \$KB \$(date +%s%N)\"\n")
+            append("echo \"openbubbles \${KB:-0} \$(date +%s%N)\"\n")
         }
 
         val t0Kt = System.currentTimeMillis()
@@ -758,7 +683,6 @@ object StorageCleanupOps {
         "apple" -> Target.APPLE_MUSIC_OFFLINE
         "whatsapp" -> Target.WHATSAPP_MEDIA
         "openbubbles" -> Target.OPENBUBBLES_ATTACHMENTS
-        "appcaches" -> Target.APP_CACHES
         else -> null
     }
 
