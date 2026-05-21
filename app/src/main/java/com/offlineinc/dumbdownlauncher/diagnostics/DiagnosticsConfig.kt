@@ -78,8 +78,8 @@ internal object DiagnosticsConfig {
     /**
      * If two lid events arrive within this window we tag the second as a
      * `lid_bounce` in events.jsonl. Hypothesis #2 in the plan is hall
-     * sensor chatter — a bounce count well above the control cohort's
-     * median is the smoking gun. 500 ms is generous enough to catch the
+     * sensor chatter — a high lid_bounce count over an idle capture
+     * window is the smoking gun. 500 ms is generous enough to catch the
      * obvious physical bounce but tight enough that intentional flips
      * are not flagged.
      */

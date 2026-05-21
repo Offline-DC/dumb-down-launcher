@@ -86,10 +86,6 @@ class DiagnosticsActivity : AppCompatActivity() {
                         Toast.makeText(this@DiagnosticsActivity, "Diagnostics stopped", Toast.LENGTH_SHORT).show()
                     }
                 },
-                onSetCohort = { cohort ->
-                    store.cohort = cohort
-                    Toast.makeText(this@DiagnosticsActivity, "Cohort set to $cohort", Toast.LENGTH_SHORT).show()
-                },
                 onResetSession = {
                     val fresh = store.resetSession()
                     Toast.makeText(this@DiagnosticsActivity, "New session: ${fresh.take(8)}…", Toast.LENGTH_SHORT).show()
@@ -106,7 +102,6 @@ class DiagnosticsActivity : AppCompatActivity() {
 private fun DiagnosticsScreen(
     store: DiagnosticsStore,
     onToggleEnabled: (Boolean) -> Unit,
-    onSetCohort: (String) -> Unit,
     onResetSession: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -115,7 +110,6 @@ private fun DiagnosticsScreen(
     val focusRequester = remember { FocusRequester() }
 
     var enabled by remember { mutableStateOf(store.enabled) }
-    var cohort by remember { mutableStateOf(store.cohort ?: "unset") }
     val sessionId = remember { store.captureSessionId }
     var sessionVersion by remember { mutableIntStateOf(0) }
     // Reading captureSessionId again after resetSession() yields the new uuid.
@@ -126,10 +120,6 @@ private fun DiagnosticsScreen(
             val next = !enabled
             enabled = next
             onToggleEnabled(next)
-        },
-        Row.Choice("cohort", value = cohort, choices = listOf("affected", "control", "unset")) { chosen ->
-            cohort = chosen
-            onSetCohort(chosen)
         },
         Row.Action("reset session") {
             sessionVersion += 1
@@ -167,10 +157,6 @@ private fun DiagnosticsScreen(
                             when (val r = rows[selectedIndex]) {
                                 is Row.Toggle -> r.onToggle()
                                 is Row.Action -> r.onActivate()
-                                is Row.Choice -> {
-                                    val next = nextChoice(r.choices, r.value)
-                                    r.onChoose(next)
-                                }
                                 is Row.Info -> { /* no-op */ }
                             }
                             true
@@ -232,7 +218,6 @@ private fun DiagRow(
         )
         val secondary: String? = when (row) {
             is Row.Toggle -> if (row.value) "on" else "off"
-            is Row.Choice -> row.value
             is Row.Info -> row.value
             is Row.Action -> "press center to run"
         }
@@ -253,14 +238,8 @@ private fun DiagRow(
 
 private sealed class Row(val label: String) {
     class Toggle(label: String, val value: Boolean, val onToggle: () -> Unit) : Row(label)
-    class Choice(label: String, val value: String, val choices: List<String>, val onChoose: (String) -> Unit) : Row(label)
     class Action(label: String, val onActivate: () -> Unit) : Row(label)
     class Info(label: String, val value: String) : Row(label)
-}
-
-private fun nextChoice(choices: List<String>, current: String): String {
-    val idx = choices.indexOf(current).coerceAtLeast(-1)
-    return choices[(idx + 1) % choices.size]
 }
 
 private fun formatMs(ms: Long): String {

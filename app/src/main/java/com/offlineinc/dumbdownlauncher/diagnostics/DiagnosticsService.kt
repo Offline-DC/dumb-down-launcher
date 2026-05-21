@@ -112,7 +112,6 @@ class DiagnosticsService : Service() {
                 "launcher_version" to BuildConfig.VERSION_NAME,
                 "schema_version" to DiagnosticsConfig.SCHEMA_VERSION,
                 "diagnostics_build" to "diag-${BuildConfig.VERSION_NAME}",
-                "cohort" to (store.cohort ?: "unset"),
             ),
         )
 

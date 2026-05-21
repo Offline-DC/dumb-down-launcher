@@ -5,8 +5,8 @@ import java.util.UUID
 
 /**
  * SharedPreferences-backed state for the diagnostics module: whether the
- * user has opted in, the current capture session id (used to join multiple
- * files and reject partial pulls), and the cohort tag the device is part of.
+ * user has opted in and the current capture session id (used to join
+ * multiple files and reject partial pulls).
  *
  * Kept independent from PairingStore.betaTesterMode so a single user can be
  * on the beta channel without also collecting diagnostics — and vice versa.
@@ -24,14 +24,6 @@ internal class DiagnosticsStore(context: Context) {
     var enabledSinceMs: Long
         get() = prefs.getLong(KEY_ENABLED_SINCE_MS, 0L)
         set(value) = prefs.edit().putLong(KEY_ENABLED_SINCE_MS, value).apply()
-
-    /**
-     * Cohort tag — "affected" or "control" — chosen at recruitment time. Surfaces
-     * in manifest.json so the post-processor can split metrics by cohort.
-     */
-    var cohort: String?
-        get() = prefs.getString(KEY_COHORT, null)
-        set(value) = prefs.edit().putString(KEY_COHORT, value).apply()
 
     /**
      * Current capture session id. Rotated on every "reset session" tap so the
@@ -57,7 +49,6 @@ internal class DiagnosticsStore(context: Context) {
     private companion object {
         const val KEY_ENABLED = "diagnostics_enabled"
         const val KEY_ENABLED_SINCE_MS = "diagnostics_enabled_since_ms"
-        const val KEY_COHORT = "cohort"
         const val KEY_SESSION_ID = "capture_session_id"
     }
 }

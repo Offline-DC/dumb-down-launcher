@@ -385,19 +385,28 @@ class DumbDownApp : Application() {
      *
      * Flow:
      *   1. If `dumb` is already non-empty → skip (provisioning already wrote it).
-     *   2. Wait for IMEI to become readable (SIM ready).
+     *   2. Wait for IMEI to become readable (SIM ready). Also read the ICCID
+     *      so the backend can run its SIM-keyed dedup (see step 4).
      *   3. Wait for network availability.
-     *   4. GET `${API_BASE}/qr_codes/next_available?imei=${IMEI}` — the
-     *      backend returns the existing assignment for this IMEI if one
-     *      exists, otherwise hands out the next free QR code.
+     *   4. POST `${API_BASE}/register` with `{imei, iccid, assign_qr: true}`.
+     *      Replaces the legacy GET /qr_codes/next_available + PUT /phones/:imei
+     *      pair with a single round-trip. The backend handles QR assignment
+     *      AND persists `qr_code_id` on the phones row in one transaction —
+     *      no follow-up PUT needed.
+     *
+     *      Sending `iccid` alongside `imei` lets the backend dedup against
+     *      any existing QR claim under the same SIM. If a previous launcher
+     *      build registered the same physical phone under a different (and
+     *      sometimes bogus) IMEI value — IMSI-as-IMEI, ICCID-as-IMEI,
+     *      ro.serialno-as-IMEI; see the post-fix SimInfoReader guards and
+     *      docs/bug-imei-fallback-thrashes-system-server.md — the existing
+     *      claim is returned instead of allocating a fresh code from the
+     *      pool. The phone gets the same QR it had pre-update; no waste.
+     *
      *   5. Write the response's `code` field to the `dumb` file via
      *      `nsenter`-wrapped `su` (same pattern as [ensureOpenBubblesDumbFile]).
      *      Base64-encoded on the wire so JWT-style codes with `=`/`+`/etc.
      *      survive shell parsing without escaping headaches.
-     *   6. PUT `${API_BASE}/phones/${IMEI}` with `{ qr_code_id: <id> }` to
-     *      claim the assignment, mirroring the QR ASSIGNMENT step in
-     *      automated_configuration.sh — without this the same code could be
-     *      handed to another phone on its next provisioning run.
      *
      * Best-effort: every error path logs a warning and bails. The next boot
      * will retry from the top.
@@ -433,21 +442,48 @@ class DumbDownApp : Application() {
             if (!imei.isNullOrBlank()) {
                 Log.i(tag, "Using cached IMEI from DeviceRegistrar: $imei")
             } else {
-                Log.i(tag, "No cached IMEI — polling SimInfoReader (every 10s, up to 10 min)")
-                val pollIntervalMs = TimeUnit.SECONDS.toMillis(10)
-                val maxPolls = 60  // 10 min total
-                for (i in 1..maxPolls) {
-                    imei = SimInfoReader.readImei(ctx)
-                    if (!imei.isNullOrBlank()) break
-                    try {
-                        Thread.sleep(pollIntervalMs)
-                    } catch (ie: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        return
+                // Exponential backoff between cascade attempts.
+                //
+                // Old schedule: 10s × 60 = 60 cascades over 10 min. On a
+                // MediaTek flip phone where the cascade never succeeds (no
+                // SIM, broken service-call interface, etc.) that's 60 ×
+                // ~12 su subprocesses = ~720 root-server invocations in 10
+                // minutes, which thrashes Magisk under memory pressure and
+                // freezes system_server. See
+                // docs/bug-imei-fallback-thrashes-system-server.md.
+                //
+                // New schedule: 6 cascades over ~16.5 min, spaced so the
+                // first few retries catch the common "SIM coming up late on
+                // cold boot" case while later retries don't churn memory.
+                // SimInfoReader now caches the first successful IMEI, so a
+                // device that ever reads successfully will skip this loop
+                // entirely on every subsequent boot — this schedule only
+                // costs anything on first-install + no-SIM devices.
+                val backoffsMs = longArrayOf(
+                    TimeUnit.SECONDS.toMillis(10),
+                    TimeUnit.SECONDS.toMillis(30),
+                    TimeUnit.MINUTES.toMillis(1),
+                    TimeUnit.MINUTES.toMillis(5),
+                    TimeUnit.MINUTES.toMillis(10),
+                )
+                Log.i(tag, "No cached IMEI — polling SimInfoReader with backoff " +
+                    "(immediate, then +10s/+30s/+1m/+5m/+10m)")
+                imei = SimInfoReader.readImei(ctx)
+                if (imei.isNullOrBlank()) {
+                    for ((i, delay) in backoffsMs.withIndex()) {
+                        try {
+                            Thread.sleep(delay)
+                        } catch (ie: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            return
+                        }
+                        Log.d(tag, "IMEI retry ${i + 1}/${backoffsMs.size} after ${delay}ms wait")
+                        imei = SimInfoReader.readImei(ctx)
+                        if (!imei.isNullOrBlank()) break
                     }
                 }
                 if (imei.isNullOrBlank()) {
-                    Log.w(tag, "IMEI not readable after extended wait — skipping QR fetch")
+                    Log.w(tag, "IMEI not readable after backoff window — skipping QR fetch")
                     return
                 }
                 Log.i(tag, "IMEI ready (live read): $imei")
@@ -486,43 +522,91 @@ class DumbDownApp : Application() {
                 return
             }
 
-            // 4. GET /qr_codes/next_available?imei=...
+            // 4. POST /api/v1/register {imei, iccid, assign_qr: true}.
+            //
+            //    Single round-trip — replaces the legacy GET /qr_codes/next_available
+            //    + PUT /phones/:imei pair. The backend assigns a QR and persists
+            //    qr_code_id on the phones row in one transaction; no follow-up
+            //    PUT is needed.
+            //
+            //    Sending the ICCID enables the backend's SIM-keyed dedup: if
+            //    any phones row already holds a qr_code_id against this SIM
+            //    (typically because a previous launcher build registered the
+            //    same physical phone under a bogus IMEI value — IMSI,
+            //    ro.serialno, or the ICCID itself), the existing claim is
+            //    returned instead of allocating a fresh code from the pool.
+            //    This is the only guarantee that keeps the QR pool from
+            //    being burnt down by cross-version IMEI churn.
+            //
+            //    ICCID is read best-effort. If the cascade fails (no SIM,
+            //    broken service-call binder, etc.) we still POST but without
+            //    iccid — the call falls back to imei-only lookup, which
+            //    means the SIM-keyed dedup can't fire for this round but
+            //    everything else still works.
+            val iccid = SimInfoReader.readIccid(ctx)
+            if (iccid.isNullOrBlank()) {
+                Log.w(tag, "ICCID not readable — POSTing /register without it; " +
+                    "SIM-keyed dedup will not run for this device on this call")
+            } else {
+                Log.d(tag, "ICCID resolved for /register: $iccid")
+            }
+
             val client = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .callTimeout(60, TimeUnit.SECONDS)
                 .build()
-            val qrUrl = "$API_BASE/qr_codes/next_available?imei=$imei"
-            val qrReq = Request.Builder().url(qrUrl).get().build()
-            Log.d(tag, "HTTP GET $qrUrl")
+            val registerBody = JSONObject()
+                .put("imei", imei)
+                .put("assign_qr", true)
+            if (!iccid.isNullOrBlank()) {
+                registerBody.put("iccid", iccid)
+            }
+            val registerReq = Request.Builder()
+                .url("$API_BASE/register")
+                .post(registerBody.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            Log.d(tag, "HTTP POST ${registerReq.url} body=$registerBody")
 
             var qrCode: String? = null
             var qrId: Long = -1L
-            client.newCall(qrReq).execute().use { resp ->
+            client.newCall(registerReq).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    Log.w(tag, "qr_codes/next_available HTTP ${resp.code} body=${resp.body?.string()}")
+                    Log.w(tag, "register HTTP ${resp.code} body=${resp.body?.string()}")
                     return
                 }
                 val bodyStr = resp.body?.string().orEmpty()
                 if (bodyStr.isBlank()) {
-                    Log.w(tag, "qr_codes/next_available returned empty body")
+                    Log.w(tag, "register returned empty body")
                     return
                 }
                 try {
                     val json = JSONObject(bodyStr)
-                    qrCode = json.optString("code", "").takeIf { it.isNotBlank() }
-                    qrId = json.optLong("id", -1L)
+                    val results = json.optJSONObject("results")
+                    val qrObj = results?.optJSONObject("qr")
+                    if (qrObj == null) {
+                        Log.w(tag, "register response missing results.qr: $bodyStr")
+                        return
+                    }
+                    // Backend returns either {id, code, url} on success or
+                    // {error: "..."} when the pool is exhausted under maxLines.
+                    if (qrObj.has("error")) {
+                        Log.w(tag, "register results.qr error: ${qrObj.optString("error")}")
+                        return
+                    }
+                    qrCode = qrObj.optString("code", "").takeIf { it.isNotBlank() }
+                    qrId = qrObj.optLong("id", -1L)
                 } catch (e: Exception) {
-                    Log.w(tag, "qr_codes/next_available unparseable response: $bodyStr")
+                    Log.w(tag, "register unparseable response: $bodyStr", e)
                     return
                 }
             }
             val code = qrCode
             if (code.isNullOrBlank()) {
-                Log.w(tag, "qr_codes/next_available returned no usable code (id=$qrId)")
+                Log.w(tag, "register returned no usable QR code (id=$qrId)")
                 return
             }
-            Log.i(tag, "QR code retrieved (id=$qrId, codePrefix=${code.take(20)}…)")
+            Log.i(tag, "QR code retrieved via /register (id=$qrId, codePrefix=${code.take(20)}…)")
 
             // 5a. Force-stop OpenBubbles before touching the dumb file.
             //     OpenBubbles only reads the activation code on app launch
@@ -564,31 +648,14 @@ class DumbDownApp : Application() {
             val (_, finalSize, _) = rootExec("stat -c %s $obFile 2>/dev/null || echo 0")
             Log.i(tag, "Wrote QR code to $obFile (size=$finalSize) ✔")
 
-            // 6. PUT /phones/{imei} {qr_code_id: id} — claim the assignment.
-            //    Same step as the "QR CODE ASSIGNMENT" stanza in
-            //    automated_configuration.sh; without it the same code can be
-            //    handed to a different phone next time.
-            if (qrId > 0L) {
-                try {
-                    val assignBody = JSONObject().put("qr_code_id", qrId)
-                    val assignReq = Request.Builder()
-                        .url("$API_BASE/phones/$imei")
-                        .put(assignBody.toString().toRequestBody("application/json".toMediaType()))
-                        .build()
-                    Log.d(tag, "HTTP PUT ${assignReq.url} body=$assignBody")
-                    client.newCall(assignReq).execute().use { resp ->
-                        if (resp.isSuccessful) {
-                            Log.i(tag, "QR code $qrId assigned to phone $imei (HTTP ${resp.code}) ✔")
-                        } else {
-                            Log.w(tag, "QR assignment HTTP ${resp.code} body=${resp.body?.string()}")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(tag, "QR assignment failed: ${e.message}")
-                }
-            } else {
-                Log.w(tag, "Skipping QR assignment PUT — response had no usable id")
-            }
+            // (No step 6.) /api/v1/register already persisted qr_code_id on
+            // the phones row as part of its assign_qr branch, so we don't need
+            // a follow-up PUT /phones/:imei here. The legacy GET/PUT pair was
+            // collapsed into the single POST above precisely so that the QR
+            // assignment and the phones-row update happen in one transaction
+            // — eliminating the failure mode where the GET succeeded, we
+            // wrote the dumb file, but the PUT failed and the same code got
+            // re-handed-out on the next phone's provisioning run.
         } catch (e: Exception) {
             Log.w(tag, "populateOpenBubblesActivationCode: ${e.message}", e)
         }

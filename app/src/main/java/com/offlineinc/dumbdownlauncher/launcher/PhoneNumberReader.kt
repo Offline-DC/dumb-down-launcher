@@ -17,6 +17,7 @@ import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.offlineinc.dumbdownlauncher.registration.SimInfoReader
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.concurrent.CountDownLatch
@@ -43,14 +44,18 @@ private const val DEFAULT_SIM_WAIT_MS = 60_000L
  *    that works on units where MSISDN was never written to the SIM (Settings
  *    shows "unknown" under About Phone → My Phone Number) and the setup
  *    script's #686# write step never landed Settings.Secure either. Result is
- *    persisted back to Settings.Secure (and siminfo.number) so the next read
- *    hits the fast path. The cached value is **ICCID-pinned**: every read
- *    compares the SIM that produced the cache against the SIM currently
- *    inserted, so a SIM swap auto-invalidates the cache and re-queries USSD.
- * 2. Root fallback: Settings.Secure (written by setup script via #686# USSD query)
- * 3. Root fallback: content://telephony/siminfo (works on TCL/MediaTek)
- * 4. SubscriptionManager (Android 13+)
- * 5. TelephonyManager.getLine1Number (deprecated but still works on older builds)
+ *    persisted back to Settings.Secure so the next read hits the fast path.
+ *    The cached value is **ICCID-pinned**: every read compares the SIM that
+ *    produced the cache against the SIM currently inserted, so a SIM swap
+ *    auto-invalidates the cache and re-queries USSD.
+ * 2. Root fallback: Settings.Secure
+ * 3. SubscriptionManager (Android 13+)
+ * 4. TelephonyManager.getLine1Number (deprecated but still works on older builds)
+ *
+ * Previously also wrote/read `content://telephony/siminfo` column `number`.
+ * Removed — that column was a relic of the setup-script flow we no longer
+ * use, the writes timed out routinely on cold boot, and once the writes
+ * went away the read was just churning su for stale data.
  *
  * Returns (phoneNumber, errorMessage) — one will be null. The user-facing
  * error message ("unable to read phone number from SIM") is preserved as the
@@ -182,14 +187,13 @@ object PhoneNumberReader {
      * What gets cleared, and why:
      *   1. [cachedNumber] — process-lifetime cache; re-read on next call.
      *   2. `Settings.Secure.device_phone_number` — written by sim_setup.sh
-     *      after a successful USSD #686# query. Survives reboots and SIM
-     *      swaps, which is exactly what makes it stale.
-     *   3. `content://telephony/siminfo` `number` column for currently-
-     *      inserted SIMs (`sim_id>=0`). Also written by sim_setup.sh and
-     *      can carry a previous SIM's value if the row was re-used after a
-     *      swap. The active-SIM filter mirrors [SimInfoReader] so we don't
-     *      touch historical (`sim_id=-1`) rows; those are harmless because
-     *      every reader filters them out.
+     *      (legacy) or [persistPhoneNumber] (current) after a successful
+     *      USSD #686# query. Survives reboots and SIM swaps, which is
+     *      exactly what makes it stale.
+     *
+     * Previously also cleared `content://telephony/siminfo` column `number`;
+     * removed when we stopped writing to that column. See [persistPhoneNumber]
+     * for the rationale.
      *
      * Best-effort: each step is wrapped so a failing root shell on a non-
      * rooted build doesn't take the others down. Logged at INFO so the
@@ -212,19 +216,14 @@ object PhoneNumberReader {
             Log.w(TAG, "Failed to clear Settings.Secure.device_phone_number", e)
         }
 
-        // Use sim_id>=0 to skip historical (removed-SIM) rows; same filter
-        // as SimInfoReader.SIMINFO_ACTIVE_WHERE. `>= 0` not `!= -1` because
-        // shell-quoting `!` through su -c '…' is fragile across zsh / adb /
-        // sh / Android's `content` tool.
-        try {
-            runSuCommand(
-                "content update --uri content://telephony/siminfo " +
-                    "--bind number:s: --where \"sim_id>=0\""
-            )
-            Log.i(TAG, "Cleared siminfo.number for active SIMs")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to clear siminfo.number", e)
-        }
+        // (Previously: also cleared `content://telephony/siminfo` column
+        // `number` with `content update --bind number:s:`. Removed because
+        // the launcher no longer writes to that column — the setup-script
+        // flow that used to populate it has been replaced by the USSD
+        // #686# round-trip + Settings.Secure persistence above. The clear
+        // routinely timed out at 1500ms during cold boot, adding noise
+        // to the SIM-swap path without doing anything useful: there's
+        // nothing of ours to clear there.)
     }
 
     /**
@@ -522,7 +521,7 @@ object PhoneNumberReader {
                 val storedIccid = Settings.Secure.getString(
                     ctx.contentResolver, KEY_DEVICE_PHONE_NUMBER_ICCID
                 )
-                val currentIccid = readCurrentIccid()
+                val currentIccid = readCurrentIccid(ctx)
                 when {
                     currentIccid == null -> {
                         // Can't read current SIM's ICCID. Don't override the
@@ -726,16 +725,12 @@ object PhoneNumberReader {
         // happy path; this is idempotent — same value, same volatile write.)
         cachedNumber = result
 
-        // Persist to BOTH Settings.Secure AND content://telephony/siminfo so
-        // the next read (this process or any other) hits the fast path without
-        // firing USSD again. Writing only Settings.Secure leaves
-        // SimInfoReader.readAll's primary path empty — its "fast" siminfo query
-        // would still come back partial (number=) and the BootRegistrationScreen
-        // retry loop would keep spinning until the carrier eventually OTA-pushes
-        // MSISDN to the SIM (which can take 60+ seconds). Writing to siminfo as
-        // well lights up readAll's fast path on the very next attempt.
-        // Mirrors what automated_configuration.sh would have done.
-        persistPhoneNumber(result)
+        // Persist to Settings.Secure so the next read (this process or any
+        // other) hits the fast path without firing USSD again. Also pins
+        // the active SIM's ICCID inside [persistPhoneNumber] for SIM-swap
+        // detection. (Previously also wrote `content://telephony/siminfo`
+        // column `number`; removed — see persistPhoneNumber for why.)
+        persistPhoneNumber(ctx, result)
 
         // NOTE: USSD's CSFB-to-GSM transition can leave the modem stuck on
         // 2G with a torn-down data PDP context. The recovery (toggling
@@ -900,46 +895,40 @@ object PhoneNumberReader {
     }
 
     /**
-     * Writes an E.164 phone number to BOTH:
-     *   1. `Settings.Secure.device_phone_number` — read by [readViaSu] method 1
-     *   2. `content://telephony/siminfo` column `number` — read by both
-     *      [readViaSu] method 2 AND, more importantly, the fast path inside
-     *      [com.offlineinc.dumbdownlauncher.registration.SimInfoReader.readAll].
-     *      Without this write, readAll's "got all three from siminfo in one
-     *      call" path keeps coming back partial (number=) and the
-     *      BootRegistrationScreen retry loop spins until the carrier
-     *      OTA-provisions MSISDN, which can take 60+ seconds.
+     * Writes an E.164 phone number to `Settings.Secure.device_phone_number`
+     * and pins it to the active SIM's ICCID so subsequent SIM-swap detection
+     * works. Two writes:
      *
-     * Mirrors the dual-write pattern in `automated_configuration.sh`. Each
-     * write has its own short timeout; failures are logged but non-fatal —
+     *   1. `Settings.Secure.device_phone_number` — read by [readViaSu] method 1
+     *      and by callers querying Settings.Secure directly.
+     *   2. `Settings.Secure.$KEY_DEVICE_PHONE_NUMBER_ICCID` — the SIM-pin
+     *      row, compared against the currently-inserted ICCID on every
+     *      cold-boot read inside [readViaUssd]. Mismatch ⇒ SIM swap ⇒
+     *      forced USSD re-query.
+     *
+     * Previously also wrote `content://telephony/siminfo` column `number`,
+     * which was a leftover from the setup-script flow. Removed because the
+     * launcher no longer treats siminfo.number as a source of truth and the
+     * `content update` call routinely took 1-3s (sometimes timing out at
+     * 5s) on cold boot. Settings.Secure is the single source of truth now.
+     *
+     * Each write has its own timeout; failures are logged but non-fatal —
      * the in-memory cache still serves this read, and the next cold boot
      * will fall through to USSD again.
-     *
-     * The `--where "sim_id>=0"` filter scopes the siminfo update to the
-     * currently-inserted SIM only. This matches [SimInfoReader.SIMINFO_ACTIVE_WHERE]
-     * and avoids overwriting historical rows for previously-removed SIMs (the
-     * content provider keeps a row per SIM the phone has ever seen, with
-     * `sim_id=-1` for retired ones).
      */
-    private fun persistPhoneNumber(e164: String) {
+    private fun persistPhoneNumber(ctx: Context, e164: String) {
         // Write 1: Settings.Secure
         runSuWrite(
             "settings put secure device_phone_number $e164",
             label = "Settings.Secure.device_phone_number"
         )
-        // Write 2: telephony/siminfo number column, scoped to active SIM
-        runSuWrite(
-            "content update --uri content://telephony/siminfo " +
-                "--bind number:s:$e164 --where \"sim_id>=0\"",
-            label = "siminfo.number"
-        )
-        // Write 3: pin the cached number to the SIM that produced it. The
+        // Write 2: pin the cached number to the SIM that produced it. The
         // pre-check inside readViaUssd compares this against the active SIM's
         // ICCID on every cold-boot read; mismatch → SIM swap → force USSD
         // re-query. Skipped (with a warning) if we can't read the ICCID right
         // now — better to lose the swap-detection capability for one cycle
         // than to write a bogus pin value.
-        val currentIccid = readCurrentIccid()
+        val currentIccid = readCurrentIccid(ctx)
         if (currentIccid != null) {
             runSuWrite(
                 "settings put secure $KEY_DEVICE_PHONE_NUMBER_ICCID $currentIccid",
@@ -952,33 +941,26 @@ object PhoneNumberReader {
     }
 
     /**
-     * Reads the ICCID of the currently-inserted SIM by querying the active
-     * row in `content://telephony/siminfo`. Single `su` call — cheaper than
-     * [SimInfoReader.readIccid] which falls through service calls and
-     * getprop chains, and we don't need that exhaustive search here because
-     * Settings.Secure already vouches that *some* SIM exists.
+     * Reads the ICCID of the currently-inserted SIM by delegating to
+     * [SimInfoReader.readIccid], which runs the modem-backed `service call
+     * iphonesubinfo` cascade (~600ms on TCL/MediaTek after the cascade
+     * reorder put service call 12 first).
      *
-     * Mirrors the active-SIM filter used elsewhere in this class so the
-     * post-SIM-swap row (sim_id=-1) is excluded.
+     * Previously this method ran its own `content query --uri
+     * content://telephony/siminfo` with a 5s timeout. That query was the
+     * single most expensive call on every cold-boot USSD success path: it
+     * reliably timed out at the full 5s on the target hardware, and the
+     * timeout silently disabled SIM-swap detection (since the ICCID pin
+     * write inside [persistPhoneNumber] was skipped on any unreadable
+     * result). Delegating to SimInfoReader.readIccid uses the same
+     * service-call route that already powers IMEI/ICCID resolution
+     * elsewhere in the launcher and is both faster and more reliable.
      *
-     * Uses a generous 5s timeout (vs. the [runSuCommand] default of 1500ms)
-     * because content-provider queries on the TCL/MediaTek targets routinely
-     * take 1-2s, especially on cold boot before the binder cache is warm.
-     * Falling under the default timeout gave a false "current ICCID
-     * unreadable — trusting cache" path that defeated SIM-swap detection.
-     * 5s is well within the BootRegistration retry budget and only fires
-     * on the first read after process start.
+     * No infinite-recursion concern: SimInfoReader.readIccid does not
+     * call back into PhoneNumberReader (only SimInfoReader.readAll does,
+     * and we never invoke readAll from here).
      */
-    private fun readCurrentIccid(): String? {
-        val raw = runSuCommand(
-            cmd = "content query --uri content://telephony/siminfo " +
-                "--projection icc_id --where \"sim_id>=0\"",
-            timeoutMs = 5_000L
-        ) ?: return null
-        val match = Regex("""icc_id=([^,}\s]+)""").find(raw) ?: return null
-        val v = match.groupValues[1].trim().trim('\r', '\n')
-        return if (v.isBlank() || v.equals("NULL", ignoreCase = true) || v == "null") null else v
-    }
+    private fun readCurrentIccid(ctx: Context): String? = SimInfoReader.readIccid(ctx)
 
     /**
      * Helper for the persist writes — runs `su -c <cmd>` and logs the
@@ -1035,36 +1017,19 @@ object PhoneNumberReader {
             Log.w(TAG, "Root fallback (Settings.Secure) failed", e)
         }
 
-        // Method 2: telephony siminfo (also written by setup script)
-        //
-        // The `sim_id>=0` filter pins the query to the currently-inserted SIM.
-        // Without it, the content provider returns one row per SIM the phone
-        // has ever seen — including sim_id=-1 rows for SIMs that have been
-        // removed — and the first-match regex below would happily return a
-        // previous SIM's number on a SIM-swapped phone. This mirrors the same
-        // filter SimInfoReader.SIMINFO_ACTIVE_WHERE applies for the same reason.
-        // `>= 0` (not `!= -1`) is used because shell-quoting `!` through
-        // `su -c '…'` is fragile across zsh / adb / sh / the Android `content`
-        // tool; `>= 0` is equivalent and survives every layer unescaped.
-        try {
-            val cp = runSuCommand(
-                "content query --uri content://telephony/siminfo " +
-                    "--projection number --where \"sim_id>=0\""
-            )
-            if (cp != null) {
-                val match = Regex("""number=([^,}\s]+)""").find(cp)
-                val num = match?.groupValues?.get(1)?.trim()
-                if (!num.isNullOrBlank() && num != "NULL" && num.any { it.isDigit() }) {
-                    Log.d(TAG, "Root fallback (siminfo) got number")
-                    suFailureCount = 0
-                    return num.replace("-", "")
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Root fallback (siminfo) failed", e)
-        }
+        // (Previously method 2: read the same number from
+        // `content://telephony/siminfo` column `number`. Removed alongside
+        // the matching writes in [persistPhoneNumber] / [clearStoredNumber]
+        // — once we stopped maintaining that column, the read returned
+        // either stale data from earlier installs or empty for most SIMs,
+        // and the content query routinely cost 1-3s on cold boot. With
+        // method 1 (Settings.Secure) and the USSD #686# round-trip
+        // covering all real sources, the siminfo path was dead weight.)
 
-        // Both methods failed — record for the exponential-backoff window.
+        // Method 1 failed (Settings.Secure absent or empty). Record for the
+        // exponential-backoff window so we don't hammer su every cold-boot
+        // read attempt when the launcher just isn't going to find a number
+        // through root.
         suLastFailureMs = System.currentTimeMillis()
         val next = (suFailureCount + 1).coerceAtMost(SU_MAX_ATTEMPTS)
         suFailureCount = next

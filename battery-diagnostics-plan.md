@@ -19,16 +19,15 @@ subcommands that the OS normally restricts.
 
 ## Goals
 
-1. Ship an instrumented build of the launcher to ~3–5 affected users and 2–3
-   healthy users (control cohort).
+1. Ship an instrumented build of the launcher to affected users one device
+   at a time.
 2. Capture, per device, a 24-hour structured diagnostic bundle that includes
    both launcher-level and system-level battery, wakelock, alarm, and sensor
    activity.
 3. Produce that bundle in a schema designed for LLM-assisted analysis —
    pre-parsed, normalized, with derived metrics and hypothesis scoring already
-   computed on-device — so that comparing affected vs. control devices is
-   a matter of reading a handful of small JSON files rather than grepping
-   bugreports.
+   computed on-device — so that diagnosing a device is a matter of reading
+   a handful of small JSON files rather than grepping bugreports.
 4. Identify the root cause of the idle drain and ship a fix on the next beta.
 
 ## Phase 1 — Instrument the launcher
@@ -125,26 +124,20 @@ to `/sdcard/Android/data/<pkg>/files/diag/` for easy ADB pull.
   fresh `capture_session_id` UUID. Every subsequent line in every file
   carries that UUID so partial pulls are easy to detect and discard.
 
-## Phase 3 — Cohort selection
+## Phase 3 — Device recruitment and consent
 
-Recruit two cohorts of users on the same instrumented build:
+Recruit affected users one at a time. Each device is investigated
+independently — there is no "control cohort" to diff against; the
+`hypotheses.json` file scores each device against absolute thresholds
+derived from a healthy reference device (your own dogfood phone, captured
+ahead of time with the same instrumentation).
 
-1. **Affected (3–5 users)** — users who have reported the drain.
-2. **Control (2–3 users)** — users on identical hardware reporting normal
-   battery life.
-
-Two is the minimum for the control group; one healthy phone could itself be
-an outlier. Match users on usage profile where possible — pair a heavy-talker
-affected user with a heavy-talker control, a light user with a light control —
-so drain comparisons aren't confounded by behavior.
-
-For each user, capture a `device-info.json`:
+For each user, capture a `device-info.json` alongside the bundle:
 
 ```json
 {
-  "cohort": "affected | control",
   "device_id": "<adb get-serialno>",
-  "model": "4058G",
+  "model": "4058W",
   "hardware_revision": "<from /proc/cpuinfo or ro.boot.hardware.revision>",
   "build_fingerprint": "<from getprop ro.build.fingerprint>",
   "launcher_version": "X.Y.Z-diag",
@@ -153,21 +146,23 @@ For each user, capture a `device-info.json`:
   "carrier": "<from getprop gsm.sim.operator.alpha>",
   "android_security_patch": "<from getprop ro.build.version.security_patch>",
   "usage_profile_self_report": "~30 min calls/day, flip open ~50x/day",
+  "notes": "free-form context the user reported",
   "capture_window_start_iso": "...",
   "capture_window_end_iso": "..."
 }
 ```
 
 The hardware revision matters: flip phones often ship with multiple battery
-suppliers or hall-sensor part variants across production runs, and a
-control cohort is the only way that kind of difference surfaces.
+suppliers or hall-sensor part variants across production runs. Logging
+`hardware_revision` per device lets us spot patterns across multiple
+affected users even though each one is analyzed independently.
 
 ## Phase 4 — Deployment
 
 - Cut a `launcher-diag-X.Y.Z` build off the main branch with the
   `DIAGNOSTICS_ENABLED` flag on.
-- Push only to the selected affected and control users via the existing beta
-  channel. Production users stay on the clean build.
+- Push only to the selected affected users via the existing beta channel.
+  Production users stay on the clean build.
 - In the launcher, add a hidden settings entry triggered by a **long-press
   on the "Quack" app in the All Apps list**, following the same pattern
   the launcher already uses for the long-press on "Device Setup" in All
@@ -180,13 +175,13 @@ control cohort is the only way that kind of difference surfaces.
   - Show the path to the diagnostics folder.
   - Expose a "reset session" button.
 - Confirm consent with each user verbally before flipping the toggle. We
-  capture logcat, so this is non-negotiable even for a small cohort.
+  capture logcat, so this is non-negotiable even for a single device.
 
 ## Phase 5 — Capture protocol
 
-For each device, the same 24-hour window. Run all devices on the same day
-where possible, so ambient temperature and any over-the-air pushes are
-held constant across the cohort.
+For each device, the same 24-hour window. The launcher should ideally
+sit in a known state (lid closed, on a desk, not plugged in) for the
+overnight portion so the idle-drain bucket has clean data.
 
 ```bash
 DEV=$(adb get-serialno)
@@ -233,7 +228,7 @@ Every device produces the same files with the same schema:
 
 ```
 diag-<deviceid>-<date>/
-  device-info.json            ← cohort, hardware, build, usage profile
+  device-info.json            ← hardware, build, usage profile, notes
   manifest.json               ← capture session id, time range, file checksums
   summary.json                ← headline metrics — read this first
   samples.jsonl               ← battery samples, 1/min, normalized fields
@@ -316,6 +311,11 @@ battery going":
 For each working hypothesis, dump the supporting numbers so the analyst
 weighs evidence directly rather than grepping logs:
 
+Each metric is paired with a `healthy_baseline` value — the absolute
+threshold a clean reference device hits when idle. The analyst reads
+the actual value against that baseline directly; no cross-device
+comparison is required.
+
 ```json
 {
   "lid_sensor_chatter": {
@@ -323,30 +323,30 @@ weighs evidence directly rather than grepping logs:
     "lid_events_while_lid_reported_closed": 980,
     "wake_reasons_attributed_to_hall_sensor": 412,
     "sensor_listeners_registered": ["com.example.launcher", "com.tcl.dialer"],
-    "control_cohort_median_lid_events_24h": 95
+    "healthy_baseline_lid_events_24h": 100
   },
   "launcher_wakelock_leak": {
     "launcher_partial_wakelock_seconds_screen_off": 4821,
     "longest_held_wakelock_ms": 187000,
     "wakelocks_never_released": 3,
-    "control_cohort_median_seconds": 120
+    "healthy_baseline_seconds": 120
   },
   "companion_app_binding": {
     "packages_bound_to_launcher": ["com.tcl.dialer", "com.tcl.contacts"],
     "bound_seconds_screen_off": 84600,
-    "control_cohort_median_seconds": 12000
+    "healthy_baseline_seconds": 12000
   },
   "radio_thrash": {
     "mobile_radio_active_seconds_screen_off": 14200,
     "wifi_scan_count": 1899,
     "cell_scan_count": 720,
-    "control_cohort_median_radio_active_seconds": 2400
+    "healthy_baseline_radio_active_seconds": 2400
   },
   "doze_blocked": {
     "expected_doze_entries_24h": 24,
     "actual_doze_entries_24h": 2,
     "longest_continuous_doze_s": 480,
-    "control_cohort_median_doze_entries": 22
+    "healthy_baseline_doze_entries": 22
   }
 }
 ```
@@ -359,11 +359,11 @@ doze entry count makes that immediately visible.
 ### 6.5 `summary.json` — the one-pager
 
 Built last, after the other files exist. Twenty to forty normalized fields
-designed for direct cross-device comparison:
+that let the analyst eyeball the device's state without opening any of
+the underlying files:
 
 ```json
 {
-  "cohort": "affected",
   "device_id": "...",
   "capture_window_hours": 24,
   "battery_drop_total_pct": 91,
@@ -383,27 +383,38 @@ designed for direct cross-device comparison:
 }
 ```
 
-With 5–8 devices in the study, all `summary.json` files comfortably fit in
-context — the analyst can diff them all in one pass.
+Read `summary.json` first; drop into `hypotheses.json` when a metric
+looks off; drop into the per-`wakeup_sources` / `events.jsonl` / raw
+dumps only when `hypotheses.json` doesn't already explain it.
 
-## Phase 7 — Cohort analysis harness
+## Phase 7 — Per-device analysis loop
 
-After all per-device bundles exist, run a post-processing script that
-produces three cohort-level files:
+For each device's bundle, in order:
 
-```
-cohort-<date>/
-  cohort_manifest.json   ← device_id → cohort, usage profile, build, capture window
-  comparison.json        ← for every summary metric: median/p25/p75 split by
-                           cohort, plus per-device value
-  deltas.json            ← affected − control delta per metric, ranked by
-                           absolute z-score
-```
+1. Open `summary.json`. Is `drain_rate_screen_off_lid_closed_pct_per_hour`
+   well above the healthy target (~0.5–1.0 %/hour)? If yes, this device
+   genuinely has the bug we're chasing. If no, the user may have a
+   different problem — note it and move on.
+2. Open `hypotheses.json`. For each hypothesis, compare the actual value
+   to the paired `healthy_baseline_*` field. Anything more than ~3×
+   baseline is a candidate; anything 10×+ is a likely cause.
+3. For the top candidate, open the relevant raw file under `raw/`:
+   - `lid_sensor_chatter` → `dumpsys/wakeup_sources-*.txt`,
+     `dumpsys/wakeup_reason-*.txt`, lid events in `events.jsonl`.
+   - `doze_blocked` → `dumpsys/deviceidle-*.txt`,
+     `dumpsys/suspend_stats-*.txt`.
+   - `launcher_wakelock_leak` → `dumpsys/batterystats-checkin-*.txt`
+     (search for the launcher's UID).
+   - `companion_app_binding` → `dumpsys/activity_processes-*.txt`.
+   - `radio_thrash` → `dumpsys/wifi-*.txt`,
+     `dumpsys/connectivity-*.txt`, `dumpsys/netstats-*.txt`.
+4. Write a 5-line writeup against the device: what the bundle showed,
+   what the suspected cause is, what the fix would be.
 
-`deltas.json` ranked by z-score is the file to read first. Whatever sits at
-the top — wakelock duration, sensor event rate, alarm count, doze entries,
-radio-active time — is the prime suspect. Everything else in the bundle
-exists to confirm or rule it out.
+If multiple affected devices accumulate, scan their writeups for shared
+patterns — same hypothesis dominant across three devices is much
+stronger evidence than one device, even without a formal cohort
+comparison.
 
 ## Working hypotheses
 
@@ -417,7 +428,9 @@ ranked by my prior:
 2. **Lid / hall sensor chatter.** A noisy or stuck hall sensor reports
    open/close events continuously while the device is physically closed,
    keeping the SoC awake. Cross-check the lid event count against the
-   control cohort.
+   healthy baseline in `hypotheses.json` and the `gpio_keys` /
+   `ClamShell_key` counts in `wakeup_sources-*.txt` and
+   `wakeup_reason-*.txt`.
 3. **Launcher wakelock leak.** A wakelock acquired on a launcher event
    that never gets released — common pattern when the launcher binds to
    a companion service whose unbind path has a bug.
@@ -447,8 +460,10 @@ ranked by my prior:
       subcommands.
 - [ ] Hidden settings screen with consent flow and reset-session button.
 - [ ] `build-analysis-bundle.py` post-processor.
-- [ ] Cohort harness producing `comparison.json` and `deltas.json`.
+- [ ] Capture a healthy-baseline bundle from a known-good reference device
+      (a dogfood phone you control) to derive the `healthy_baseline_*`
+      thresholds used in `hypotheses.json`.
 - [ ] Cut `launcher-diag-X.Y.Z` build off the beta channel.
-- [ ] Recruit and consent 3–5 affected + 2–3 control users.
-- [ ] 24-hour capture, same day across cohort.
-- [ ] Analysis pass, root-cause writeup, fix on next beta.
+- [ ] Recruit and consent affected users one at a time.
+- [ ] 24-hour capture per device.
+- [ ] Per-device analysis pass, root-cause writeup, fix on next beta.
