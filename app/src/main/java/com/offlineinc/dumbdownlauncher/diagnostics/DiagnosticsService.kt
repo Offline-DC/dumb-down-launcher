@@ -47,6 +47,7 @@ class DiagnosticsService : Service() {
     private lateinit var eventsWriter: JsonlWriter
     private lateinit var samplesWriter: JsonlWriter
     private lateinit var dumpsysScheduler: PrivilegedDumpsysScheduler
+    private var lidSensorReader: LidSensorReader? = null
 
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "DiagnosticsService-sched").apply { isDaemon = true }
@@ -60,13 +61,22 @@ class DiagnosticsService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Foreground-service contract (Android 8+): once the OS has
+        // promoted us via startForegroundService(), we MUST call
+        // startForeground() within ~5s or it throws RemoteServiceException
+        // and kills the process. The early-exit paths below (build flag
+        // off, opt-in toggled off) used to return without ever calling
+        // startForeground — which crashed any time the OS auto-restarted
+        // a STICKY-killed service while the user happened to have
+        // diagnostics disabled. Satisfy the contract first, then bail.
         if (!BuildConfig.DIAGNOSTICS_ENABLED) {
-            stopSelf()
+            startForegroundPlaceholderThenStop()
             return
         }
         store = DiagnosticsStore(this)
         if (!store.enabled) {
-            stopSelf()
+            startForegroundPlaceholderThenStop()
             return
         }
 
@@ -109,8 +119,30 @@ class DiagnosticsService : Service() {
         registerBroadcastReceivers()
         scheduleSampling()
         dumpsysScheduler.start(executor)
+        startLidSensorReader()
 
         Log.i(tag, "Diagnostics service started; session=${store.captureSessionId}")
+    }
+
+    // ── Lid sensor reader ────────────────────────────────────────────────
+    //
+    // On TCL 4058W the hall sensor is wired to /dev/input/event3 with a
+    // vendor-defined keycode (0x00fc) — see DiagnosticsConfig and
+    // LidSensorReader for the full rationale. We tail the input device
+    // via `su -c getevent` rather than SensorManager because the lid is
+    // not exposed as a Sensor or SW_LID input switch on this hardware.
+
+    private fun startLidSensorReader() {
+        val reader = LidSensorReader(
+            onLidStateChanged = { newState ->
+                lastLidState = newState
+            },
+            onLidEvent = { type, payload ->
+                appendEvent(type = type, source = "launcher", payload = payload)
+            },
+        )
+        lidSensorReader = reader
+        reader.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -126,6 +158,8 @@ class DiagnosticsService : Service() {
     override fun onDestroy() {
         try { samplingHandle?.cancel(false) } catch (_: Throwable) {}
         try { unregisterReceiver(broadcastReceiver) } catch (_: Throwable) {}
+        try { lidSensorReader?.stop() } catch (_: Throwable) {}
+        lidSensorReader = null
         if (this::dumpsysScheduler.isInitialized) dumpsysScheduler.stop()
         if (this::eventsWriter.isInitialized) {
             appendEvent("session_end", "launcher", emptyMap())
@@ -234,6 +268,23 @@ class DiagnosticsService : Service() {
     }
 
     // ── Foreground-service notification ───────────────────────────────────
+
+    /**
+     * Satisfy the Android 8+ foreground-service contract in the early-exit
+     * paths of [onCreate] (build flag off, opt-in off). We have to call
+     * [startForeground] before [stopSelf] or the OS throws
+     * RemoteServiceException. The notification is removed immediately
+     * because [stopSelf] tears the service down — so the user never
+     * actually sees it.
+     */
+    private fun startForegroundPlaceholderThenStop() {
+        try {
+            startForeground(DiagnosticsConfig.NOTIFICATION_ID, buildNotification())
+        } catch (t: Throwable) {
+            Log.w(tag, "placeholder startForeground failed", t)
+        }
+        stopSelf()
+    }
 
     private fun buildNotification(): Notification {
         ensureChannel()
