@@ -51,11 +51,32 @@ object DumbLineContactInstaller {
      *
      * Returns true if a new row was created on this call, false if it was
      * already there (or insert failed and was logged).
+     *
+     * Two layers of dedup, in order:
+     *   1. Same raw contact under our own ([ACCOUNT_TYPE], [ACCOUNT_NAME],
+     *      [SOURCE_ID]) triple — the normal "we already ran" case.
+     *   2. ANY contact on the device that owns [PHONE_NUMBER] — covers
+     *      legacy manually-inserted rows (e.g. earlier `adb content insert`
+     *      Dumb Line contacts with the old `support@offline.community`
+     *      email, or rows under the default account with no sync info).
+     *      We deliberately leave those untouched rather than overwrite or
+     *      duplicate them.
      */
     fun ensureInstalled(ctx: Context): Boolean {
         val existing = findRawContactId(ctx)
         if (existing != null) {
             Log.d(TAG, "Dumb Line contact already present (rawId=$existing) — skipping")
+            return false
+        }
+
+        val legacyContactId = findContactIdByPhoneNumber(ctx, PHONE_NUMBER)
+        if (legacyContactId != null) {
+            Log.d(
+                TAG,
+                "Existing contact with $PHONE_NUMBER found on device " +
+                        "(contactId=$legacyContactId, not under our account) — " +
+                        "leaving it alone and skipping insert to avoid duplicate"
+            )
             return false
         }
 
@@ -87,6 +108,30 @@ object DumbLineContactInstaller {
             if (c.moveToFirst()) return c.getLong(0)
         }
         return null
+    }
+
+    /**
+     * Looks up any aggregated contact owning [number] using [ContactsContract.PhoneLookup],
+     * which handles dial-string normalization (country code, separators, etc.) for us.
+     * Requires READ_CONTACTS, which the launcher already declares in its manifest.
+     */
+    private fun findContactIdByPhoneNumber(ctx: Context, number: String): Long? {
+        val uri = Uri.withAppendedPath(
+            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+            Uri.encode(number)
+        )
+        val projection = arrayOf(ContactsContract.PhoneLookup._ID)
+        return try {
+            ctx.contentResolver.query(uri, projection, null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else null
+            }
+        } catch (e: Exception) {
+            // PhoneLookup can throw on some OEM providers with malformed
+            // queries; fail-open by returning null and letting the insert
+            // path run rather than blocking it on a query bug.
+            Log.w(TAG, "PhoneLookup for $number failed: ${e.message}")
+            null
+        }
     }
 
     private fun insert(ctx: Context) {
