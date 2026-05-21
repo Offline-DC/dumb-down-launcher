@@ -15,9 +15,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
 import org.json.JSONObject
-import org.json.JSONTokener
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -29,14 +27,21 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Responsibilities:
  *   1. Wait (indefinitely, in the background) for a SIM to be inserted AND
  *      for the device to have network connectivity.
- *   2. The first time the {IMEI, ICCID, phone number} triple is seen,
- *      PUT it to the Offline API exactly like the shell script does:
- *           PUT /api/v1/phones/{imei}       body: { sim_number, printBarcode, isHacked, software_version }
- *           PUT /api/v1/sims/{iccid}        body: { status: "Active" }
- *           PUT /api/v1/phonelines/{phone}  body: { sim_number }
- *   3. On every subsequent boot, verify the phone number hasn't changed.
- *      If it has (e.g. the user swapped the SIM) the phoneline mapping is
- *      re-sent so the server stays in sync.
+ *   2. The first time the {IMEI, ICCID, phone number} triple is seen — or
+ *      any time the IMEI or ICCID has changed since the last successful
+ *      registration — POST it to the combined registration endpoint:
+ *           POST /api/v1/register  body: { imei, iccid, phone_number, software_version }
+ *      One HTTP call replaces the legacy four-PUT sequence (phones, sims,
+ *      phonelines, verify). This call does NOT allocate a QR code; QR
+ *      assignment is handled separately by
+ *      [DumbDownApp.populateOpenBubblesActivationCode] when the OpenBubbles
+ *      dumb file is empty (it POSTs with `assign_qr: true`, which triggers
+ *      the backend's SIM-keyed dedup so the same physical device never
+ *      gets a second QR allocated from the pool).
+ *   3. On every subsequent boot where IMEI and ICCID are unchanged but
+ *      the phone number isn't (e.g. the carrier reissued the number), the
+ *      phoneline mapping is re-sent via PUT /api/v1/phonelines/{phone} so
+ *      the server stays in sync.
  *
  * Safe to call from any thread — the heavy lifting is dispatched to a
  * worker thread internally. Multiple invocations are coalesced into one.
@@ -392,8 +397,24 @@ object DeviceRegistrar {
 
         when {
             neverRegistered -> {
+                // Single POST /api/v1/register — same call [registerNow] makes
+                // from the Device Setup screens. Replaces the legacy four-PUT
+                // sequence (phones, sims, phonelines, verify) with one
+                // round-trip. No QR allocation here — that's the job of
+                // [DumbDownApp.populateOpenBubblesActivationCode] when the
+                // OpenBubbles dumb file is empty (it POSTs with
+                // assign_qr=true, which triggers the backend's SIM-keyed
+                // dedup so the same physical device never gets a second QR
+                // burned from the pool).
+                //
+                // `neverRegistered` fires on lastImei != imei — exactly the
+                // case that happens on the first boot after the SimInfoReader
+                // cascade fix corrects a previously-wrong cached IMEI. That
+                // creates a fresh phones row keyed by the real IMEI; the old
+                // ICCID/IMSI/serialno phantom rows stay where they are and
+                // are released only via a future cleanup sweep.
                 Log.i(TAG, "First-time registration for this device/SIM")
-                val ok = registerAll(imei, iccid, phone)
+                val ok = postRegister(imei, iccid, phone)
                 if (ok) persist(prefs, imei, iccid, phone)
             }
             phoneChanged -> {
@@ -577,42 +598,23 @@ object DeviceRegistrar {
     }
 
     // ---------------------------------------------------------------------
-    // API calls — mirrors device_registration.sh
+    // API calls
+    //
+    // The neverRegistered path (first-time / IMEI-change / ICCID-change)
+    // posts the full payload to /api/v1/register via [postRegister] up above —
+    // one round-trip, no separate verify step needed because the response
+    // carries `registered` directly.
+    //
+    // Only the phone-number-changed-but-IMEI-unchanged corner case still
+    // uses a legacy PUT, because /api/v1/register expects all four fields
+    // and we deliberately want to push *just* the new phoneline mapping
+    // without re-upserting the phone/sim rows.
     // ---------------------------------------------------------------------
-
-    private fun registerAll(imei: String, iccid: String, phone: String): Boolean {
-        val phonesOk = putPhones(imei, iccid)
-        val simsOk = putSims(iccid)
-        val phonelineOk = putPhoneline(iccid, phone)
-        val verifyOk = verifyPhoneRecord(imei, iccid)
-
-        val ok = phonesOk && simsOk && phonelineOk && verifyOk
-        Log.i(
-            TAG,
-            "registerAll: phones=$phonesOk sims=$simsOk phoneline=$phonelineOk " +
-                "verify=$verifyOk → ${if (ok) "✅" else "⚠️"}"
-        )
-        return ok
-    }
 
     private fun updatePhoneline(iccid: String, phone: String): Boolean {
         val ok = putPhoneline(iccid, phone)
         Log.i(TAG, "updatePhoneline: ${if (ok) "✅" else "⚠️"}")
         return ok
-    }
-
-    private fun putPhones(imei: String, iccid: String): Boolean {
-        val body = JSONObject()
-            .put("sim_number", iccid)
-            .put("printBarcode", 1)
-            .put("isHacked", 1)
-            .put("software_version", SOFTWARE_VERSION)
-        return putJson("$API_BASE/phones/$imei", body, "phones")
-    }
-
-    private fun putSims(iccid: String): Boolean {
-        val body = JSONObject().put("status", "Active")
-        return putJson("$API_BASE/sims/$iccid", body, "sims")
     }
 
     private fun putPhoneline(iccid: String, phone: String): Boolean {
@@ -625,70 +627,6 @@ object DeviceRegistrar {
         // numbers; post-Phase-5 the backend stores E.164.
         val pathPhone = URLEncoder.encode(phone, "UTF-8")
         return putJson("$API_BASE/phonelines/$pathPhone", body, "phonelines")
-    }
-
-    /**
-     * GET /phones/{imei} and confirm sim_number + software_version match.
-     *
-     * Robust against two response shapes because some older deployments of
-     * the backend return a JSONArray of all phones from this endpoint
-     * instead of the single object the current route is supposed to return:
-     *   - JSONObject: use it directly
-     *   - JSONArray:  find the entry whose imei matches
-     * Any parse or network error is swallowed and logged — this method must
-     * never crash the registration thread.
-     */
-    private fun verifyPhoneRecord(imei: String, iccid: String): Boolean {
-        return try {
-            val req = Request.Builder().url("$API_BASE/phones/$imei").get().build()
-            // Same one-liner format as PairingAPI so device logs line up.
-            Log.d(TAG, "HTTP ${req.method} ${req.url}")
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    Log.w(TAG, "verify: HTTP ${resp.code}")
-                    return false
-                }
-                val bodyStr = resp.body?.string() ?: "{}"
-                val record = extractPhoneRecord(bodyStr, imei)
-                if (record == null) {
-                    Log.w(TAG, "verify: no record found for imei=$imei in response")
-                    return false
-                }
-                val verifiedSim = record.optString("sim_number")
-                val verifiedVer = record.optString("software_version")
-                val simOk = verifiedSim == iccid
-                val verOk = verifiedVer == SOFTWARE_VERSION
-                if (!simOk) Log.w(TAG, "verify: sim mismatch expected=$iccid got=$verifiedSim")
-                if (!verOk) Log.w(TAG, "verify: version mismatch expected=${SOFTWARE_VERSION} got=$verifiedVer")
-                simOk && verOk
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "verify: failed (${e.javaClass.simpleName}): ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Parse the phones-endpoint response in a shape-tolerant way. Returns the
-     * single phone record for `imei`, or null if it can't be found / parsed.
-     */
-    private fun extractPhoneRecord(body: String, imei: String): JSONObject? {
-        return try {
-            when (val parsed = JSONTokener(body).nextValue()) {
-                is JSONObject -> parsed
-                is JSONArray -> {
-                    for (i in 0 until parsed.length()) {
-                        val item = parsed.optJSONObject(i) ?: continue
-                        if (item.optString("imei") == imei) return item
-                    }
-                    null
-                }
-                else -> null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "extractPhoneRecord: parse failed: ${e.message}")
-            null
-        }
     }
 
     private fun putJson(url: String, body: JSONObject, label: String): Boolean {
