@@ -1245,6 +1245,16 @@ class DumbDownApp : Application() {
             "whatsapp_setup_v1" to {
                 applyWhatsAppMediaSettings(tag)
             },
+            // Install the built-in "Dumb Line" support contact (14047163605 /
+            // support@dumb.co) once so we don't have to provision it from a
+            // shell with the legacy `adb shell content insert ...` flow.
+            // [DumbLineContactInstaller.ensureInstalled] is idempotent — if the
+            // contact is already present under our private account it's a
+            // no-op, so re-running this migration (e.g. after clearing the
+            // migrations prefs) won't create duplicates.
+            "install_dumb_line_contact_v1" to {
+                DumbLineContactInstaller.ensureInstalled(this)
+            },
         )
 
         for ((key, action) in migrations) {
