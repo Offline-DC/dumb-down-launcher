@@ -373,13 +373,47 @@ object DeviceRegistrar {
             return
         }
 
+        // 0d. Backend Gigs phone-number lookup (fast path BEFORE USSD).
+        //     Grab the ICCID as soon as the SIM lets us read it, then ask
+        //     the backend whether gigs_subscriptions already knows this
+        //     SIM's phone number. If it does (the common case for any SIM
+        //     activated through Gigs — webhooks populate phone_number on
+        //     activation), persist to Settings.Secure so PhoneNumberReader's
+        //     readViaUssd pre-check finds it and SKIPS the carrier #686#
+        //     scrape entirely. Net effect: 1 HTTP round-trip (~1s) replaces
+        //     the 15-60s USSD path for any provisioning-time launch.
+        //
+        //     This block is best-effort: any failure (no ICCID yet, no
+        //     network, 404 from backend, timeout) silently falls through to
+        //     the existing waitForSimAndPhone path below, which still uses
+        //     USSD as the authoritative fallback.
+        val earlyIccid = waitForIccidOnly(ctx)
+        if (earlyIccid != null) {
+            awaitNetwork(ctx)
+            val resolved = lookupPhoneByIccid(earlyIccid)
+            if (resolved != null) {
+                persistResolvedPhone(resolved, earlyIccid)
+                Log.i(TAG, "Backend Gigs lookup populated Settings.Secure — USSD will be skipped by PhoneNumberReader")
+            } else {
+                Log.i(TAG, "Backend Gigs lookup empty — PhoneNumberReader will fall through to USSD")
+            }
+        } else {
+            Log.w(TAG, "ICCID not readable within wait budget — skipping backend lookup, will rely on USSD path")
+        }
+
         // 1. Wait for a SIM + phone number to appear. A cold boot on the TCL
         //    Flip Go can take ~30s to finish SIM initialization.
+        //
+        //    If step 0d succeeded above, PhoneNumberReader's USSD pre-check
+        //    finds the value in Settings.Secure and returns immediately
+        //    (no USSD round-trip). If 0d failed/skipped, this is the
+        //    original slow path through USSD #686#.
         val (imei, iccid, phone) = waitForSimAndPhone(ctx)
         Log.i(TAG, "SIM ready — imei=$imei iccid=$iccid phone=$phone")
 
         // 2. Wait for network before any HTTP work. NetworkUtils fires the
-        //    callback as soon as an internet-capable network appears.
+        //    callback as soon as an internet-capable network appears. Noop
+        //    if step 0d already waited for it.
         awaitNetwork(ctx)
         Log.i(TAG, "Network available — evaluating registration state")
 
@@ -628,6 +662,146 @@ object DeviceRegistrar {
         val pathPhone = URLEncoder.encode(phone, "UTF-8")
         return putJson("$API_BASE/phonelines/$pathPhone", body, "phonelines")
     }
+
+    // ---------------------------------------------------------------------
+    // Backend Gigs lookup — fast path BEFORE USSD
+    // ---------------------------------------------------------------------
+
+    /**
+     * Asks the backend's `GET /api/v1/phone-number-by-iccid/{iccid}` endpoint
+     * for the phone number associated with this SIM in `gigs_subscriptions`.
+     * Returns the normalized E.164 number on a 200 response, null on 404 /
+     * 5xx / IO error / parse failure.
+     *
+     * Why this exists: Gigs' webhook populates `phone_number` on
+     * gigs_subscriptions the instant a SIM activates, so for any SIM that's
+     * been provisioned through Gigs we can resolve the number in one HTTP
+     * round-trip (~200-2000ms) instead of running the launcher's USSD
+     * #686# scrape against the carrier (~15-60s on cold boot, fragile to
+     * carrier UI changes, can fail entirely on units where the MSISDN file
+     * was never written).
+     *
+     * USSD remains the authoritative fallback when this returns null —
+     * common cases are SIMs that pre-date the Gigs integration, port-ins
+     * still settling on Gigs' side, or non-Gigs MVNOs.
+     */
+    private fun lookupPhoneByIccid(iccid: String): String? {
+        return try {
+            val url = "$API_BASE/phone-number-by-iccid/${URLEncoder.encode(iccid, "UTF-8")}"
+            val req = Request.Builder().url(url).get().build()
+            Log.d(TAG, "HTTP ${req.method} ${req.url}")
+            http.newCall(req).execute().use { resp ->
+                when {
+                    resp.code == 404 -> {
+                        Log.i(TAG, "lookupPhoneByIccid: 404 — no gigs_subscriptions row for iccid=$iccid (USSD will take over)")
+                        null
+                    }
+                    !resp.isSuccessful -> {
+                        Log.w(TAG, "lookupPhoneByIccid FAIL HTTP ${resp.code} body=${resp.body?.string()}")
+                        null
+                    }
+                    else -> {
+                        val bodyStr = resp.body?.string()
+                        if (bodyStr.isNullOrBlank()) {
+                            Log.w(TAG, "lookupPhoneByIccid: 200 with empty body")
+                            null
+                        } else {
+                            val json = JSONObject(bodyStr)
+                            val raw = json.optString("phone_number", "").takeIf { it.isNotBlank() }
+                            if (raw == null) {
+                                Log.w(TAG, "lookupPhoneByIccid: 200 with no phone_number — body=$bodyStr")
+                                null
+                            } else {
+                                val normalized = normalizePhone(raw) ?: raw
+                                Log.i(TAG, "lookupPhoneByIccid ✔ HTTP ${resp.code} phone=$normalized source=${json.optString("source")}")
+                                normalized
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "lookupPhoneByIccid IO error: ${e.message}")
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "lookupPhoneByIccid unexpected error: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Persists a backend-resolved phone number to the same Settings.Secure
+     * row that [PhoneNumberReader] consults. Two writes:
+     *
+     *   1. `Settings.Secure.device_phone_number` — the actual number. This
+     *      is the value [PhoneNumberReader.readViaUssd] pre-checks before
+     *      firing its USSD round-trip, so populating it short-circuits
+     *      every subsequent USSD attempt across all callers.
+     *
+     *   2. `Settings.Secure.device_phone_number_iccid` — the SIM-pin. Without
+     *      this matching the currently-inserted ICCID, readViaUssd treats
+     *      the cached number as belonging to a different SIM and forces a
+     *      fresh USSD query. Pin is required for the skip to work.
+     *
+     * Best-effort: writes go through `su` since /system Settings.Secure rows
+     * require root. Both writes are timeout-bounded (1.5s each) so a wedged
+     * Magisk daemon can't block the registration thread indefinitely. On
+     * failure we log and move on — the launcher still has the number in
+     * memory for the /register call; the next cold boot will simply re-fetch.
+     */
+    private fun persistResolvedPhone(phone: String, iccid: String) {
+        runSuCommand("settings put secure device_phone_number $phone")
+        runSuCommand("settings put secure device_phone_number_iccid $iccid")
+        Log.i(TAG, "persistResolvedPhone: wrote Settings.Secure (phone + iccid pin)")
+    }
+
+    /**
+     * Polls [SimInfoReader.readIccid] until it returns a non-blank value or
+     * we hit [maxWaitMs]. Used to grab the ICCID early enough for the
+     * backend Gigs lookup, without waiting through PhoneNumberReader's
+     * full read cascade (which would trigger USSD).
+     */
+    private fun waitForIccidOnly(ctx: Context, maxWaitMs: Long = 60_000L): String? {
+        val deadline = System.currentTimeMillis() + maxWaitMs
+        var iccid: String? = SimInfoReader.readIccid(ctx)
+        while (iccid.isNullOrBlank() && System.currentTimeMillis() < deadline) {
+            try { Thread.sleep(2_000L) } catch (ie: InterruptedException) {
+                Thread.currentThread().interrupt(); return null
+            }
+            iccid = SimInfoReader.readIccid(ctx)
+        }
+        return iccid?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Same shell-out pattern as [PhoneNumberReader]'s private helper — copied
+     * here so DeviceRegistrar doesn't introduce a dependency on
+     * PhoneNumberReader's internals (PhoneNumberReader stays purely a
+     * data-source helper). Timeout is generous-ish for cold-boot Magisk
+     * latency but bounded so a wedged daemon can't stall the boot thread.
+     */
+    private fun runSuCommand(cmd: String, timeoutMs: Long = 1500L): String? {
+        var proc: Process? = null
+        return try {
+            proc = ProcessBuilder("su", "-c", cmd)
+                .redirectErrorStream(true)
+                .start()
+            val finished = proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                Log.w(TAG, "runSuCommand($cmd) timed out after ${timeoutMs}ms")
+                proc.destroyForcibly()
+                return null
+            }
+            val output = proc.inputStream.bufferedReader().use { it.readText() }
+            if (proc.exitValue() == 0) output else null
+        } catch (e: Exception) {
+            Log.w(TAG, "runSuCommand($cmd) failed: ${e.message}")
+            try { proc?.destroyForcibly() } catch (_: Exception) {}
+            null
+        }
+    }
+
+    // ---------------------------------------------------------------------
 
     private fun putJson(url: String, body: JSONObject, label: String): Boolean {
         return try {
