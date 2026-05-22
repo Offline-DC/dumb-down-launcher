@@ -374,32 +374,15 @@ object DeviceRegistrar {
         }
 
         // 0d. Backend Gigs phone-number lookup (fast path BEFORE USSD).
-        //     Grab the ICCID as soon as the SIM lets us read it, then ask
-        //     the backend whether gigs_subscriptions already knows this
-        //     SIM's phone number. If it does (the common case for any SIM
-        //     activated through Gigs — webhooks populate phone_number on
-        //     activation), persist to Settings.Secure so PhoneNumberReader's
-        //     readViaUssd pre-check finds it and SKIPS the carrier #686#
-        //     scrape entirely. Net effect: 1 HTTP round-trip (~1s) replaces
-        //     the 15-60s USSD path for any provisioning-time launch.
-        //
-        //     This block is best-effort: any failure (no ICCID yet, no
-        //     network, 404 from backend, timeout) silently falls through to
-        //     the existing waitForSimAndPhone path below, which still uses
-        //     USSD as the authoritative fallback.
-        val earlyIccid = waitForIccidOnly(ctx)
-        if (earlyIccid != null) {
-            awaitNetwork(ctx)
-            val resolved = lookupPhoneByIccid(earlyIccid)
-            if (resolved != null) {
-                persistResolvedPhone(resolved, earlyIccid)
-                Log.i(TAG, "Backend Gigs lookup populated Settings.Secure — USSD will be skipped by PhoneNumberReader")
-            } else {
-                Log.i(TAG, "Backend Gigs lookup empty — PhoneNumberReader will fall through to USSD")
-            }
-        } else {
-            Log.w(TAG, "ICCID not readable within wait budget — skipping backend lookup, will rely on USSD path")
-        }
+        //     See [tryResolvePhoneViaGigs] for the full rationale. Background
+        //     path uses the long-budget version (60s ICCID wait + blocking
+        //     awaitNetwork) because no user is staring at a spinner here, so
+        //     we can afford to be patient.
+        tryResolvePhoneViaGigs(
+            ctx,
+            maxIccidWaitMs = 60_000L,
+            blockUntilNetworkUp = true,
+        )
 
         // 1. Wait for a SIM + phone number to appear. A cold boot on the TCL
         //    Flip Go can take ~30s to finish SIM initialization.
@@ -692,6 +675,63 @@ object DeviceRegistrar {
     // ---------------------------------------------------------------------
     // Backend Gigs lookup — fast path BEFORE USSD
     // ---------------------------------------------------------------------
+
+    /**
+     * Runs the full Gigs phone-number lookup: reads ICCID, asks
+     * `GET /api/v1/phone-number-by-iccid/{iccid}`, and on a hit writes both
+     * the phone number and the ICCID pin into Settings.Secure so
+     * [PhoneNumberReader.readViaUssd]'s pre-check skips the carrier #686#
+     * scrape entirely. Net effect on cache hit: 1 HTTP round-trip (~1s)
+     * replaces the 15-60s USSD path for any provisioning-time launch.
+     *
+     * Two callers today:
+     *   - background [runBlocking] step 0d, with `maxIccidWaitMs = 60_000` and
+     *     `blockUntilNetworkUp = true` (no visible spinner, so we can wait
+     *     indefinitely on either modem or network).
+     *   - foreground [com.offlineinc.dumbdownlauncher.ui.BootRegistrationScreen]'s
+     *     runOnce, called immediately after
+     *     [PhoneNumberReader.clearStoredNumber] (which wipes any cached
+     *     value the background path may have populated). Foreground uses
+     *     the default 30s ICCID budget and `blockUntilNetworkUp = false` —
+     *     a wedged modem or absent network shouldn't keep the user
+     *     staring at a spinner; USSD remains the authoritative fallback.
+     *
+     * Best-effort by design — any failure (ICCID not readable, no network,
+     * 404 from backend, transport error, parse error) returns false and
+     * the caller proceeds to its USSD fallback. The two paths share this
+     * function rather than each having their own copy so a behavior change
+     * (new error handling, different endpoint, etc.) lands in both places
+     * at once.
+     *
+     * @return true iff Settings.Secure was populated with a backend-resolved
+     *         number (PhoneNumberReader will now skip USSD on the next
+     *         read). false on any failure.
+     */
+    fun tryResolvePhoneViaGigs(
+        ctx: Context,
+        maxIccidWaitMs: Long = 30_000L,
+        blockUntilNetworkUp: Boolean = false,
+    ): Boolean {
+        val iccid = waitForIccidOnly(ctx, maxIccidWaitMs)
+        if (iccid == null) {
+            Log.w(TAG, "tryResolvePhoneViaGigs: ICCID not readable within ${maxIccidWaitMs}ms — skipping backend lookup, will rely on USSD path")
+            return false
+        }
+        if (blockUntilNetworkUp) {
+            awaitNetwork(ctx)
+        } else if (!NetworkUtils.isNetworkAvailable(ctx)) {
+            Log.w(TAG, "tryResolvePhoneViaGigs: no network — skipping backend lookup, will rely on USSD path")
+            return false
+        }
+        val resolved = lookupPhoneByIccid(iccid)
+        if (resolved == null) {
+            Log.i(TAG, "tryResolvePhoneViaGigs: backend returned no match — PhoneNumberReader will fall through to USSD")
+            return false
+        }
+        persistResolvedPhone(resolved, iccid)
+        Log.i(TAG, "tryResolvePhoneViaGigs: Settings.Secure populated — USSD will be skipped by PhoneNumberReader")
+        return true
+    }
 
     /**
      * Asks the backend's `GET /api/v1/phone-number-by-iccid/{iccid}` endpoint

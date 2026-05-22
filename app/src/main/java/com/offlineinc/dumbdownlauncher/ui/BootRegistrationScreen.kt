@@ -183,6 +183,28 @@ fun BootRegistrationScreen(
         state = BootState.WAITING
         delay(INITIAL_WAIT_MS)
 
+        // Backend Gigs lookup — fast path BEFORE the USSD-firing LOADING
+        // loop. clearStoredNumber() above just wiped Settings.Secure, and
+        // the background DeviceRegistrar.runBlocking pass either hasn't run
+        // yet (still in its 30s quiet period) or, if it had, would have
+        // populated a value we just nuked. So we re-run the lookup here, on
+        // the foreground path, AFTER the clear — and any hit writes the
+        // number into Settings.Secure with a matching ICCID pin so the
+        // upcoming PhoneNumberReader.read in the LOADING loop's first
+        // iteration finds the cached value and skips the #686# USSD scrape
+        // (and the subsequent proactive airplane-mode bounce, which only
+        // fires when we actually went through USSD).
+        //
+        // Bounded by the 30s ICCID-wait default inside tryResolvePhoneViaGigs:
+        // a SIM that isn't readable in 30s will bail and let the LOADING
+        // loop's USSD path take over — same fallback as before, just with
+        // one extra fast-path attempt in front.
+        Log.i(TAG, "attempting backend Gigs lookup (pre-USSD)")
+        val gigsHit = withContext(Dispatchers.IO) {
+            DeviceRegistrar.tryResolvePhoneViaGigs(ctx)
+        }
+        Log.i(TAG, "backend Gigs lookup ${if (gigsHit) "hit" else "miss"} — entering LOADING")
+
         state = BootState.LOADING
         // 15 attempts with linear (attempt+1) * 1000ms delays gives a ~105s
         // total budget in LOADING before SIM_ERROR fires
@@ -210,27 +232,36 @@ fun BootRegistrationScreen(
                 cachedImei = imei
                 cachedIccid = iccid
 
-                // Proactive radio re-attach. The *#686# USSD query that just
-                // populated the phone number can leave the modem stuck on 2G
-                // with a torn-down PDP context (CSFB→GSM transition), which
-                // also leaves IMS de-registered — so even if our HTTP calls
-                // succeed, the user's first call/SMS attempt after setup
+                // Proactive radio re-attach — only when USSD actually ran.
+                // The *#686# query can leave the modem stuck on 2G with a
+                // torn-down PDP context (CSFB→GSM transition), which also
+                // leaves IMS de-registered, so even if our HTTP calls
+                // succeed the user's first call/SMS attempt after setup
                 // would silently fail until the next reboot or manual
-                // airplane-mode toggle. We pay ~7-10s of always-on cost here
-                // to guarantee voice/SMS work the moment registration
-                // completes; the alternative ("only toggle when /register
-                // fails") gives faster setup on most devices but leaves a
-                // delayed-failure mode where the user only finds out hours
-                // later that calls don't work. cycleAirplaneToReattachLte
-                // is su-only — does settings put + AIRPLANE_MODE broadcast
-                // for both legs, sleeps 5s with radio off, then blocks
-                // until network is VALIDATED again (or 15s timeout).
-                Log.i(TAG, "starting proactive radio bounce (FINISHING_SIM)")
-                state = BootState.FINISHING_SIM
-                withContext(Dispatchers.IO) {
-                    PhoneNumberReader.cycleAirplaneToReattachLte(ctx)
+                // airplane-mode toggle. cycleAirplaneToReattachLte takes
+                // ~7-10s (su-only: settings put + AIRPLANE_MODE broadcast
+                // for both legs, 5s sleep with radio off, then blocks until
+                // network is VALIDATED again, 15s cap).
+                //
+                // If the Gigs lookup populated Settings.Secure above, the
+                // PhoneNumberReader cascade returned the cached value
+                // without firing USSD, so the modem is still on LTE with
+                // its PDP context intact. Skipping the bounce in that case
+                // saves the user ~7-10s of "finishing sim registration..."
+                // and removes the only failure mode where a flaky
+                // airplane-mode toggle could brick connectivity right
+                // before /register. The 0.4.0+ commit log will show
+                // exactly which branch ran each boot.
+                if (gigsHit) {
+                    Log.i(TAG, "skipping FINISHING_SIM — Gigs cache populated, no USSD this boot")
+                } else {
+                    Log.i(TAG, "starting proactive radio bounce (FINISHING_SIM)")
+                    state = BootState.FINISHING_SIM
+                    withContext(Dispatchers.IO) {
+                        PhoneNumberReader.cycleAirplaneToReattachLte(ctx)
+                    }
+                    Log.i(TAG, "proactive radio bounce complete — proceeding to /register")
                 }
-                Log.i(TAG, "proactive radio bounce complete — proceeding to /register")
 
                 state = BootState.REGISTERING
                 // force=true — the user is staring at a spinner, we owe them
