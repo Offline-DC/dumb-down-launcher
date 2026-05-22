@@ -576,12 +576,42 @@ object DeviceRegistrar {
      */
     private fun waitForSimAndPhone(ctx: Context): Triple<String, String, String> {
         while (true) {
+            // Phase 1: confirm the cheap, mandatory identifiers are in hand
+            // before we touch PhoneNumberReader. ICCID + IMEI are direct SIM /
+            // modem reads (~ms) and we need them for /register either way, so
+            // gating on them keeps each early-boot iteration cheap. Without
+            // this gate we'd fire PhoneNumberReader.read on every tick — and
+            // when step 0d's Gigs lookup didn't pre-populate Settings.Secure
+            // (404, no network, etc.) that means re-entering the USSD cascade
+            // before the SIM has even attached, which is pure waste.
             val simReady = SimInfoReader.isSimReady(ctx)
             val imei = SimInfoReader.readImei(ctx)
             val iccid = SimInfoReader.readIccid(ctx)
+
+            if (!simReady || imei.isNullOrBlank() || iccid.isNullOrBlank()) {
+                Log.d(
+                    TAG,
+                    "Waiting for SIM (simReady=$simReady imei=${imei ?: "∅"} " +
+                        "iccid=${iccid ?: "∅"})"
+                )
+                try {
+                    Thread.sleep(POLL_INTERVAL_MS)
+                } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw ie
+                }
+                continue
+            }
+
+            // Phase 2: SIM is up and ICCID is known — now attempt the phone
+            // number read. If step 0d's Gigs lookup landed a value in
+            // Settings.Secure (and the ICCID pin matches), PhoneNumberReader's
+            // pre-check returns it immediately; otherwise this is the slow
+            // USSD path. Either way, paying that cost only after ICCID is in
+            // hand means we never USSD-poll a not-yet-attached SIM.
             val (phone, _) = PhoneNumberReader.read(ctx)
 
-            if (simReady && !imei.isNullOrBlank() && !iccid.isNullOrBlank() && !phone.isNullOrBlank()) {
+            if (!phone.isNullOrBlank()) {
                 val normalized = normalizePhone(phone)
                 if (normalized != null) {
                     return Triple(imei, iccid, normalized)
@@ -593,11 +623,7 @@ object DeviceRegistrar {
                 // returns a parseable value.
                 Log.w(TAG, "waitForSimAndPhone: phone='$phone' didn't normalize to E.164 — continuing to poll")
             } else {
-                Log.d(
-                    TAG,
-                    "Waiting for SIM (simReady=$simReady imei=${imei ?: "∅"} " +
-                        "iccid=${iccid ?: "∅"} phone=${phone ?: "∅"})"
-                )
+                Log.d(TAG, "Waiting for phone number (iccid=$iccid)")
             }
             try {
                 Thread.sleep(POLL_INTERVAL_MS)
