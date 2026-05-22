@@ -35,7 +35,7 @@ class OpenBubblesAttachmentCleanupTriggerReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         Thread({
             try {
-                val result = OpenBubblesOps.clearAttachments(TAG)
+                val result = OpenBubblesOps.clearAttachments(tag = TAG)
                 Log.i(TAG, "onReceive: cleanup finished — was=${result.bytesFreedDisplay}")
             } catch (e: IllegalStateException) {
                 Log.i(TAG, "onReceive: deferred — ${e.message}")

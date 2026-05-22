@@ -1,5 +1,7 @@
 package com.offlineinc.dumbdownlauncher.whatsapp
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
 import java.util.concurrent.TimeUnit
 
@@ -99,11 +101,14 @@ object WhatsAppOps {
      *
      *   * No-op if WhatsApp isn't running.
      *
-     * The cleanup worker does NOT call this method. WhatsApp's media lives
-     * on /sdcard, not /data/data, so file deletes there don't race
-     * WhatsApp's in-memory state, and the `-mtime +N` predicate guarantees
-     * we never touch a file currently being downloaded (in-flight files
-     * are by definition < 1 day old).
+     * The cleanup worker does NOT call this method. WhatsApp's media
+     * lives on /sdcard, not /data/data, so file deletes there don't
+     * race WhatsApp's in-memory state in a way that crashes the app.
+     * With the current `delete everything` cutoff an in-flight
+     * download could be unlinked mid-write — worst case WhatsApp
+     * retries the download on its next sync. The user explicitly
+     * opted into this trade-off by asking for "delete all whatsapp
+     * media every night."
      */
     @JvmStatic
     fun stopQuietly(tag: String = TAG) {
@@ -149,10 +154,18 @@ object WhatsAppOps {
     )
 
     /**
-     * Deletes WhatsApp media files older than [days] days from the three
-     * [TARGET_SUBDIRS] under [MEDIA_ROOT]. Other top-level subdirs (Voice
-     * Notes, Documents, Animated Gifs, etc.) are NOT touched — see
-     * [TARGET_SUBDIRS] for the rationale.
+     * Deletes WhatsApp media files from the three [TARGET_SUBDIRS] under
+     * [MEDIA_ROOT]. Other top-level subdirs (Voice Notes, Documents,
+     * Animated Gifs, etc.) are NOT touched — see [TARGET_SUBDIRS] for
+     * the rationale.
+     *
+     * Age cutoff: when [days] is `>= 0` we keep `-mtime +N` (files
+     * strictly older than N*24h). When [days] is negative — the
+     * current default for the nightly cron and the Free Up Space
+     * button — we omit the `-mtime` predicate entirely and remove
+     * every matching file in the target subdirs. The rolling-window
+     * mode is preserved for callers that may want it later, but no
+     * production path uses it today.
      *
      * **Critical: excludes `.nomedia` sentinel files.** WhatsApp creates
      * one in nearly every media subdirectory at install time
@@ -209,20 +222,25 @@ object WhatsAppOps {
                 continue
             }
 
+            // The age predicate is only included when `days >= 0`; the
+            // negative-sentinel path drops it so we wipe every matching
+            // file. Composed once, used by both the count and delete
+            // passes so they can't drift.
+            val agePredicate = if (days >= 0) "-mtime +$days " else ""
+
             // Count first so the per-subdir log line is informative.
             // Cheap; find walks the same tree the delete pass will.
             val (_, countOut, _) = rootExec(
-                "find \"$subPath\" -type f -mtime +$days ! -name .nomedia | wc -l"
+                "find \"$subPath\" -type f $agePredicate! -name .nomedia | wc -l"
             )
             val n = countOut.trim().toIntOrNull() ?: 0
 
-            // The actual rolling delete. `-mtime +N` means strictly more
-            // than N*24h ago, so days=7 deletes files at least 8 days old —
-            // which matches "older than 7 days" in conversational English.
-            // The `! -name .nomedia` predicate is non-negotiable; see the
-            // method-level doc-comment.
+            // The actual delete. With days<0 the agePredicate above is
+            // empty, so the find matches every file in the subdir
+            // (still excluding the `.nomedia` sentinel — that exclusion
+            // is non-negotiable; see the method-level doc-comment).
             val (delExit, _, delErr) = rootExec(
-                "find \"$subPath\" -type f -mtime +$days ! -name .nomedia -delete"
+                "find \"$subPath\" -type f $agePredicate! -name .nomedia -delete"
             )
             if (delExit != 0) {
                 // Don't fall back to `rm -rf` style wipes — those would
@@ -246,6 +264,135 @@ object WhatsAppOps {
                 "${TARGET_SUBDIRS.size} subdir(s) of $MEDIA_ROOT (was $display)"
         )
         return ClearResult(filesDeleted = totalDeleted, bytesFreedDisplay = display)
+    }
+
+    /** Where WhatsApp stores the auto-download bitmask prefs. */
+    private const val PREFS_PATH =
+        "/data/data/$PKG/shared_prefs/com.whatsapp_preferences_light.xml"
+
+    /**
+     * Re-applies the opinionated WhatsApp auto-download-off masks that
+     * are also set at provisioning time by the `whatsapp_setup_v1` migration
+     * in [com.offlineinc.dumbdownlauncher.DumbDownApp]. Safe to call any
+     * number of times — when the values on disk already match, no writes
+     * happen.
+     *
+     * Settings asserted (bitmask: 1=images, 2=audio, 4=video, 8=documents):
+     *  - `autodownload_cellular_mask` → 0  (no cellular auto-download)
+     *  - `autodownload_wifi_mask`     → 0  (no wifi auto-download)
+     *  - `autodownload_roaming_mask`  → 0  (no roaming auto-download)
+     *
+     * Defense-in-depth: WhatsApp rewrites this XML on its own schedule,
+     * and an app update could revert these values. The
+     * [WhatsAppAttachmentCleanupWorker] calls this nightly so a drift can
+     * cause at most one day of auto-downloads.
+     *
+     * Behaviour:
+     *  - Returns benignly when WhatsApp isn't installed.
+     *  - Returns benignly when the prefs file doesn't exist yet (WhatsApp
+     *    has never been opened — file is created lazily on first launch).
+     *  - Calls [stopQuietly] before editing — so this method also THROWS
+     *    [IllegalStateException] when WhatsApp is focused. Callers should
+     *    catch and skip.
+     *  - Uses [context]'s cacheDir to stage the new content, then `cp` via
+     *    root into the target path. Restores original ownership and 600
+     *    file mode (matches what com.whatsapp_preferences_light.xml ships
+     *    with — note: 600, not 660 like the OpenBubbles equivalent).
+     */
+    @JvmStatic
+    fun applyAutoDownloadMaskZero(context: Context, tag: String = TAG) {
+        // Skip cleanly when WhatsApp isn't installed.
+        try {
+            context.packageManager.getPackageInfo(PKG, 0)
+        } catch (_: PackageManager.NameNotFoundException) {
+            Log.d(tag, "WA applyAutoDownloadMaskZero: $PKG not installed — skipping")
+            return
+        }
+
+        // The prefs file doesn't exist until WhatsApp is launched once.
+        val (_, existsOut, _) = rootExec("test -f $PREFS_PATH && echo y || echo n")
+        if (existsOut != "y") {
+            Log.d(
+                tag,
+                "WA applyAutoDownloadMaskZero: $PREFS_PATH not present yet " +
+                    "— skipping (WA has never been opened)"
+            )
+            return
+        }
+
+        // Quietly kill WhatsApp so its in-memory SharedPreferences cache
+        // can't write back over our edits. Throws if WA is currently focused.
+        stopQuietly(tag)
+
+        // Read current contents, capture original ownership.
+        val (catExit, content, catErr) = rootExec("cat $PREFS_PATH")
+        if (catExit != 0) {
+            Log.w(tag, "WA applyAutoDownloadMaskZero: cat failed (exit=$catExit): $catErr")
+            return
+        }
+        val (_, ownerOut, _) = rootExec("stat -c %u:%g $PREFS_PATH")
+        val owner = ownerOut.trim()
+
+        val targets = mapOf(
+            "autodownload_cellular_mask" to "0",
+            "autodownload_wifi_mask" to "0",
+            "autodownload_roaming_mask" to "0",
+        )
+
+        var modified = content
+        var changes = 0
+        for ((key, desiredValue) in targets) {
+            val pattern = Regex(
+                """<int\s+name="${Regex.escape(key)}"\s+value="(\d+)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                val current = match.groupValues[1]
+                if (current == desiredValue) continue
+                modified = pattern.replace(
+                    modified,
+                    """<int name="$key" value="$desiredValue" />"""
+                )
+                changes++
+                Log.d(tag, "WA applyAutoDownloadMaskZero: $key $current -> $desiredValue")
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <int name=\"$key\" value=\"$desiredValue\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "WA applyAutoDownloadMaskZero: $key absent — inserted as $desiredValue")
+            } else {
+                Log.w(
+                    tag,
+                    "WA applyAutoDownloadMaskZero: prefs file missing </map> close — skipped $key"
+                )
+            }
+        }
+
+        if (changes == 0) {
+            Log.d(tag, "WA applyAutoDownloadMaskZero: already in desired state — no write")
+            return
+        }
+
+        // Stage in cacheDir then cp into place — avoids embedding XML in a
+        // shell heredoc. Same approach the migration used.
+        val tmp = java.io.File(context.cacheDir, "_wa_prefs_apply.xml")
+        try {
+            tmp.writeText(modified)
+            tmp.setReadable(true, /* ownerOnly = */ false)
+            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $PREFS_PATH")
+            if (cpExit != 0) {
+                Log.w(tag, "WA applyAutoDownloadMaskZero: cp failed (exit=$cpExit): $cpErr")
+                return
+            }
+            if (owner.isNotEmpty()) rootExec("chown $owner $PREFS_PATH")
+            // 600 matches what we observed on-device for this file.
+            rootExec("chmod 600 $PREFS_PATH")
+            Log.i(tag, "WA applyAutoDownloadMaskZero: wrote $changes change(s)")
+        } finally {
+            tmp.delete()
+        }
     }
 
     /**
