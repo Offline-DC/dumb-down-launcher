@@ -250,7 +250,7 @@ class AllAppsActivity : AppCompatActivity() {
 
             AppListScreen(
                 title = "all apps",
-                titleEndLabel = "v${BuildConfig.VERSION_NAME}",
+                titleEndLabel = BuildConfig.VERSION_NAME,
                 items = items,
                 onLongActivate = { item ->
                     if (item.packageName == DEVICE_SETUP) {

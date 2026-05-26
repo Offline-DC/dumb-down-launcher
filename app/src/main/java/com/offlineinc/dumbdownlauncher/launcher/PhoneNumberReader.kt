@@ -145,6 +145,31 @@ object PhoneNumberReader {
     private const val USSD_SELF_NUMBER_CODE = "#686#"
 
     /**
+     * Base URL for the offline-dc-backend API. Mirrors `API_BASE` in
+     * [DeviceRegistrar] but kept as a separate constant here so this reader
+     * isn't structurally tied to DeviceRegistrar — it's a self-contained
+     * data source like the other readVia* methods.
+     */
+    private const val OFFLINE_API_BASE =
+        "https://offline-dc-backend-ba4815b2bcc8.herokuapp.com/api/v1"
+
+    /**
+     * How long a single backend lookup may block before we give up and fall
+     * through to USSD. Tight on purpose — if the backend takes more than a
+     * couple seconds the USSD path may well finish first, and we'd rather
+     * skip the lookup than turn it into a cold-boot bottleneck.
+     */
+    private const val BACKEND_LOOKUP_TIMEOUT_MS = 4_000L
+
+    /**
+     * Process-lifetime flag set once we've decided the backend lookup isn't
+     * going to work this session (404 for the current SIM, or repeated
+     * network errors). Prevents every subsequent caller of [read] from
+     * re-issuing the same doomed HTTP call. Reset by [invalidateCache].
+     */
+    @Volatile private var backendLookupSkip: Boolean = false
+
+    /**
      * `TelephonyManager.SIM_STATE_LOADED` is `@hide` in the public SDK on
      * API 30, so we can't reference it by name. Value `10` matches
      * `TelephonyProtoEnums.SIM_STATE_LOADED`. Some MediaTek builds settle on
@@ -175,6 +200,9 @@ object PhoneNumberReader {
         ussdAttempted = false
         ussdLastFailureMs = 0L
         ussdLastFailureWasTransient = false
+        // Same for the backend lookup — explicit invalidation usually means
+        // SIM state or network has changed in a way that might unblock it.
+        backendLookupSkip = false
     }
 
     /**

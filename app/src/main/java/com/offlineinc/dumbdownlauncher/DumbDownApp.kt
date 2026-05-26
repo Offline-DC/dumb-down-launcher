@@ -869,6 +869,37 @@ class DumbDownApp : Application() {
                     Log.w(tag, "Cannot disable com.tcl.fota.system: ${e.message}")
                 }
             },
+            // Disable the TCT/TCL OEM "phone" companion app. Despite its name,
+            // this is NOT the AOSP telephony framework (com.android.phone) or
+            // the dialer (com.android.dialer / com.google.android.dialer) that
+            // the launcher actually routes calls through — it's a TCT-branded
+            // overlay app whose visible behaviour on the TCL Flip 2 is a
+            // persistent "the inserted SIM does not support all of the
+            // features" nag notification plus a voicemail/dial prompt. Calls
+            // and SMS continue to work after disabling it because the real
+            // telephony stack lives in com.android.phone /
+            // com.android.server.telecom.
+            //
+            // Uses `pm disable-user --user 0` rather than `pm uninstall` so the
+            // change is fully reversible with `pm enable com.tct.phone` if it
+            // turns out to provide something we missed (e.g. visual voicemail
+            // on a specific carrier). Same shape as disable_tcl_fota above.
+            "disable_tct_phone" to {
+                try {
+                    val proc = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "pm disable-user --user 0 com.tct.phone")
+                    )
+                    val stderr = proc.errorStream.bufferedReader().readText().trim()
+                    val exit = proc.waitFor()
+                    if (exit == 0) {
+                        Log.d(tag, "Disabled com.tct.phone")
+                    } else {
+                        Log.w(tag, "Failed to disable com.tct.phone (exit=$exit): $stderr")
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Cannot disable com.tct.phone: ${e.message}")
+                }
+            },
             // Disable Android's Wi-Fi scan throttle (default 4 scans / 2 min
             // for foreground apps, ~1 scan / 30 min in background) so that
             // BeaconDB-based geolocation gets fresh BSSIDs on every request.
