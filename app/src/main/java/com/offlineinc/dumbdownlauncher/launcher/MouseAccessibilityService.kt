@@ -17,6 +17,7 @@ import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.offlineinc.dumbdownlauncher.launcher.ResetWarningOverlay
+import com.offlineinc.dumbdownlauncher.launcher.qrenlarge.QrEnlargeController
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
@@ -748,7 +749,66 @@ class MouseAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** True while we're swallowing a BACK key sequence on behalf of the
+     *  QR-enlarge overlay. Set on ACTION_DOWN, cleared on ACTION_UP. Both
+     *  must be consumed so WhatsApp doesn't see an orphan KEY_UP and close
+     *  the companion activity. */
+    @Volatile private var qrBackConsumed: Boolean = false
+
+    /** Same idea for POUND — when we're swallowing it to toggle the QR
+     *  enlarge, both DOWN and UP must be consumed so the keypad's # key
+     *  doesn't fall through to WhatsApp as an unrelated key event. */
+    @Volatile private var qrPoundConsumed: Boolean = false
+
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        // ── QR-enlarge BACK handling ─────────────────────────────────────
+        // When the enlarged QR overlay is up, BACK should dismiss it and
+        // return to WhatsApp's small QR — not navigate away from
+        // RegisterAsCompanionActivity. Handled before the ACTION_DOWN
+        // early-return because we need to consume the matching ACTION_UP too.
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (QrEnlargeController.isEnlargedShowing) {
+                        Log.d("QR_ENLARGE_CTRL", "onKeyEvent: BACK with overlay up — consuming")
+                        QrEnlargeController.dismissEnlargedQr()
+                        qrBackConsumed = true
+                        return true
+                    }
+                }
+                KeyEvent.ACTION_UP -> {
+                    if (qrBackConsumed) {
+                        qrBackConsumed = false
+                        return true
+                    }
+                }
+            }
+        }
+        // ── end QR-enlarge BACK handling ─────────────────────────────────
+
+        // ── QR-enlarge POUND handling ────────────────────────────────────
+        // On the WhatsApp companion screen, # toggles the enlarged QR
+        // overlay (pressing again collapses it). The existing STAR handler
+        // below is left alone — it owns the special-char picker on every
+        // other app and isn't used on the companion screen.
+        if (event.keyCode == KeyEvent.KEYCODE_POUND && QrEnlargeController.isOnCompanionScreen) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    Log.d("QR_ENLARGE_CTRL", "onKeyEvent: # on companion screen — toggling")
+                    QrEnlargeController.toggleEnlargedQr(this)
+                    qrPoundConsumed = true
+                    return true
+                }
+                KeyEvent.ACTION_UP -> {
+                    if (qrPoundConsumed) {
+                        qrPoundConsumed = false
+                        return true
+                    }
+                }
+            }
+        }
+        // ── end QR-enlarge POUND handling ────────────────────────────────
+
         if (event.action != KeyEvent.ACTION_DOWN) return false
 
         when (event.keyCode) {
@@ -857,6 +917,39 @@ class MouseAccessibilityService : AccessibilityService() {
                 }
             }
             // ── end WhatsApp redirect ──────────────────────────────────────
+
+            // ── WhatsApp companion-mode QR enlarge ─────────────────────────
+            // The companion-mode QR is drawn at ~120px on a 240x320 screen,
+            // which is too small for another phone's camera to scan. When
+            // the user lands on RegisterAsCompanionActivity, kick off the
+            // QrEnlargeController: it screencaps the QR, decodes the
+            // payload, and shows a fullscreen high-res QR overlay.
+            //
+            // Tearing the overlay down is gated tightly because the capture
+            // pipeline takes ~3s on this device (root screencap + decode +
+            // encode) and a stray foreground change in the middle would
+            // cancel a successful run. Rule:
+            //   • Only act on events whose className contains "Activity".
+            //     This filters out status-bar / SystemUI FrameLayout events,
+            //     IME windows, popup dialogs, and our own overlay window
+            //     (adding TYPE_ACCESSIBILITY_OVERLAY fires a non-Activity
+            //     WINDOW_STATE_CHANGED for the launcher package, which
+            //     would otherwise immediately tear our own overlay down).
+            //   • On the companion activity → start.
+            //   • On any other Activity event (including the launcher's
+            //     own home Activity when the user hits Home) → tear down.
+            val classLooksLikeActivity = className.contains("Activity")
+            val isSystemUi = pkg == "com.android.systemui"
+            if (!isImeEvent && !isSystemUi && classLooksLikeActivity) {
+                val onCompanionScreen = pkg == WA_COMPANION_PKG
+                    && className == WA_COMPANION_CLASS
+                if (onCompanionScreen) {
+                    QrEnlargeController.onCompanionScreenEntered()
+                } else {
+                    QrEnlargeController.onLeftCompanionScreen()
+                }
+            }
+            // ── end QR enlarge ─────────────────────────────────────────────
 
             if (className == "com.android.mms.ui.ConversationList" || className == "com.android.dialer") {
                 handlePackage(pkg, className)

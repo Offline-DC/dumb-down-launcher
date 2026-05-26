@@ -14,8 +14,8 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 141
-        versionName = "v4.72.0"
+        versionCode = 142
+        versionName = "v4.73.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -92,6 +92,14 @@ dependencies {
     // assumed US 10/11-digit shapes. Backend (post-phone-normalize migration)
     // expects E.164 at every entry point.
     implementation("com.googlecode.libphonenumber:libphonenumber:8.13.46")
+
+    // ZXing — decodes the small QR that WhatsApp renders on the companion-
+    // mode "Link as companion device" page (240x320 phones can't fit the QR
+    // at a scannable size), then re-encodes it at max resolution for the
+    // QrEnlargeOverlay so another phone's camera can read it. Pure-Java
+    // core lib only; no android-specific zxing dep needed because we do our
+    // own Bitmap <-> LuminanceSource bridging.
+    implementation("com.google.zxing:core:3.5.3")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
