@@ -149,7 +149,10 @@ else
 fi
 
 SAMPLES_TODAY="$MIRROR_DIR/samples-$(date -u +%Y-%m-%d).jsonl"
+# If the file is missing wc emits nothing to stdout, so default to 0
+# rather than letting an empty string trip up the -gt below.
 SAMPLES_LINES_NOW=$(adb_sh "wc -l $SAMPLES_TODAY 2>/dev/null" | awk '{print $1+0}')
+SAMPLES_LINES_NOW=${SAMPLES_LINES_NOW:-0}
 if [ "$SAMPLES_LINES_NOW" -gt 0 ]; then
     pass "today's samples file has $SAMPLES_LINES_NOW line(s)"
 else
@@ -215,9 +218,10 @@ esac
 # ── 8: app standby bucket ──────────────────────────────────────────────
 
 BUCKET=$(adb_sh "am get-standby-bucket $PKG" | awk '{print $1+0}')
-# 10=ACTIVE 20=WORKING_SET 30=FREQUENT 40=RARE 45=RESTRICTED 50=NEVER
+# 5=EXEMPTED 10=ACTIVE 20=WORKING_SET 30=FREQUENT 40=RARE 45=RESTRICTED 50=NEVER
 BUCKET_NAME="?"
 case "$BUCKET" in
+    5)  BUCKET_NAME="EXEMPTED" ;;
     10) BUCKET_NAME="ACTIVE" ;;
     20) BUCKET_NAME="WORKING_SET" ;;
     30) BUCKET_NAME="FREQUENT" ;;
@@ -308,6 +312,7 @@ if [ "$SOAK_S" -gt 0 ]; then
     sect "live soak ($SOAK_S s)"
 
     LINES_START=$(adb_sh "wc -l $SAMPLES_TODAY 2>/dev/null" | awk '{print $1+0}')
+    LINES_START=${LINES_START:-0}
     note "starting line count: $LINES_START"
     note "watching for new samples for ${SOAK_S}s …  ${D}(Ctrl-C aborts the soak but not the script)${X}"
 
@@ -320,6 +325,7 @@ if [ "$SOAK_S" -gt 0 ]; then
         NOW=$(date +%s)
         ELAPSED=$((NOW - SOAK_START))
         LINES_NOW=$(adb_sh "wc -l $SAMPLES_TODAY 2>/dev/null" | awk '{print $1+0}')
+        LINES_NOW=${LINES_NOW:-0}
         if [ "$LINES_NOW" -gt "$LAST_LINES" ]; then
             DELTA=$((LINES_NOW - LAST_LINES))
             printf "    ${D}[%3ds] +%d sample(s)  →  total %d${X}\n" \
@@ -331,6 +337,7 @@ if [ "$SOAK_S" -gt 0 ]; then
     done
 
     LINES_END=$(adb_sh "wc -l $SAMPLES_TODAY 2>/dev/null" | awk '{print $1+0}')
+    LINES_END=${LINES_END:-0}
     NEW_LINES=$((LINES_END - LINES_START))
     # Cadence is one sample per 60s, so expect floor(SOAK_S / 60) ± 1.
     EXPECTED=$(( SOAK_S / 60 ))
