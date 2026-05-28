@@ -10,6 +10,7 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
+import com.offlineinc.dumbdownlauncher.batteryfix.BatteryFixNotificationManager
 import com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
@@ -891,6 +892,103 @@ class DumbDownApp : Application() {
                     Log.w(tag, "Cannot disable com.tct.phone: ${e.message}")
                 }
             },
+            // Disable TCT SAR Reducer — a Verizon-firmware persistent system
+            // app (com.tct.reducesar) whose `MtkCommonSarService` component
+            // registers a GnssStatus listener and is held at
+            // PERSISTENT_PROC_ADJ (-800) with the (fixed) flag. The
+            // continuous GnssStatus subscription keeps the GPS subsystem
+            // warm, which in turn prevents the OS from ever entering deep
+            // doze on the 4058G (Verizon) Flip 2 variant. Measured effect:
+            // idle current draw ~276 mA → ~135 mA, deep-idle finally
+            // appears in `dumpsys deviceidle` Idling history.
+            //
+            // `pm disable-user` and `pm uninstall --user 0` for the whole
+            // package both fail on Verizon firmware with "Failure to
+            // remove user owner's system package" — the firmware adds a
+            // user-owner system-package guard above stock PackageManager.
+            // But `pm disable <pkg>/<component>` works: PackageManager
+            // accepts the per-component disable on the *next boot*, and
+            // ActivityManager honors it when the persistent app respawns,
+            // so the MtkCommonSarService component never starts. The
+            // process slot remains alive (the persistent flag isn't
+            // affected), but `dumpsys activity services` shows "(nothing)"
+            // for the package and the GnssStatus listener is gone.
+            // Verified on Verizon TCL Flip 2 (4058G, Android 11).
+            //
+            // Bumped to `_v2` because an earlier _v1 of this migration
+            // installed a Magisk overlay module at
+            // /data/adb/modules/disable_reducesar/ to mask the APK before
+            // we discovered the simpler component-disable path. On devices
+            // where _v1 ran, we clean that module up here so the system
+            // converges on a single, simpler fix. The Magisk module would
+            // be harmless on top of the component disable, but leaving
+            // stale modules around is sloppy.
+            //
+            // Idempotent: if reducesar isn't installed (non-4058G variants
+            // like the 4058W, or any non-TCL device the launcher might
+            // someday run on), pm path returns nothing, the migration
+            // logs and noops cleanly without posting a notification.
+            //
+            // The component disable takes effect on the next reboot, so
+            // on a successful disable we post a single low-importance
+            // notification via [BatteryFixNotificationManager] asking the
+            // user to restart. Failure to issue the disable throws,
+            // leaving the migration flag unset so the next boot retries.
+            //
+            // Reversible at any time:
+            //   adb shell su -c 'pm enable com.tct.reducesar/.MtkCommonSarService'
+            // and after a reboot the service is back to its original state.
+            "disable_reducesar_v2" to {
+                val pkg = "com.tct.reducesar"
+                val component = "$pkg/.MtkCommonSarService"
+                val staleModuleDir = "/data/adb/modules/disable_reducesar"
+
+                // 1. Is reducesar installed on this device? If not (4058W
+                //    or any non-Verizon TCL build), nothing to do — but
+                //    still clean up any stale v1 Magisk module just in
+                //    case it was created by a previous test build.
+                val pathProc = Runtime.getRuntime().exec(arrayOf("pm", "path", pkg))
+                val pathOut = pathProc.inputStream.bufferedReader().readText().trim()
+                pathProc.errorStream.bufferedReader().readText() // drain
+                pathProc.waitFor()
+                if (!pathOut.contains("package:")) {
+                    Log.d(tag, "$pkg not installed — nothing to disable")
+                    cleanupReducesarMagiskModule(tag, staleModuleDir)
+                    return@to
+                }
+
+                // 2. Disable just the MtkCommonSarService component. The
+                //    persistent app keeps its process slot but the service
+                //    won't be started on the next boot.
+                val disableProc = Runtime.getRuntime().exec(arrayOf(
+                    "su", "-c", "pm disable $component"
+                ))
+                val disableOut = disableProc.inputStream.bufferedReader().readText().trim()
+                val disableErr = disableProc.errorStream.bufferedReader().readText().trim()
+                val disableExit = disableProc.waitFor()
+                if (disableExit != 0) {
+                    throw RuntimeException(
+                        "pm disable $component failed (exit=$disableExit): " +
+                            "out=$disableOut err=$disableErr"
+                    )
+                }
+                if (!disableOut.contains("new state: disabled")) {
+                    // Some firmware variants emit a slightly different
+                    // success line; if the command exited 0 we trust it
+                    // and just log the unexpected output for forensics.
+                    Log.d(tag, "pm disable $component returned: $disableOut")
+                }
+                Log.i(tag, "✅ Disabled $component — restart required to activate")
+
+                // 3. Clean up the v1 Magisk module if a previous launcher
+                //    build installed it. Harmless on top of the disable,
+                //    but we want a single source of truth.
+                cleanupReducesarMagiskModule(tag, staleModuleDir)
+
+                // 4. The disable only takes effect on the next boot, so
+                //    post the "press and hold power to restart" notification.
+                BatteryFixNotificationManager.notifyRebootToApply(this)
+            },
             // Disable Android's Wi-Fi scan throttle (default 4 scans / 2 min
             // for foreground apps, ~1 scan / 30 min in background) so that
             // BeaconDB-based geolocation gets fresh BSSIDs on every request.
@@ -1069,6 +1167,36 @@ class DumbDownApp : Application() {
             } catch (e: Exception) {
                 Log.w(tag, "Migration failed: $key — ${e.message}")
             }
+        }
+    }
+
+    /**
+     * Remove the historical `disable_reducesar` Magisk overlay module if
+     * present. The first version of the reducesar fix shipped as a Magisk
+     * module that masked the entire APK directory; the v2 fix replaces it
+     * with a single `pm disable` of the offending component. Once v2 has
+     * applied, the Magisk overlay is redundant — and stale Magisk modules
+     * are confusing for anyone troubleshooting later.
+     *
+     * `rm -rf` is the right tool: if the dir doesn't exist (clean device
+     * that never had v1) it's a no-op. We swallow exit codes and stderr
+     * to keep the cleanup best-effort, since it should never block the
+     * actual component-disable that the v2 migration just performed.
+     */
+    private fun cleanupReducesarMagiskModule(tag: String, moduleDir: String) {
+        try {
+            val rmProc = Runtime.getRuntime().exec(
+                arrayOf("su", "-c", "rm -rf $moduleDir 2>/dev/null")
+            )
+            rmProc.errorStream.bufferedReader().readText() // drain
+            val exit = rmProc.waitFor()
+            if (exit == 0) {
+                Log.d(tag, "Cleaned up any stale v1 Magisk module at $moduleDir")
+            } else {
+                Log.d(tag, "Stale v1 Magisk module cleanup at $moduleDir exited $exit (non-critical)")
+            }
+        } catch (e: Exception) {
+            Log.d(tag, "Stale v1 Magisk module cleanup failed (non-critical): ${e.message}")
         }
     }
 
