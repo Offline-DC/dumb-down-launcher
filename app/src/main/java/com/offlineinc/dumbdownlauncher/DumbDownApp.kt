@@ -88,6 +88,16 @@ class DumbDownApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+
+        // Reboot logging — investigates random restarts reported by one
+        // beta user. Keeps a rolling logcat tail on disk so that when
+        // the device dies the segment from immediately before the
+        // crash is always there to be harvested via ADB. Gated by
+        // BuildConfig.REBOOT_LOGGING_ENABLED (set true only in the
+        // diag beta build) plus a SharedPreferences opt-in. See
+        // reboot-diagnostics-plan.md.
+        com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
+
         UpdateCheckWorker.schedule(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.

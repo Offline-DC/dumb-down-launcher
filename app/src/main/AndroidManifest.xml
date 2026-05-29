@@ -27,6 +27,15 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <!-- Foreground service permissions removed — Type Sync relay now runs
          inside MouseAccessibilityService (no notification needed). -->
+    <!-- Reboot logging (gated by BuildConfig.REBOOT_LOGGING_ENABLED).
+         RebootLoggingService runs as a foreground service so the
+         rolling logcat tail survives doze/idle — a service that the OS
+         kills the moment the screen goes off would miss the exact
+         window we need. The privileged `logcat` read is executed via
+         `su -c` (root via Magisk) so READ_LOGS isn't required on the
+         app itself. See reboot-diagnostics-plan.md. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
     <!-- Required by TelephonyManager.sendUssdRequest in the USSD fallback path
@@ -169,6 +178,15 @@
         <service
             android:name=".coverdisplay.CoverDisplayService"
             android:exported="false" />
+
+        <!-- Reboot logging foreground service. Owns the rolling logcat
+             tail (size-rotated ring under <filesDir>/diag/rolling-logcat/).
+             Runs only when the diag build flag is on AND the user has
+             flipped the runtime opt-in. See reboot-diagnostics-plan.md. -->
+        <service
+            android:name=".diagnostics.RebootLoggingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".notifications.DumbNotificationListenerService"

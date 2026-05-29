@@ -17,6 +17,13 @@ android {
         versionCode = 146
         versionName = "v4.76.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Reboot diagnostics — compile-time gate for the RebootForensics
+        // capture and the RebootLoggingService rolling-logcat tail. Flip
+        // to true in the diag beta build that ships to the one user
+        // investigating the random-restart bug; production builds compile
+        // the path out so `su -c` shell-outs never run.
+        buildConfigField("boolean", "REBOOT_LOGGING_ENABLED", "false")
     }
 
     signingConfigs {
