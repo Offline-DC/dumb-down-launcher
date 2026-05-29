@@ -109,10 +109,25 @@ class RebootLoggingService : Service() {
                 .takeIf { it != 0 } ?: android.R.drawable.stat_sys_data_bluetooth
         } catch (_: Throwable) { android.R.drawable.stat_sys_data_bluetooth }
 
+        // User-facing copy. Marco needs to know what this notification
+        // is for every time he opens the shade, so this is intentionally
+        // plain-English ("Storing logs for testing…") rather than the
+        // engineer-oriented "Reboot diagnostics running" / "Recording
+        // rolling logcat" we shipped to the launcher's own developers.
+        // Title fits the 240×320 cover-display row; subtitle expands to
+        // a one-sentence explanation when the row is tapped.
         return NotificationCompat.Builder(this, RebootLoggingConfig.NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(iconRes)
-            .setContentTitle("Reboot diagnostics running")
-            .setContentText("Recording rolling logcat for reboot investigation")
+            .setContentTitle("Storing logs for testing…")
+            .setContentText("Beta build — helping us find a fix for the random restarts.")
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    "Beta build only. The launcher is keeping a 24-hour rolling log of " +
+                        "system events on this device so we can find the cause of the " +
+                        "random restarts. The log stays on this phone unless you send it " +
+                        "to us — nothing is uploaded automatically."
+                )
+            )
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -126,10 +141,11 @@ class RebootLoggingService : Service() {
         if (nm.getNotificationChannel(RebootLoggingConfig.NOTIFICATION_CHANNEL_ID) != null) return
         val channel = NotificationChannel(
             RebootLoggingConfig.NOTIFICATION_CHANNEL_ID,
-            "Reboot diagnostics",
+            "Storing logs for testing",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Rolling logcat recording for the beta reboot-investigation build."
+            description = "Beta build only. Keeps a 24-hour rolling log on this device " +
+                "to help find the cause of the random restarts."
             setShowBadge(false)
             enableLights(false)
             enableVibration(false)
@@ -138,11 +154,34 @@ class RebootLoggingService : Service() {
     }
 
     companion object {
-        /** Start the service if compile-time + opt-in are both on. */
+        /**
+         * Start the service when the compile-time gate is on.
+         *
+         * On the diag beta build (BuildConfig.REBOOT_LOGGING_ENABLED =
+         * true), shipping the APK to Marco via the -beta.0 channel IS
+         * the consent step — we're not asking a regular production user
+         * mid-flight whether they want diagnostics. So when the build
+         * flag is on and the runtime opt-in has never been touched
+         * (enabledSinceMs == 0L), we auto-flip the opt-in here on
+         * first launch and continue. After that, the runtime flag is
+         * the authoritative on/off switch — flipping it false via adb
+         * stops collection without uninstalling.
+         */
         fun startIfEnabled(context: Context) {
             if (!BuildConfig.REBOOT_LOGGING_ENABLED) return
             val store = RebootLoggingStore(context)
-            if (!store.enabled) return
+            if (!store.enabled) {
+                if (store.enabledSinceMs == 0L) {
+                    // First launch on this device after install. Auto-
+                    // enable so Marco doesn't have to touch adb.
+                    store.enabled = true
+                    store.enabledSinceMs = System.currentTimeMillis()
+                } else {
+                    // Explicit kill switch — user (or we, remotely) has
+                    // flipped this off. Honour it.
+                    return
+                }
+            }
             val intent = Intent(context, RebootLoggingService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

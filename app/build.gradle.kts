@@ -14,16 +14,21 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 146
-        versionName = "v4.76.0"
+        versionCode = 147
+        // -beta.0 suffix keeps this build inside the beta channel only,
+        // so production users on v4.76.0 don't auto-update into it. The
+        // random-restart investigation only needs Marco's device — this
+        // version goes to him via the existing beta enrollment, and
+        // promotes back to v4.77.0 (no suffix) only after the fix lands.
+        versionName = "v4.77.0-beta.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Reboot diagnostics — compile-time gate for the RebootForensics
-        // capture and the RebootLoggingService rolling-logcat tail. Flip
-        // to true in the diag beta build that ships to the one user
-        // investigating the random-restart bug; production builds compile
-        // the path out so `su -c` shell-outs never run.
-        buildConfigField("boolean", "REBOOT_LOGGING_ENABLED", "false")
+        // Reboot logging — compile-time gate for RebootLoggingService and
+        // the rolling-logcat tail. TRUE in this beta build because the
+        // version is gated to the beta channel via -beta.0; production
+        // builds (no suffix) ship the path off so `su -c logcat` never
+        // runs for non-beta users.
+        buildConfigField("boolean", "REBOOT_LOGGING_ENABLED", "true")
     }
 
     signingConfigs {

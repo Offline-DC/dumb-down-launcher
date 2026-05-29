@@ -102,22 +102,17 @@ the support engineer reads one log instead of unzipping six.
 
 ## Capture protocol
 
-1. Build with `REBOOT_LOGGING_ENABLED=true`. Bump version to
-   `<X.Y.Z>-rebootdiag` so the diag build can be told apart at a
-   glance.
+1. Build with `REBOOT_LOGGING_ENABLED=true` and a `-beta.<N>` version
+   suffix (currently `v4.77.0-beta.0`). The suffix gates the build to
+   the beta channel so only enrolled beta users (Marco) auto-update
+   into it; production users on the no-suffix version don't see it.
 2. Push via the existing beta channel.
-3. Flip the opt-in via adb so we don't need new UI:
-   ```bash
-   adb shell run-as com.offlineinc.dumbdownlauncher \
-     "mkdir -p shared_prefs && cat > shared_prefs/reboot_logging_prefs.xml" \
-     <<'EOF'
-   <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-   <map>
-       <boolean name="reboot_logging_enabled" value="true" />
-   </map>
-   EOF
-   ```
-   (Or add a one-line toggle to a hidden settings screen later.)
+3. On Marco's device, the first time the launcher process starts
+   under the new build, `RebootLoggingService.startIfEnabled` sees
+   `enabledSinceMs == 0L`, auto-flips the runtime opt-in, and starts
+   the foreground service. A persistent "Storing logs for testing…"
+   notification appears in the shade — that's confirmation that
+   collection is live. No adb step required.
 4. Wait. The next time the device reboots, the rolling-logcat ring
    carries forward — the `segment-pre-*.log` left behind is the
    in-progress segment from immediately before the crash, and the
@@ -127,6 +122,15 @@ the support engineer reads one log instead of unzipping six.
    ```bash
    ./scripts/pull-reboot-evidence.sh
    ```
+6. To stop collection without uninstalling (e.g. after Marco's
+   investigation closes), flip the opt-in off:
+   ```bash
+   adb shell run-as com.offlineinc.dumbdownlauncher \
+     "sed -i 's/reboot_logging_enabled\">true/reboot_logging_enabled\">false/' \
+      shared_prefs/reboot_logging_prefs.xml"
+   ```
+   `enabledSinceMs` stays non-zero so subsequent process starts respect
+   the explicit kill rather than re-auto-enabling.
 
 ## Disk budget
 
