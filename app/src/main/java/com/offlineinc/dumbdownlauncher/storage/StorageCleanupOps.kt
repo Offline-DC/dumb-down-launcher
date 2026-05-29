@@ -54,25 +54,24 @@ object StorageCleanupOps {
      * is which — see STORAGE_PLAN.md §0.3). So the auto path uses a size
      * gate as a probabilistic preservation:
      *
-     *  - Cache under 400 MB → almost certainly no GB-scale streaming-cache
+     *  - Cache under 1 GB → almost certainly no GB-scale streaming-cache
      *    bloat. Worker skips the wipe, downloads survive.
-     *  - Cache over 400 MB → likely accumulating streaming cache the
+     *  - Cache over 1 GB → likely accumulating streaming cache the
      *    user didn't ask for. Worker wipes. If the user *did* have
-     *    >400 MB of downloads, they pay a Wi-Fi re-download on next play.
+     *    >1 GB of downloads, they pay a Wi-Fi re-download on next play.
      *
      * The threshold is a compromise: lower values recover more aggressively
      * but catch more downloaders, higher values protect downloaders more
-     * but leave more bloat on disk. 400 MB picked because (a) a typical
-     * Spotify album is ~50–100 MB so 4 albums comfortably fit underneath,
-     * (b) the in-the-wild 1.3 GB cache figure is well past it, and (c)
-     * it's tight enough that streaming cache from one binge listening
-     * session triggers the wipe without waiting another day.
+     * but leave more bloat on disk. 1 GB picked to protect users with
+     * substantial downloaded libraries (10+ albums at ~50–100 MB each)
+     * while still catching the in-the-wild 1.3 GB cache bloat figure
+     * before it grows further.
      *
      * The MANUAL "Clear Spotify offline" button in [FreeUpSpaceScreen]
      * stays unconditional — that path is for users explicitly choosing to
      * nuke everything, and gets its own confirm dialog.
      */
-    const val SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES: Long = 400L * 1024L * 1024L  // 400 MB
+    const val SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES: Long = 1024L * 1024L * 1024L  // 1 GB
 
     /** Filesystem path of Spotify's combined cache + offline-download store. */
     private const val SPOTIFY_CACHE_DIR =
