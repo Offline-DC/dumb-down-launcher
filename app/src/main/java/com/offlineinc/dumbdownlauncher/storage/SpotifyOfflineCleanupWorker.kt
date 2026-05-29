@@ -33,7 +33,7 @@ private const val TAG = "SpotifyOfflineWorker"
  * compromise:
  *
  *  - Cache under [StorageCleanupOps.SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES]
- *    (400 MB) → no wipe. Users with no downloads + light listening, or
+ *    (1 GB) → no wipe. Users with no downloads + light listening, or
  *    a handful of downloaded albums, stay under this and are never
  *    touched by the auto path.
  *  - Cache at or above the threshold → wipe runs. The 1.3 GB bloat
