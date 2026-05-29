@@ -915,15 +915,6 @@ class DumbDownApp : Application() {
             // for the package and the GnssStatus listener is gone.
             // Verified on Verizon TCL Flip 2 (4058G, Android 11).
             //
-            // Bumped to `_v2` because an earlier _v1 of this migration
-            // installed a Magisk overlay module at
-            // /data/adb/modules/disable_reducesar/ to mask the APK before
-            // we discovered the simpler component-disable path. On devices
-            // where _v1 ran, we clean that module up here so the system
-            // converges on a single, simpler fix. The Magisk module would
-            // be harmless on top of the component disable, but leaving
-            // stale modules around is sloppy.
-            //
             // Idempotent: if reducesar isn't installed (non-4058G variants
             // like the 4058W, or any non-TCL device the launcher might
             // someday run on), pm path returns nothing, the migration
@@ -938,22 +929,25 @@ class DumbDownApp : Application() {
             // Reversible at any time:
             //   adb shell su -c 'pm enable com.tct.reducesar/.MtkCommonSarService'
             // and after a reboot the service is back to its original state.
+            //
+            // Keyed _v2 because an earlier prototype shipped to a small
+            // dev pool wrote a Magisk overlay module at
+            // /data/adb/modules/disable_reducesar/ instead of using the
+            // component disable. That code never reached real users so we
+            // don't bother cleaning the directory up here — bump the key
+            // suffix instead if a future migration ever needs to.
             "disable_reducesar_v2" to {
                 val pkg = "com.tct.reducesar"
                 val component = "$pkg/.MtkCommonSarService"
-                val staleModuleDir = "/data/adb/modules/disable_reducesar"
 
                 // 1. Is reducesar installed on this device? If not (4058W
-                //    or any non-Verizon TCL build), nothing to do — but
-                //    still clean up any stale v1 Magisk module just in
-                //    case it was created by a previous test build.
+                //    or any non-Verizon TCL build), nothing to do.
                 val pathProc = Runtime.getRuntime().exec(arrayOf("pm", "path", pkg))
                 val pathOut = pathProc.inputStream.bufferedReader().readText().trim()
                 pathProc.errorStream.bufferedReader().readText() // drain
                 pathProc.waitFor()
                 if (!pathOut.contains("package:")) {
                     Log.d(tag, "$pkg not installed — nothing to disable")
-                    cleanupReducesarMagiskModule(tag, staleModuleDir)
                     return@to
                 }
 
@@ -980,12 +974,7 @@ class DumbDownApp : Application() {
                 }
                 Log.i(tag, "✅ Disabled $component — restart required to activate")
 
-                // 3. Clean up the v1 Magisk module if a previous launcher
-                //    build installed it. Harmless on top of the disable,
-                //    but we want a single source of truth.
-                cleanupReducesarMagiskModule(tag, staleModuleDir)
-
-                // 4. The disable only takes effect on the next boot, so
+                // 3. The disable only takes effect on the next boot, so
                 //    post the "press and hold power to restart" notification.
                 BatteryFixNotificationManager.notifyRebootToApply(this)
             },
@@ -1167,36 +1156,6 @@ class DumbDownApp : Application() {
             } catch (e: Exception) {
                 Log.w(tag, "Migration failed: $key — ${e.message}")
             }
-        }
-    }
-
-    /**
-     * Remove the historical `disable_reducesar` Magisk overlay module if
-     * present. The first version of the reducesar fix shipped as a Magisk
-     * module that masked the entire APK directory; the v2 fix replaces it
-     * with a single `pm disable` of the offending component. Once v2 has
-     * applied, the Magisk overlay is redundant — and stale Magisk modules
-     * are confusing for anyone troubleshooting later.
-     *
-     * `rm -rf` is the right tool: if the dir doesn't exist (clean device
-     * that never had v1) it's a no-op. We swallow exit codes and stderr
-     * to keep the cleanup best-effort, since it should never block the
-     * actual component-disable that the v2 migration just performed.
-     */
-    private fun cleanupReducesarMagiskModule(tag: String, moduleDir: String) {
-        try {
-            val rmProc = Runtime.getRuntime().exec(
-                arrayOf("su", "-c", "rm -rf $moduleDir 2>/dev/null")
-            )
-            rmProc.errorStream.bufferedReader().readText() // drain
-            val exit = rmProc.waitFor()
-            if (exit == 0) {
-                Log.d(tag, "Cleaned up any stale v1 Magisk module at $moduleDir")
-            } else {
-                Log.d(tag, "Stale v1 Magisk module cleanup at $moduleDir exited $exit (non-critical)")
-            }
-        } catch (e: Exception) {
-            Log.d(tag, "Stale v1 Magisk module cleanup failed (non-critical): ${e.message}")
         }
     }
 
