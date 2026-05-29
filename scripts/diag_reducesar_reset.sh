@@ -178,25 +178,25 @@ fi
 
 # ── 4. clear the migration prefs ───────────────────────────────────────
 
-sect "4. clear migration prefs"
+# sect "4. clear migration prefs"
 
-PREFS_BEFORE=$(adb_sh "su -c 'cat $LAUNCHER_PREFS 2>/dev/null'")
-if [ -z "$PREFS_BEFORE" ]; then
-    ok "no migrations.xml present (already in clean state)"
-else
-    HAD_V2=$(echo "$PREFS_BEFORE" | grep -c "disable_reducesar_v2" || true)
-    HAD_V1=$(echo "$PREFS_BEFORE" | grep -c "disable_reducesar_v1" || true)
+# PREFS_BEFORE=$(adb_sh "su -c 'cat $LAUNCHER_PREFS 2>/dev/null'")
+# if [ -z "$PREFS_BEFORE" ]; then
+#     ok "no migrations.xml present (already in clean state)"
+# else
+#     HAD_V2=$(echo "$PREFS_BEFORE" | grep -c "disable_reducesar_v2" || true)
+#     HAD_V1=$(echo "$PREFS_BEFORE" | grep -c "disable_reducesar_v1" || true)
 
-    # Wipe the file. All migrations re-run on next launcher start; they're
-    # idempotent so the others (disable_tcl_fota etc.) will no-op cleanly.
-    adb_sh "su -c 'rm -f $LAUNCHER_PREFS'" >/dev/null
-    AFTER=$(adb_sh "su -c 'ls $LAUNCHER_PREFS 2>/dev/null'")
-    if [ -z "$AFTER" ]; then
-        ok "removed $LAUNCHER_PREFS  ${D}(had_v2=$HAD_V2 had_v1=$HAD_V1)${X}"
-    else
-        err "could not remove $LAUNCHER_PREFS"
-    fi
-fi
+#     # Wipe the file. All migrations re-run on next launcher start; they're
+#     # idempotent so the others (disable_tcl_fota etc.) will no-op cleanly.
+#     adb_sh "su -c 'rm -f $LAUNCHER_PREFS'" >/dev/null
+#     AFTER=$(adb_sh "su -c 'ls $LAUNCHER_PREFS 2>/dev/null'")
+#     if [ -z "$AFTER" ]; then
+#         ok "removed $LAUNCHER_PREFS  ${D}(had_v2=$HAD_V2 had_v1=$HAD_V1)${X}"
+#     else
+#         err "could not remove $LAUNCHER_PREFS"
+#     fi
+# fi
 
 # ── 5. (optional) reboot ───────────────────────────────────────────────
 
