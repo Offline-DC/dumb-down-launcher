@@ -10,7 +10,6 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
-import com.offlineinc.dumbdownlauncher.batteryfix.BatteryFixNotificationManager
 import com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
@@ -785,6 +784,25 @@ class DumbDownApp : Application() {
                     Log.d(tag, "Deleted old type_sync notification channel")
                 }
             },
+            // Delete the "battery_fix" notification channel that was used by
+            // the now-removed BatteryFixNotificationManager (it posted a
+            // "press and hold power to restart" notification after the
+            // disable_reducesar_v2 migration ran). The reducesar disable
+            // has since been removed in favor of reenable_reducesar_for_md_bug_v1,
+            // and the new re-enable migration intentionally does not post a
+            // notification — affected users are messaged out-of-band. Also
+            // cancel notification ID 4901 (BatteryFixNotificationManager
+            // .NOTIFICATION_ID_REBOOT_TO_APPLY) in case the prompt is still
+            // live on the shade from a previous boot.
+            "delete_battery_fix_channel" to {
+                val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                // 4901 was BatteryFixNotificationManager.NOTIFICATION_ID_REBOOT_TO_APPLY
+                nm.cancel(4901)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    nm.deleteNotificationChannel("battery_fix")
+                    Log.d(tag, "Deleted old battery_fix notification channel")
+                }
+            },
             // Remove the 256 MB swap file that an earlier build (the
             // historic `create_swap_256m` migration) allocated. With
             // `/data` capped at ~4.5 GB on the TCL Flip 2 the swap was
@@ -892,91 +910,93 @@ class DumbDownApp : Application() {
                     Log.w(tag, "Cannot disable com.tct.phone: ${e.message}")
                 }
             },
-            // Disable TCT SAR Reducer — a Verizon-firmware persistent system
-            // app (com.tct.reducesar) whose `MtkCommonSarService` component
-            // registers a GnssStatus listener and is held at
-            // PERSISTENT_PROC_ADJ (-800) with the (fixed) flag. The
-            // continuous GnssStatus subscription keeps the GPS subsystem
-            // warm, which in turn prevents the OS from ever entering deep
-            // doze on the 4058G (Verizon) Flip 2 variant. Measured effect:
-            // idle current draw ~276 mA → ~135 mA, deep-idle finally
-            // appears in `dumpsys deviceidle` Idling history.
+            // Re-enable com.tct.reducesar/.MtkCommonSarService for devices
+            // on which the now-removed `disable_reducesar_v2` migration
+            // turned it off. That earlier migration ran `pm disable
+            // com.tct.reducesar/.MtkCommonSarService` to kill a persistent
+            // GnssStatus listener TCL ships on the 4058G (Verizon) Flip 2
+            // variant — held at PERSISTENT_PROC_ADJ (-800) — which had the
+            // side effect of keeping the GPS subsystem warm and blocking
+            // deep doze. The disable bought ~141 mA of idle savings (~276
+            // mA → ~135 mA, and deep-idle finally appearing in `dumpsys
+            // deviceidle` Idling history) but unmasked a
+            // MOLY.LR12A.R3.MP.V179.5.P53 modem firmware bug on the MT6739:
+            // with reducesar's persistent GnssStatus listener gone, the AP
+            // can finally enter deep doze, and once deep doze is reachable
+            // every active VoLTE call risks an `R12_CONN2AP_SPM_WAKEUP_B`
+            // wake firing during suspend and hitting MD exception
+            // 0x54430007 / 0x53320000 ("MD exception HIF 0" followed by a
+            // full modem reset). Symptom: call audio cuts, UI freezes
+            // ~10–15 s while telephony binders block on a dead modem, call
+            // ends with DisconnectCause LOCAL even though neither party
+            // hung up. Confirmed reproducible — identical boot_stats codes
+            // captured across three freezes in a single boot.
             //
-            // `pm disable-user` and `pm uninstall --user 0` for the whole
-            // package both fail on Verizon firmware with "Failure to
-            // remove user owner's system package" — the firmware adds a
-            // user-owner system-package guard above stock PackageManager.
-            // But `pm disable <pkg>/<component>` works: PackageManager
-            // accepts the per-component disable on the *next boot*, and
-            // ActivityManager honors it when the persistent app respawns,
-            // so the MtkCommonSarService component never starts. The
-            // process slot remains alive (the persistent flag isn't
-            // affected), but `dumpsys activity services` shows "(nothing)"
-            // for the package and the GnssStatus listener is gone.
-            // Verified on Verizon TCL Flip 2 (4058G, Android 11).
+            // The proper fix is a modem firmware update from TCL. Until
+            // that lands, put reducesar back the way stock firmware ships
+            // it so the GPS keepalive holds the AP out of deep doze again.
+            // The GnssStatus listener is re-registered when the persistent
+            // process respawns at next boot — same mechanism the disable
+            // exploited in reverse.
             //
-            // Idempotent: if reducesar isn't installed (non-4058G variants
-            // like the 4058W, or any non-TCL device the launcher might
-            // someday run on), pm path returns nothing, the migration
-            // logs and noops cleanly without posting a notification.
+            // Idempotent: `pm enable` on an already-enabled or
+            // default-state component exits 0 and is a no-op. If reducesar
+            // isn't installed at all (4058W or any non-TCL variant), skip
+            // cleanly without posting a notification.
             //
-            // The component disable takes effect on the next reboot, so
-            // on a successful disable we post a single low-importance
-            // notification via [BatteryFixNotificationManager] asking the
-            // user to restart. Failure to issue the disable throws,
-            // leaving the migration flag unset so the next boot retries.
+            // Effect takes hold on next reboot. No in-launcher notification
+            // is posted — affected users are messaged out-of-band to
+            // restart. The Log.i success line serves as the audit trail
+            // for when the enable actually fired on a given device.
             //
-            // Reversible at any time:
-            //   adb shell su -c 'pm enable com.tct.reducesar/.MtkCommonSarService'
-            // and after a reboot the service is back to its original state.
-            //
-            // Keyed _v2 because an earlier prototype shipped to a small
-            // dev pool wrote a Magisk overlay module at
-            // /data/adb/modules/disable_reducesar/ instead of using the
-            // component disable. That code never reached real users so we
-            // don't bother cleaning the directory up here — bump the key
-            // suffix instead if a future migration ever needs to.
-            "disable_reducesar_v2" to {
+            // Keyed _v1 (not _v3) because this is a distinct semantic
+            // migration, not another iteration of the disable. If a future
+            // change wants to disable reducesar again selectively (e.g.
+            // only when no call is active) bump that migration's suffix
+            // rather than repurposing this key.
+            "reenable_reducesar_for_md_bug_v1" to {
                 val pkg = "com.tct.reducesar"
                 val component = "$pkg/.MtkCommonSarService"
 
-                // 1. Is reducesar installed on this device? If not (4058W
-                //    or any non-Verizon TCL build), nothing to do.
+                // 1. Skip cleanly if reducesar isn't installed on this
+                //    variant (4058W or any non-TCL build the launcher may
+                //    someday run on).
                 val pathProc = Runtime.getRuntime().exec(arrayOf("pm", "path", pkg))
                 val pathOut = pathProc.inputStream.bufferedReader().readText().trim()
                 pathProc.errorStream.bufferedReader().readText() // drain
                 pathProc.waitFor()
                 if (!pathOut.contains("package:")) {
-                    Log.d(tag, "$pkg not installed — nothing to disable")
+                    Log.d(tag, "$pkg not installed — nothing to re-enable")
                     return@to
                 }
 
-                // 2. Disable just the MtkCommonSarService component. The
-                //    persistent app keeps its process slot but the service
-                //    won't be started on the next boot.
-                val disableProc = Runtime.getRuntime().exec(arrayOf(
-                    "su", "-c", "pm disable $component"
+                // 2. pm enable the component. PackageManager accepts the
+                //    per-component enable and ActivityManager honors it
+                //    when the persistent process respawns on the next boot.
+                val enableProc = Runtime.getRuntime().exec(arrayOf(
+                    "su", "-c", "pm enable $component"
                 ))
-                val disableOut = disableProc.inputStream.bufferedReader().readText().trim()
-                val disableErr = disableProc.errorStream.bufferedReader().readText().trim()
-                val disableExit = disableProc.waitFor()
-                if (disableExit != 0) {
+                val enableOut = enableProc.inputStream.bufferedReader().readText().trim()
+                val enableErr = enableProc.errorStream.bufferedReader().readText().trim()
+                val enableExit = enableProc.waitFor()
+                if (enableExit != 0) {
                     throw RuntimeException(
-                        "pm disable $component failed (exit=$disableExit): " +
-                            "out=$disableOut err=$disableErr"
+                        "pm enable $component failed (exit=$enableExit): " +
+                            "out=$enableOut err=$enableErr"
                     )
                 }
-                if (!disableOut.contains("new state: disabled")) {
+                if (!enableOut.contains("new state: enabled") &&
+                    !enableOut.contains("new state: default")) {
                     // Some firmware variants emit a slightly different
                     // success line; if the command exited 0 we trust it
                     // and just log the unexpected output for forensics.
-                    Log.d(tag, "pm disable $component returned: $disableOut")
+                    Log.d(tag, "pm enable $component returned: $enableOut")
                 }
-                Log.i(tag, "✅ Disabled $component — restart required to activate")
+                Log.i(tag, "✅ Re-enabled $component — restart required to apply")
 
-                // 3. The disable only takes effect on the next boot, so
-                //    post the "press and hold power to restart" notification.
-                BatteryFixNotificationManager.notifyRebootToApply(this)
+                // 3. No notification — affected users are told to restart
+                //    out-of-band. The Log.i above is the audit trail for
+                //    when the enable actually fired.
             },
             // Disable Android's Wi-Fi scan throttle (default 4 scans / 2 min
             // for foreground apps, ~1 scan / 30 min in background) so that
