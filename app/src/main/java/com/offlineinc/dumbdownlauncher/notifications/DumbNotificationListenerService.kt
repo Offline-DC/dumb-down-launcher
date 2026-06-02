@@ -135,6 +135,10 @@ class DumbNotificationListenerService : NotificationListenerService() {
             extras.getCharSequence("android.text")?.toString()?.trim()
                 ?: extras.getCharSequence("android.bigText")?.toString()?.trim()
                 ?: ""
+        // Prefer the poster's explicit "when" (the event time — for missed
+        // calls this is when the call ended). Some posters leave this at 0L,
+        // in which case fall back to postTime so the field is always usable.
+        val whenTime = if (n.`when` > 0L) n.`when` else postTime
         return NotificationItem(
             key = key,
             packageName = packageName,
@@ -143,6 +147,7 @@ class DumbNotificationListenerService : NotificationListenerService() {
             postTime = postTime,
             contentIntent = n.contentIntent,
             category = n.category,
+            whenTime = whenTime,
         )
     }
 
