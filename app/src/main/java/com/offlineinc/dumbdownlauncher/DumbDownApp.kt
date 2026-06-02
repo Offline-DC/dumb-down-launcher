@@ -879,36 +879,63 @@ class DumbDownApp : Application() {
                     Log.w(tag, "Cannot disable com.tcl.fota.system: ${e.message}")
                 }
             },
-            // Disable the TCT/TCL OEM "phone" companion app. Despite its name,
-            // this is NOT the AOSP telephony framework (com.android.phone) or
-            // the dialer (com.android.dialer / com.google.android.dialer) that
-            // the launcher actually routes calls through — it's a TCT-branded
-            // overlay app whose visible behaviour on the TCL Flip 2 is a
-            // persistent "the inserted SIM does not support all of the
-            // features" nag notification plus a voicemail/dial prompt. Calls
-            // and SMS continue to work after disabling it because the real
-            // telephony stack lives in com.android.phone /
-            // com.android.server.telecom.
+            // Re-enable com.tct.phone for devices on which the now-removed
+            // `disable_tct_phone` migration turned it off. That earlier
+            // migration ran `pm disable-user --user 0 com.tct.phone` to
+            // suppress a TCT-branded overlay app whose visible behaviour
+            // on the TCL Flip 2 was a persistent "the inserted SIM does
+            // not support all of the features" nag notification plus a
+            // voicemail/dial prompt. Disabling it cleared the nag but
+            // appears to be implicated in calls dropping on some devices
+            // — despite the AOSP telephony stack (com.android.phone /
+            // com.android.server.telecom) being what the launcher
+            // nominally routes through, some carrier/firmware
+            // combinations evidently still rely on com.tct.phone for
+            // pieces of the in-call signalling path. Until we can
+            // isolate exactly which side-channel matters, put the
+            // package back the way stock firmware ships it.
             //
-            // Uses `pm disable-user --user 0` rather than `pm uninstall` so the
-            // change is fully reversible with `pm enable com.tct.phone` if it
-            // turns out to provide something we missed (e.g. visual voicemail
-            // on a specific carrier). Same shape as disable_tcl_fota above.
-            "disable_tct_phone" to {
-                try {
-                    val proc = Runtime.getRuntime().exec(
-                        arrayOf("su", "-c", "pm disable-user --user 0 com.tct.phone")
-                    )
-                    val stderr = proc.errorStream.bufferedReader().readText().trim()
-                    val exit = proc.waitFor()
-                    if (exit == 0) {
-                        Log.d(tag, "Disabled com.tct.phone")
-                    } else {
-                        Log.w(tag, "Failed to disable com.tct.phone (exit=$exit): $stderr")
-                    }
-                } catch (e: Exception) {
-                    Log.w(tag, "Cannot disable com.tct.phone: ${e.message}")
+            // Idempotent: `pm enable` on an already-enabled or
+            // default-state package exits 0 and is a no-op, so this is
+            // safe to run on devices that never saw the disable. If
+            // com.tct.phone isn't installed at all (non-TCT variant),
+            // skip cleanly. Same shape as
+            // reenable_reducesar_for_md_bug_v1 above.
+            //
+            // Keyed _v1 because this is a distinct semantic migration,
+            // not another iteration of the disable. If a future change
+            // wants to disable com.tct.phone again selectively, bump
+            // that migration's suffix rather than repurposing this key.
+            "reenable_tct_phone_for_call_drops_v1" to {
+                val pkg = "com.tct.phone"
+
+                // 1. Skip cleanly if com.tct.phone isn't installed on
+                //    this variant.
+                val pathProc = Runtime.getRuntime().exec(arrayOf("pm", "path", pkg))
+                val pathOut = pathProc.inputStream.bufferedReader().readText().trim()
+                pathProc.errorStream.bufferedReader().readText() // drain
+                pathProc.waitFor()
+                if (!pathOut.contains("package:")) {
+                    Log.d(tag, "$pkg not installed — nothing to re-enable")
+                    return@to
                 }
+
+                // 2. pm enable the package for user 0 — mirrors the
+                //    `--user 0` scoping the original disable used so
+                //    we're undoing exactly the same state change.
+                val enableProc = Runtime.getRuntime().exec(arrayOf(
+                    "su", "-c", "pm enable --user 0 $pkg"
+                ))
+                val enableOut = enableProc.inputStream.bufferedReader().readText().trim()
+                val enableErr = enableProc.errorStream.bufferedReader().readText().trim()
+                val enableExit = enableProc.waitFor()
+                if (enableExit != 0) {
+                    throw RuntimeException(
+                        "pm enable --user 0 $pkg failed (exit=$enableExit): " +
+                            "out=$enableOut err=$enableErr"
+                    )
+                }
+                Log.i(tag, "✅ Re-enabled $pkg (out=$enableOut)")
             },
             // Re-enable com.tct.reducesar/.MtkCommonSarService for devices
             // on which the now-removed `disable_reducesar_v2` migration
