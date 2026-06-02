@@ -65,6 +65,11 @@ class AllAppsActivity : AppCompatActivity() {
             "com.mediatek.duraspeed",         // MTK DuraSpeed
             "com.mediatek.callrecorder",      // MTK call recorder
             "com.mediatek.calendarimporter",  // MTK calendar importer
+            "com.mediatek.gnss.nonframeworklbs", // MTK non-framework LBS
+            // Stock note app (replaced by other note-taking flows)
+            "com.android.note",
+            // Stock Chromium browser
+            "org.chromium.chrome",
             // SIM tool kit
             "com.android.stk",
             // Snake — now built into the launcher as a virtual app
