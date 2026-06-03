@@ -29,7 +29,6 @@ import com.offlineinc.dumbdownlauncher.launcher.LauncherController
 import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.model.AppItem
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
-import com.offlineinc.dumbdownlauncher.storage.SpotifyResetNotificationManager
 import com.offlineinc.dumbdownlauncher.ui.AppListScreen
 
 class AllAppsActivity : AppCompatActivity() {
@@ -348,10 +347,12 @@ class AllAppsActivity : AppCompatActivity() {
                         }
                     } else if (item.packageName == "com.spotify.music") {
                         // Long-press hard-reset for Spotify. Runs
-                        // `pm clear com.spotify.music` via root and posts
-                        // a shade notification once it completes that
-                        // tap-launches Spotify so the user is one click
-                        // from the login screen.
+                        // `pm clear com.spotify.music` via root. Result
+                        // is surfaced via Toast only — no shade
+                        // notification, because the user explicitly
+                        // triggered the action a moment ago and a
+                        // lingering notification would just be noise
+                        // for an action they already know happened.
                         //
                         // Why this exists: the nightly
                         // [com.offlineinc.dumbdownlauncher.storage.SpotifyOfflineCleanupWorker]
@@ -392,16 +393,12 @@ class AllAppsActivity : AppCompatActivity() {
                                 proc.waitFor() == 0
                             }.getOrDefault(false)
                             withContext(Dispatchers.Main) {
-                                if (ok) {
-                                    SpotifyResetNotificationManager
-                                        .notifyReset(applicationContext)
-                                } else {
-                                    Toast.makeText(
-                                        this@AllAppsActivity,
-                                        "Spotify reset failed (root unavailable?)",
-                                        Toast.LENGTH_LONG,
-                                    ).show()
-                                }
+                                Toast.makeText(
+                                    this@AllAppsActivity,
+                                    if (ok) "Spotify reset — log in again on next open"
+                                    else "Spotify reset failed (root unavailable?)",
+                                    Toast.LENGTH_LONG,
+                                ).show()
                             }
                         }
                     } else if (item.packageName == CHECK_UPDATES) {
