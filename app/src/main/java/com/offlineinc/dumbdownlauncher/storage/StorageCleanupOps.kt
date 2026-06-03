@@ -73,9 +73,37 @@ object StorageCleanupOps {
      */
     const val SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES: Long = 1024L * 1024L * 1024L  // 1 GB
 
-    /** Filesystem path of Spotify's combined cache + offline-download store. */
+    /**
+     * Filesystem path of Spotify's content-addressable audio chunks —
+     * the only part of `spotifycache/` that actually grows past ~1 GB,
+     * and the only part safe to wipe externally.
+     *
+     * **Critically scoped to the `Storage/` subdir, not the parent
+     * `spotifycache/`.** The parent dir contains four conceptually
+     * distinct things, only one of which is safe to nuke:
+     *
+     *  - `Storage/<hex>/<...>.file` — content-addressable audio chunks
+     *    (this dir). Both streaming cache and user-marked offline
+     *    downloads live here; inseparable externally (see
+     *    [SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES]).
+     *  - `Users/<userid>/primary.ldb`, `metadata_cache.bnk` —
+     *    user-session / auth state LevelDB. Wiping this signs the user
+     *    out; next bootstrap fails with `AuthErrorCode: 15` and the
+     *    only recovery is `pm clear com.spotify.music` + re-login.
+     *  - `public.ldb`, `offline.bnk` — global LevelDB + offline-download
+     *    index. KB-scale but load-bearing for session restore.
+     *  - `Videos/<...>.uid` — video stubs. Tiny.
+     *
+     * An earlier version of this constant pointed at the parent
+     * `spotifycache/` and the nightly worker's `find -mindepth 1 -delete`
+     * was nuking session state on every device that crossed the 1 GB
+     * threshold (auth dropped overnight; Spotify wouldn't log back in
+     * without `pm clear`). Narrowing to `Storage/` reclaims the same
+     * bytes — the other three categories are KBs at most — while
+     * leaving auth intact.
+     */
     private const val SPOTIFY_CACHE_DIR =
-        "/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache"
+        "/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/Storage"
 
     /** Android package name for AntennaPod. */
     private const val ANTENNAPOD_PKG = "de.danoeh.antennapod"

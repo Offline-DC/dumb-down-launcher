@@ -154,7 +154,7 @@ Per-package totals from `StorageStatsManager.queryStatsForPackage(UUID_DEFAULT, 
 | Row | Source |
 |---|---|
 | Podcasts | scoped `du` of `/data/data/de.danoeh.antennapod/cache/` |
-| Spotify offline | scoped `du` of `/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/` (Device-Encrypted storage, root only — we have it) |
+| Spotify offline | scoped `du` of `/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/Storage/` — the audio-chunk subdir only, **not** the parent `spotifycache/`. Wiping the parent kills `Users/<userid>/primary.ldb` (auth state) and logs the user out; `Storage/` holds the only part that actually grows past 1 GB. Device-Encrypted, root only — we have it |
 | Apple Music offline | size from heuristic `find` matching audio extensions under `/data/data/com.apple.android.music/files/` (audit didn't fully localize the offline dir) |
 | App caches | sum of `StorageStats.cacheBytes` across installed packages — no `du` |
 
@@ -163,7 +163,7 @@ Per-package totals from `StorageStatsManager.queryStatsForPackage(UUID_DEFAULT, 
 | Button | Underlying op | Logs out? | Cost to user |
 |---|---|---|---|
 | Clear podcasts | `find /data/data/de.danoeh.antennapod/cache -type f -delete` | no | episodes re-download on play |
-| Clear Spotify offline | `find /data/user_de/0/com.spotify.music/.../spotifycache -type f -delete` | no | Wi-Fi re-download |
+| Clear Spotify offline | `find /data/user_de/0/com.spotify.music/.../spotifycache/Storage -mindepth 1 -delete` | no | Wi-Fi re-download |
 | Clear Apple Music offline | `find … -delete` on Apple Music offline dir | no | Wi-Fi re-download |
 | Clear app caches | `pm trim-caches 99999999999` | no | UI thumbnails + AntennaPod episodes (warned in dialog) |
 
@@ -226,7 +226,7 @@ The launcher update will ship the workers and the "Free up space" screen, but fo
 - `adb shell su -c 'swapoff /data/swapfile && rm -f /data/swapfile'` — instantly frees 256 MB. The new `remove_swap_256m_v1` migration will do this automatically once the next launcher build ships; this is the manual version.
 - `adb shell pm trim-caches 99999999999` — instantly clears every app's cache. Same op the "Clear app caches" button will run.
 - `adb shell su -c 'find /data/data/com.openbubbles.messaging/app_flutter/attachments -mindepth 1 -delete'` — manual equivalent of the OpenBubbles attachment cleanup (frees ~78 MB on the audit device).
-- `adb shell su -c 'find /data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache -type f -delete'` — manual Spotify offline wipe (~109 MB).
+- `adb shell su -c 'find /data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/Storage -mindepth 1 -delete'` — manual Spotify offline wipe (~109 MB). Scoped to the `Storage/` subdir to avoid wiping `Users/<userid>/primary.ldb` (auth state) — wiping the parent `spotifycache/` logs the user out and the next bootstrap fails with `AuthErrorCode: 15`.
 - `adb shell su -c 'find /data/data/de.danoeh.antennapod/cache -type f -delete'` — manual AntennaPod episode wipe (~105 MB).
 - In WhatsApp on-device: Settings → Storage and data → Manage storage → wipe "Forwarded many times" and any chat over 50 MB. (Cosmetic on the audit device since `/sdcard/...WhatsApp/Media` is already only 10 MB, but useful on phones with heavy WhatsApp users.)
 - In AntennaPod on-device: Settings → Network → Automatic Download → off. Not strictly needed once the nightly cache trim is exposed in the UI, but reduces background data.

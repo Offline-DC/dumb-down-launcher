@@ -13,8 +13,8 @@ import java.util.concurrent.TimeUnit
 private const val TAG = "SpotifyOfflineWorker"
 
 /**
- * Nightly **size-gated** wipe of Spotify's on-disk cache at
- * `/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache`.
+ * Nightly **size-gated** wipe of Spotify's on-disk audio chunk store at
+ * `/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/Storage`.
  *
  * Why nightly auto: this dir grows to 1.3 GB on real devices via streaming
  * cache (just-listened tracks Spotify decided to keep), and Spotify
@@ -24,12 +24,22 @@ private const val TAG = "SpotifyOfflineWorker"
  * cache reached 229 MB within one listening session of a 50 MB cap). See
  * STORAGE_PLAN.md §0.3.
  *
- * Why size-gated: the cache directory is a content-addressable store —
- * `Storage/<hex>/` holds both streaming cache and user-marked offline
- * downloads as hash-named chunks, distinguishable only by Spotify's
- * internal LevelDB. An external `find -delete` can't tell them apart.
- * Probing `offline.bnk` for size deltas after a download was inconclusive
- * (it stayed at 7901 bytes regardless), so the size gate is the chosen
+ * Why scoped to `Storage/` and not the parent `spotifycache/`: the parent
+ * also contains `Users/<userid>/primary.ldb` (Spotify's auth/session
+ * LevelDB), `public.ldb`, and `offline.bnk` — wiping any of those signs
+ * the user out and the next bootstrap fails with `AuthErrorCode: 15`
+ * (the only recovery is `pm clear` + re-login). The audio chunks that
+ * actually drive the GB-scale bloat all live under `Storage/<hex>/`, so
+ * narrowing the wipe to that subdir recovers the same bytes without
+ * touching session state. See [StorageCleanupOps.SPOTIFY_CACHE_DIR]
+ * doc-comment for the full breakdown of `spotifycache/`'s contents.
+ *
+ * Why size-gated: `Storage/<hex>/` is a content-addressable store and
+ * holds both streaming cache and user-marked offline downloads as
+ * hash-named chunks, distinguishable only by Spotify's internal
+ * LevelDB. An external `find -delete` can't tell them apart. Probing
+ * `offline.bnk` for size deltas after a download was inconclusive (it
+ * stayed at 7901 bytes regardless), so the size gate is the chosen
  * compromise:
  *
  *  - Cache under [StorageCleanupOps.SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES]
