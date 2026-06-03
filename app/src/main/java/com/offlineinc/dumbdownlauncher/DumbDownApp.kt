@@ -87,6 +87,16 @@ class DumbDownApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+
+        // Rolling 24-hour diagnostic logcat. Off by default; user opts
+        // in by long-pressing "weather" in All Apps (mirrors the
+        // long-press-on-updates beta-tester toggle). The flag lives in
+        // shared_prefs/reboot_logging_prefs.xml so it survives reboots —
+        // re-arm the foreground service here so the rolling buffer
+        // continues to capture across restarts. No-op when opt-in is
+        // off. See diagnostics/RebootLoggingService.kt.
+        com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
+
         UpdateCheckWorker.schedule(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.

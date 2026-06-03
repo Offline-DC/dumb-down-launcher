@@ -312,6 +312,39 @@ class AllAppsActivity : AppCompatActivity() {
                                 Toast.LENGTH_SHORT,
                             ).show()
                         }
+                    } else if (item.packageName == WEATHER) {
+                        // Diagnostic logging opt-in/out toggle. Mirrors the
+                        // long-press-on-updates beta-tester toggle below.
+                        // Flips the runtime store flag, then starts or
+                        // stops the foreground service — which owns the
+                        // rolling 24-hour logcat tail and posts the
+                        // "Diagnostic logs being collected" notification
+                        // for as long as collection is on. See
+                        // diagnostics/RebootLoggingService.kt for the
+                        // service contract, and DumbDownApp.onCreate for
+                        // the boot re-arm path.
+                        val store = com.offlineinc.dumbdownlauncher.diagnostics
+                            .RebootLoggingStore(this@AllAppsActivity)
+                        val nowEnabled = !store.enabled
+                        store.enabled = nowEnabled
+                        if (nowEnabled) {
+                            store.enabledSinceMs = System.currentTimeMillis()
+                            com.offlineinc.dumbdownlauncher.diagnostics
+                                .RebootLoggingService.startIfEnabled(applicationContext)
+                            Toast.makeText(
+                                this@AllAppsActivity,
+                                "diagnostic logging on — rolling 24h logcat being collected",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        } else {
+                            com.offlineinc.dumbdownlauncher.diagnostics
+                                .RebootLoggingService.stop(applicationContext)
+                            Toast.makeText(
+                                this@AllAppsActivity,
+                                "diagnostic logging off",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
                     } else if (item.packageName == CHECK_UPDATES) {
                         // Beta tester opt-in/out toggle. The AppListScreen
                         // long-press fires after ~300 ms of D-pad center hold;
