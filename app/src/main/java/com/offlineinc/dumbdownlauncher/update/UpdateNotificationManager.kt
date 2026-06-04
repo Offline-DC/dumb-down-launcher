@@ -20,6 +20,7 @@ object UpdateNotificationManager {
     private const val BETA_CHANNEL_ID = "beta_reminders"
     const val NOTIFICATION_ID_LAUNCHER = 1001
     const val NOTIFICATION_ID_SNAKE = 1003
+    const val NOTIFICATION_ID_OPENBUBBLES = 1004
     /**
      * Daily reminder posted by
      * [com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker].
@@ -181,13 +182,39 @@ object UpdateNotificationManager {
     private fun notificationIdFor(appKey: String) = when (appKey) {
         "dumb-down-launcher" -> NOTIFICATION_ID_LAUNCHER
         "snake" -> NOTIFICATION_ID_SNAKE
+        "openbubbles-messaging" -> NOTIFICATION_ID_OPENBUBBLES
         else -> NOTIFICATION_ID_LAUNCHER
     }
 
     private fun displayNameFor(appKey: String) = when (appKey) {
         "dumb-down-launcher" -> "Dumb Launcher"
         "snake" -> "Snake"
+        "openbubbles-messaging" -> "OpenBubbles"
         else -> appKey
+    }
+
+    /**
+     * Replace the "Update available" notification for [appKey] with a "needs
+     * Wi-Fi" prompt. Posted to the same notification ID so it overwrites the
+     * tappable update tile in the shade — the user sees one consistent slot
+     * for that app's update state. Auto-cancels so it disappears once tapped;
+     * the next periodic update check will re-post the regular tile if the
+     * update is still pending.
+     */
+    fun notifyWifiRequired(context: Context, appKey: String) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationId = notificationIdFor(appKey)
+        val appDisplayName = displayNameFor(appKey)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle("Connect to Wi-Fi to update")
+            .setContentText("$appDisplayName update needs Wi-Fi — connect, then tap again")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(notificationId, notification)
     }
 
     fun cancel(context: Context, notificationId: Int) {

@@ -77,6 +77,25 @@ class UpdateCheckWorker(
                 }
             }
 
+            // Check OpenBubbles messaging update (only if installed). Mirrors
+            // the snake path — we only nudge the user when the app is actually
+            // on the device, since the launcher itself never installs it from
+            // scratch.
+            val openBubblesInfo = latest["openbubbles-messaging"]
+            if (openBubblesInfo != null) {
+                val installedCode = getInstalledVersionCode("com.openbubbles.messaging")
+                if (installedCode != null && openBubblesInfo.versionCode > installedCode) {
+                    UpdateNotificationManager.notify(
+                        context = context,
+                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
+                        appKey = "openbubbles-messaging",
+                        appDisplayName = "OpenBubbles",
+                        versionName = openBubblesInfo.versionName,
+                        downloadUrl = openBubblesInfo.downloadUrl,
+                    )
+                }
+            }
+
             Result.success()
         } catch (_: Exception) {
             Result.retry()
@@ -160,6 +179,25 @@ class UpdateCheckWorker(
                             appDisplayName = "Snake",
                             versionName = snakeInfo.versionName,
                             downloadUrl = snakeInfo.downloadUrl,
+                        )
+                        found = true
+                    }
+                }
+
+                val openBubblesInfo = latest["openbubbles-messaging"]
+                if (openBubblesInfo != null) {
+                    val installedCode = try {
+                        val info = context.packageManager.getPackageInfo("com.openbubbles.messaging", 0)
+                        PackageInfoCompat.getLongVersionCode(info).toInt()
+                    } catch (_: Exception) { null }
+                    if (installedCode != null && openBubblesInfo.versionCode > installedCode) {
+                        UpdateNotificationManager.notify(
+                            context = context,
+                            notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
+                            appKey = "openbubbles-messaging",
+                            appDisplayName = "OpenBubbles",
+                            versionName = openBubblesInfo.versionName,
+                            downloadUrl = openBubblesInfo.downloadUrl,
                         )
                         found = true
                     }
