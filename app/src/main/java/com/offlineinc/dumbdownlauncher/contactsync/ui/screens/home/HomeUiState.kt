@@ -3,6 +3,7 @@ package com.offlineinc.dumbdownlauncher.contactsync.ui.screens.home
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.offlineinc.dumbdownlauncher.contactsync.ContactSyncNotificationManager
 import com.offlineinc.dumbdownlauncher.contactsync.icloud.ServiceLocator
 import com.offlineinc.dumbdownlauncher.contactsync.icloud.hasContactsPermissions
 import kotlinx.coroutines.CancellationException
@@ -192,19 +193,25 @@ class HomeViewModel : ViewModel() {
 
         viewModelScope.launch {
             _ui.update { it.copy(isSyncing = true, error = null, status = "syncing...") }
+            ContactSyncNotificationManager.notifyInProgress(ctx.applicationContext)
 
             try {
                 val baseCount = _ui.value.totalContactCount
                 withContext(Dispatchers.IO) {
                     ServiceLocator.syncRepository(ctx).syncWithConnectedWebSocket(
                         onProgress = { smartImported ->
+                            val running = baseCount + smartImported
                             _ui.update {
                                 it.copy(
-                                    totalContactCount = baseCount + smartImported,
+                                    totalContactCount = running,
                                     contactCountLoaded = true,
                                     canClose = true
                                 )
                             }
+                            // Keep the shade entry's subhead in sync with the page
+                            ContactSyncNotificationManager.notifyInProgress(
+                                ctx.applicationContext, running
+                            )
                         },
                         onCanClose = {
                             _ui.update { it.copy(canClose = true) }
@@ -215,6 +222,7 @@ class HomeViewModel : ViewModel() {
                 val store = ServiceLocator.contactSyncStore(ctx.applicationContext)
                 val total = readLocalContactCount(ctx)
                 Log.i(TAG, "[ContactSync] syncNow: SUCCESS — localTotal=$total, lastSync=${store.lastSyncMillis}")
+                ContactSyncNotificationManager.notifyComplete(ctx.applicationContext, total)
                 _ui.update {
                     it.copy(
                         isSyncing = false,
@@ -230,6 +238,7 @@ class HomeViewModel : ViewModel() {
                     Log.w(TAG, "[ContactSync] syncNow: peer disconnected during sync — treating as success", t)
                     val store = ServiceLocator.contactSyncStore(ctx.applicationContext)
                     val total = readLocalContactCount(ctx)
+                    ContactSyncNotificationManager.notifyComplete(ctx.applicationContext, total)
                     _ui.update {
                         it.copy(
                             isSyncing = false,
@@ -242,6 +251,7 @@ class HomeViewModel : ViewModel() {
                     }
                 } else {
                     Log.e(TAG, "[ContactSync] syncNow: FAILED", t)
+                    ContactSyncNotificationManager.cancel(ctx.applicationContext)
                     _ui.update {
                         it.copy(
                             isSyncing = false, isConnected = false,
