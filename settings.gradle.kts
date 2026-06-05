@@ -29,9 +29,10 @@ include(":gmessages")
 // dumb-down-launcher's :gmessages module can implement MessageRepository
 // directly without anyone publishing to Maven first.
 //
-// Layout assumption: ../dpad-messenger relative to this repo. Jack's
-// machine: ~/repos/dpad-messenger sitting next to ~/repos/dumb-down-launcher.
-includeBuild("../dpad-messenger") {
+// Layout assumption: the dpad-messenger UI library lives in the matrix-app
+// repo (github.com/Offline-DC/matrix-app) cloned NEXT to this repo:
+// ~/repos/matrix-app/dpad-messenger alongside ~/repos/dumb-down-launcher.
+includeBuild("../matrix-app/dpad-messenger") {
     dependencySubstitution {
         substitute(module("com.offline.dpadmessenger:library"))
             .using(project(":library"))
