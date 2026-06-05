@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Library module — INTERNET permission is required for the gmessages
+         relay WebSocket + RPC calls. The hosting app (dumb-down-launcher)
+         also has android.permission.INTERNET, but library modules need to
+         declare what they require so consumers see a complete picture. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

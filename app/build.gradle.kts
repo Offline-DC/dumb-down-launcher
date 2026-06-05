@@ -68,6 +68,13 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
 
+    // In-app Google Messages messenger module (Phase A: mock backend; later
+    // phases: real Google Messages protocol). Lives in this repo at
+    // :gmessages. Hosts MessengerActivity, which the launcher opens when
+    // the user picks "android" as their smart-txt platform — replacing the
+    // previous "open messages.google.com/web in Chrome" behaviour.
+    implementation(project(":gmessages"))
+
     // Compose
     implementation(platform(libs.androidx.compose.bom))
     implementation("androidx.compose.material:material-icons-extended")

@@ -102,6 +102,21 @@
             android:name=".notifications.ui.NotificationsActivity"
             android:exported="false" />
 
+        <!-- In-app Google Messages messenger (replaces the old
+             "open messages.google.com/web in Chrome" path for the
+             "android" smart-txt platform). Phase A backs this with mock
+             data; Phase B+ wires the real Google Messages protocol.
+             singleTask + clearTaskOnLaunch so re-launching from the home
+             grid always lands on the room list rather than wherever the
+             user left off — matches the muscle memory the launcher's
+             other apps already have. -->
+        <activity
+            android:name=".messenger.MessengerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
         <activity
             android:name=".contactsync.ContactSyncActivity"
             android:exported="false"

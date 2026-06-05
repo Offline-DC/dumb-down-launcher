@@ -686,9 +686,22 @@ class MainActivity : AppCompatActivity() {
     private fun launchSmartTxtForPlatform(platform: String) {
         when (platform) {
             "android" -> {
-                MouseAccessibilityService.setMouseEnabled(this, true)
-                Log.d("ONBOARDING", "Launching Google Messages web for Android")
-                openUrlInChrome("https://messages.google.com/web")
+                // Replaces the legacy "open messages.google.com/web in Chrome
+                // Custom Tabs" path — that left users at a desktop-style web
+                // app on a 240x320 screen with no DPAD support. The in-app
+                // MessengerActivity hosts the dpad-messenger UI library, so
+                // the chat works natively with the hardware D-pad.
+                //
+                // Mouse stays disabled: the messenger handles all navigation
+                // via DPAD, so we don't need the mouse-cursor accessibility
+                // service the web-based path required.
+                Log.d("ONBOARDING", "Launching in-app Google Messages messenger")
+                val intent = Intent(
+                    this,
+                    com.offlineinc.dumbdownlauncher.messenger.MessengerActivity::class.java,
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                overridePendingTransition(0, 0)
             }
             "ios" -> {
                 Log.d("ONBOARDING", "Launching OpenBubbles for iOS")
@@ -701,9 +714,15 @@ class MainActivity : AppCompatActivity() {
                     startActivity(intent)
                     overridePendingTransition(0, 0)
                 } else {
-                    Log.w("ONBOARDING", "OpenBubbles not installed — falling back to Google Messages web")
-                    MouseAccessibilityService.setMouseEnabled(this, true)
-                    openUrlInChrome("https://messages.google.com/web")
+                    // iOS fallback: still use the in-app messenger — beats
+                    // dropping the user into a web view they can't drive.
+                    Log.w("ONBOARDING", "OpenBubbles not installed — falling back to in-app messenger")
+                    val fallback = Intent(
+                        this,
+                        com.offlineinc.dumbdownlauncher.messenger.MessengerActivity::class.java,
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(fallback)
+                    overridePendingTransition(0, 0)
                 }
             }
         }
