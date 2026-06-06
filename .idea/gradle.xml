@@ -7,11 +7,11 @@
         <compositeConfiguration>
           <compositeBuild compositeDefinitionSource="SCRIPT">
             <builds>
-              <build path="$PROJECT_DIR$/../dpad-messenger" name="dpad-messenger">
+              <build path="$PROJECT_DIR$/../matrix-app/dpad-messenger" name="dpad-messenger">
                 <projects>
-                  <project path="$PROJECT_DIR$/../dpad-messenger" />
-                  <project path="$PROJECT_DIR$/../dpad-messenger/demo" />
-                  <project path="$PROJECT_DIR$/../dpad-messenger/library" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger/demo" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger/library" />
                 </projects>
               </build>
             </builds>
@@ -22,12 +22,12 @@
         <option name="gradleJvm" value="#GRADLE_LOCAL_JAVA_HOME" />
         <option name="modules">
           <set>
-            <option value="$PROJECT_DIR$/../dpad-messenger" />
-            <option value="$PROJECT_DIR$/../dpad-messenger/demo" />
-            <option value="$PROJECT_DIR$/../dpad-messenger/library" />
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
             <option value="$PROJECT_DIR$/gmessages" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger/demo" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger/library" />
           </set>
         </option>
       </GradleProjectSettings>

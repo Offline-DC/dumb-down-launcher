@@ -1,11 +1,16 @@
 package com.offlineinc.dumbdownlauncher.messenger
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import com.offline.dpadmessenger.ui.theme.DpadMessengerTheme
 import com.offlineinc.dumbdownlauncher.gmessages.ui.GoogleMessagesApp
 
@@ -29,18 +34,74 @@ import com.offlineinc.dumbdownlauncher.gmessages.ui.GoogleMessagesApp
  * once paired it shows the chat UI backed by the Google Messages
  * repository. The swap happens behind the [com.offline.dpadmessenger.data
  * .MessageRepository] interface, so the Activity stays a thin shell.
+ *
+ * Base class is [AppCompatActivity] (not ComponentActivity) on purpose:
+ * androidx.activity 1.9+ auto-calls enableEdgeToEdge() inside
+ * ComponentActivity.onCreate(), which draws content behind the system bars
+ * and leaves a black navigation-bar strip at the bottom on these devices.
+ * AppCompatActivity keeps traditional window fitting, so the content fills
+ * the screen without that gap. (All the other launcher activities are
+ * AppCompatActivity for the same reason.)
  */
-class MessengerActivity : ComponentActivity() {
+class MessengerActivity : AppCompatActivity() {
+
+    private val requestNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
+
+    /** Conversation id from a tapped message notification (null = none).
+     *  Second = monotonically bumped key so repeat taps re-navigate. */
+    private val deepLinkRoom = androidx.compose.runtime.mutableStateOf<Pair<String, Long>?>(null)
+
+    private fun consumeDeepLink(intent: android.content.Intent?) {
+        val convId = intent?.getStringExtra(EXTRA_CONVERSATION_ID) ?: return
+        deepLinkRoom.value = convId to System.nanoTime()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        consumeDeepLink(intent)
+
+        // Incoming texts post system notifications; on Android 13+ that needs
+        // the runtime POST_NOTIFICATIONS grant. Ask once on open if missing.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         setContent {
-            DpadMessengerTheme {
+            // Force light — the launcher globally sets MODE_NIGHT_YES (see
+            // DumbDownApp.onCreate), but the messenger should look like a
+            // bright, classic texting app.
+            DpadMessengerTheme(darkTheme = false) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    GoogleMessagesApp()
+                    val deepLink = deepLinkRoom.value
+                    GoogleMessagesApp(
+                        initialRoomId = deepLink?.first,
+                        initialRoomKey = deepLink?.second,
+                    )
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        // Notification tapped while this Activity already exists.
+        consumeDeepLink(intent)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // The session keeps running in the launcher process; tell it the UI
+        // is gone so the previously-open thread notifies like any other.
+        com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesRepository.notifyUiHidden()
+    }
+
+    companion object {
+        /** Must match GoogleMessagesNotifier.EXTRA_CONVERSATION_ID (the
+         *  notifier targets this Activity by name, not by class). */
+        const val EXTRA_CONVERSATION_ID = "gmessages.conversation_id"
     }
 }

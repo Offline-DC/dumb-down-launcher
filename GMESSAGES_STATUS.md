@@ -63,23 +63,78 @@ To re-test pairing from scratch: unpair on the phone (Settings → Device
 pairing) and `adb shell pm clear com.offlineinc.dumbdownlauncher` (wipes the
 account store).
 
-## Next phase — real messages (not started)
+## Real messages — IMPLEMENTED (needs on-device validation)
 
-Replace `InMemoryMessageRepository` in `GoogleMessagesRepository.create()`
-with a real repo speaking the authenticated session:
-1. Long-poll with the PAIRED token (from account store); handle ack counts.
-2. Session RPCs over `Messaging/SendMessage` (pblite `OutgoingRPCMessage`):
-   LIST_CONVERSATIONS / LIST_MESSAGES / SEND_MESSAGE / MESSAGE_UPDATES.
-   Payloads encrypted AES-256-CTR + HMAC-SHA256 with the stored QR keys —
-   exact format in `GMCrypto` docs + mautrix `crypto/aesctr.go`
-   (ciphertext || IV(16) || HMAC(32), HMAC over ciphertext+IV).
-3. Token refresh via `Registration/RegisterRefresh` (needs ECDSA signature —
-   key is in the account store; see mautrix `client.go refreshAuthToken`).
-4. Map conversations/messages protos (`conversations.proto` in
-   mautrix-gmessages) into `MessageRepository`.
+`GoogleMessagesRepository.create()` now returns a real
+`GoogleMessagesMessageRepository` (backed by `GoogleMessagesSessionClient`)
+whenever a current-schema pairing exists. The mock is only a fallback. The
+conversation list starts **empty** and fills from the phone.
+
+New files (all in :gmessages):
+- `GMSessionProto.kt` — session wire formats: OutgoingRPCMessage / OutgoingRPCData
+  / AckMessageRequest / RegisterRefreshRequest envelopes (pblite), plus binary
+  parsers for RPCMessageData, UpdateEvents, Conversation, Message, Participant,
+  List{Conversations,Messages}Response, SendMessageResponse. Field numbers from
+  mautrix `rpc/client/conversations/events.proto`.
+- `GoogleMessagesSessionClient.kt` — the live session. Authenticated
+  ReceiveMessages long-poll (reconnect loop) → decrypt → emit
+  `SessionEvent.{ConversationsUpdated,MessagesUpdated,AuthExpired}`. Sends
+  session RPCs over `Messaging/SendMessage`, batches acks every 5s
+  (`Messaging/AckMessages`), refreshes the tachyon token via
+  `Registration/RegisterRefresh` (ECDSA-signed, ~1h before expiry).
+- `GoogleMessagesMessageRepository.kt` — maps GM protos → dpad-messenger UI
+  models (Conversation→Room, Message→Message µs→ms, Participant→User).
+  Optimistic outgoing sends; de-dups the delivered echo by tmpID/messageID.
+
+Crypto: `GMCrypto.encryptPayload` / `decryptPayload` —
+`ciphertext || IV(16) || HMAC-SHA256(32)`, HMAC over ciphertext+IV
+(mautrix `crypto/aesctr.go`). Verified by unit tests.
+
+Account store bumped to **schema v2** (now persists full Device identities +
+token TTL, needed for session RPCs). `load()` returns null for v1 pairings, so
+**anyone paired before this change must re-pair** (the UI will show the QR
+again automatically).
+
+### What to test on device
+```
+./gradlew :gmessages:testDebugUnitTest   # 30 tests: protos + crypto + pblite
+./gradlew :app:installDebug
+adb logcat -c && adb logcat -s GMSession:* GMRepo:* GMPairing:*
+```
+Open smart txt (already paired). Expect:
+- `session long-poll #1 open`, then conversations populate the (initially
+  empty) list as the phone pushes state / responds to LIST_CONVERSATIONS.
+- Open a thread → recent messages appear; send a reply → optimistic bubble
+  flips SENDING→SENT and the phone's echo replaces it.
+- Incoming texts arrive live while the screen is open.
+
+If conversations don't appear: check the decrypt path — log the first
+`DataEvent` element; a decrypt failure means the AES/HMAC keys or the
+`ciphertext||IV||HMAC` layout is off. If sends 400, inspect the
+`OutgoingRPCMessage` envelope (most likely the Device/auth indices).
+
+### Also implemented since
+- **Replies** end-to-end (SendMessageRequest.reply outbound, replyMessage
+  field 21 inbound → quote headers).
+- **Reactions** end-to-end: SEND_REACTION (action 38) with the mautrix
+  emoji↔EmojiType mapping; Message.reactions (field 19) parsed inbound;
+  optimistic toggle in the repository ("me" = conversation
+  defaultOutgoingID).
+- **Notifications**: incoming texts post MessagingStyle notifications
+  (suppressed for backfill + the on-screen thread).
+- **Foreground service** (`GoogleMessagesForegroundService`, :gmessages
+  manifest): the session/repository is a process singleton shared by UI +
+  service; the service pins the process with a MIN-importance "Connected"
+  notification so texts notify with the UI fully closed. Started from
+  DumbDownApp.onCreate (covers boot) and on messenger open/pair.
+
+### Not yet done
+Edits, deletes, read receipts beyond mark-read, media send/download, and
+LIST_MESSAGES cursor pagination (`loadOlder` fires a fixed-count refetch,
+returns no-more). Tombstone/system rows are skipped.
 
 ## Test commands
 
 ```
-./gradlew :gmessages:testDebugUnitTest   # X25519 + protobuf + pblite vectors
+./gradlew :gmessages:testDebugUnitTest   # X25519 + protobuf + pblite + session + crypto
 ```

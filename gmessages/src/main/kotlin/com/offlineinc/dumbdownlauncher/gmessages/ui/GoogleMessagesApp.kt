@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.offline.dpadmessenger.ui.DpadMessengerApp
+import com.offline.dpadmessenger.ui.util.TimeFormatPreference
 import com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesAccountStore
 import com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesPairing
 import com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesPairingResult
@@ -31,7 +32,13 @@ import com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesRepository
  * plumbing needed, just a state swap.
  */
 @Composable
-fun GoogleMessagesApp(modifier: Modifier = Modifier) {
+fun GoogleMessagesApp(
+    modifier: Modifier = Modifier,
+    /** Conversation to open immediately (notification tap), plus a per-tap
+     *  key so repeat taps on the same thread re-navigate. */
+    initialRoomId: String? = null,
+    initialRoomKey: Any? = null,
+) {
     val context = LocalContext.current
     val store = remember { GoogleMessagesAccountStore(context) }
 
@@ -39,8 +46,53 @@ fun GoogleMessagesApp(modifier: Modifier = Modifier) {
     var paired by remember { mutableStateOf(store.isPaired()) }
 
     if (paired) {
+        // The repository is a process-scoped singleton — one session/long-poll
+        // total, shared with the session DumbDownApp starts at launch. It
+        // keeps running (and notifying) after this UI closes because the
+        // launcher process is long-lived; no foreground service needed.
         val repository = remember { GoogleMessagesRepository.create(context) }
-        DpadMessengerApp(repository = repository, modifier = modifier)
+        var autoDelete by remember { mutableStateOf(GoogleMessagesRepository.isAutoDeleteEnabled()) }
+        // Clock format: 12-hour by default, persisted across launches, applied
+        // app-wide via TimeFormatPreference (Compose state — flips instantly).
+        val settingsPrefs = remember {
+            context.applicationContext.getSharedPreferences("gmessages_settings", android.content.Context.MODE_PRIVATE)
+        }
+        var use24Hour by remember {
+            val saved = settingsPrefs.getBoolean("use24HourTime", false)
+            TimeFormatPreference.use24Hour = saved
+            mutableStateOf(saved)
+        }
+        var readReceipts by remember { mutableStateOf(GoogleMessagesRepository.isReadReceiptsEnabled()) }
+        DpadMessengerApp(
+            repository = repository,
+            modifier = modifier,
+            onLogout = {
+                // Real logout: tear the session down, wipe the stored pairing,
+                // and drop back to the QR link screen for a fresh pairing.
+                GoogleMessagesRepository.shutdown()
+                store.clear()
+                GoogleMessagesPairing.reset()
+                paired = false
+            },
+            autoDeleteEnabled = autoDelete,
+            onAutoDeleteChange = { enabled ->
+                autoDelete = enabled
+                GoogleMessagesRepository.setAutoDeleteEnabled(enabled)
+            },
+            use24HourTime = use24Hour,
+            onUse24HourTimeChange = { enabled ->
+                use24Hour = enabled
+                TimeFormatPreference.use24Hour = enabled
+                settingsPrefs.edit().putBoolean("use24HourTime", enabled).apply()
+            },
+            readReceiptsEnabled = readReceipts,
+            onReadReceiptsChange = { enabled ->
+                readReceipts = enabled
+                GoogleMessagesRepository.setReadReceiptsEnabled(enabled)
+            },
+            initialRoomId = initialRoomId,
+            initialRoomKey = initialRoomKey,
+        )
         return
     }
 

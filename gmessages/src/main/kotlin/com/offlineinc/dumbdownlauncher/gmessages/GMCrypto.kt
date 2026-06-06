@@ -88,6 +88,41 @@ internal object GMCrypto {
         return cipher.doFinal(ciphertext)
     }
 
+    // --- Authenticated session payload encryption -------------------------
+    //
+    // Every encrypted RPC payload exchanged with the phone after pairing uses
+    // the AES/HMAC keys we generated for the QR. Wire format (mautrix
+    // `crypto/aesctr.go`):  ciphertext || IV(16) || HMAC-SHA256(32)
+    // where the HMAC is computed over ciphertext||IV with the HMAC key.
+
+    /** Encrypt an RPC payload for the phone: AES-256-CTR with a fresh random
+     *  IV, then append IV and HMAC. */
+    fun encryptPayload(aesKey: ByteArray, hmacKey: ByteArray, plaintext: ByteArray): ByteArray {
+        val iv = ByteArray(16).also(java.security.SecureRandom()::nextBytes)
+        val ciphertext = aesCtrEncrypt(aesKey, iv, plaintext)
+        val ctAndIv = ciphertext + iv
+        return ctAndIv + hmacSha256(hmacKey, ctAndIv)
+    }
+
+    /** Decrypt an RPC payload from the phone. Returns null if the data is too
+     *  short or the HMAC doesn't verify (tampered / wrong keys). */
+    fun decryptPayload(aesKey: ByteArray, hmacKey: ByteArray, data: ByteArray): ByteArray? {
+        if (data.size < 48) return null
+        val mac = data.copyOfRange(data.size - 32, data.size)
+        val ctAndIv = data.copyOfRange(0, data.size - 32)
+        if (!constantTimeEquals(hmacSha256(hmacKey, ctAndIv), mac)) return null
+        val iv = ctAndIv.copyOfRange(ctAndIv.size - 16, ctAndIv.size)
+        val ciphertext = ctAndIv.copyOfRange(0, ctAndIv.size - 16)
+        return aesCtrDecrypt(aesKey, iv, ciphertext)
+    }
+
+    private fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {
+        if (a.size != b.size) return false
+        var diff = 0
+        for (i in a.indices) diff = diff or (a[i].toInt() xor b[i].toInt())
+        return diff == 0
+    }
+
     private fun hmacSha256(key: ByteArray, data: ByteArray): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(key, "HmacSHA256"))

@@ -55,6 +55,10 @@ class GoogleMessagesPairingClient(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var longPollJob: Job? = null
 
+    /** The in-flight long-poll call, so QR regeneration can cancel its
+     *  blocking read instead of waiting for the next heartbeat. */
+    @Volatile private var currentCall: okhttp3.Call? = null
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.SECONDS) // long-poll: no read timeout
@@ -83,36 +87,58 @@ class GoogleMessagesPairingClient(context: Context) {
         }
         _state.value = GoogleMessagesPairingResult.Connecting
 
-        scope.launch {
+        // Pairing runs as repeated QR cycles: the relay pairing key Google
+        // hands us is short-lived, and a stale QR silently never pairs once it
+        // expires server-side. So we regenerate a fresh QR every QR_TTL_MS
+        // until the phone confirms (or we hit a fatal error / are cancelled),
+        // mirroring how the real Messages-for-web page refreshes its QR.
+        longPollJob = scope.launch {
             try {
-                // 1. Identity keypair + symmetric QR keys.
-                val kp = KeyPairGenerator.getInstance("EC").apply {
-                    initialize(ECGenParameterSpec("secp256r1"), SecureRandom())
-                }.generateKeyPair()
-                identityKeyPair = kp
-                val rng = SecureRandom()
-                aesKey = ByteArray(32).also(rng::nextBytes)
-                hmacKey = ByteArray(32).also(rng::nextBytes)
+                while (isActive) {
+                    // 1. Fresh identity keypair + symmetric QR keys per cycle —
+                    //    an expired QR's keys are useless, so don't reuse them.
+                    val kp = KeyPairGenerator.getInstance("EC").apply {
+                        initialize(ECGenParameterSpec("secp256r1"), SecureRandom())
+                    }.generateKeyPair()
+                    identityKeyPair = kp
+                    val rng = SecureRandom()
+                    aesKey = ByteArray(32).also(rng::nextBytes)
+                    hmacKey = ByteArray(32).also(rng::nextBytes)
 
-                // 2. RegisterPhoneRelay. publicKey.encoded is X.509/PKIX DER —
-                //    identical to Go's x509.MarshalPKIXPublicKey output.
-                val reqBody = GMPairingProto.registerPhoneRelayRequest(
-                    requestId = UUID.randomUUID().toString(),
-                    ecdsaPubX509 = kp.public.encoded,
-                )
-                val relay = registerPhoneRelay(reqBody)
-                tachyonAuthToken = relay.tachyonAuthToken
+                    // 2. RegisterPhoneRelay. publicKey.encoded is X.509/PKIX DER —
+                    //    identical to Go's x509.MarshalPKIXPublicKey output.
+                    val reqBody = GMPairingProto.registerPhoneRelayRequest(
+                        requestId = UUID.randomUUID().toString(),
+                        ecdsaPubX509 = kp.public.encoded,
+                    )
+                    val relay = registerPhoneRelay(reqBody)
+                    val token = relay.tachyonAuthToken
+                    tachyonAuthToken = token
 
-                // 3. Build + surface the real QR URL.
-                val urlData = GMPairingProto.urlData(relay.pairingKey, aesKey!!, hmacKey!!)
-                val qrUrl = GMPairingProto.QR_CODE_URL_BASE +
-                    Base64.encodeToString(urlData, Base64.NO_WRAP)
-                Log.d(TAG, "QR URL ready (${qrUrl.length} chars)")
-                _state.value = GoogleMessagesPairingResult.WaitingForScan(qrUrl)
+                    // 3. Build + surface the real QR URL.
+                    val urlData = GMPairingProto.urlData(relay.pairingKey, aesKey!!, hmacKey!!)
+                    val qrUrl = GMPairingProto.QR_CODE_URL_BASE +
+                        Base64.encodeToString(urlData, Base64.NO_WRAP)
+                    Log.d(TAG, "QR URL ready (${qrUrl.length} chars); valid ${QR_TTL_MS / 1000}s")
+                    _state.value = GoogleMessagesPairingResult.WaitingForScan(qrUrl)
 
-                // 4. Listen for the phone to confirm the pair.
-                listenForPairConfirmation()
+                    // 4. Listen for the pair, but only until this QR expires.
+                    //    Timeout → loop and regenerate a fresh QR.
+                    val outcome = kotlinx.coroutines.withTimeoutOrNull(QR_TTL_MS) {
+                        listenUntilPaired(token)
+                    }
+                    currentCall?.cancel() // tear down the in-flight long-poll
+                    when (outcome) {
+                        true -> return@launch // paired ✔ (_state already Paired)
+                        false -> { // fatal — token rejected
+                            _state.value = GoogleMessagesPairingResult.Failed("pairing token rejected")
+                            return@launch
+                        }
+                        null -> Log.d(TAG, "QR expired without a scan — regenerating")
+                    }
+                }
             } catch (t: Throwable) {
+                if (!isActive) return@launch
                 Log.e(TAG, "pairing failed", t)
                 _state.value = GoogleMessagesPairingResult.Failed(t.message ?: "pairing failed")
             }
@@ -122,6 +148,8 @@ class GoogleMessagesPairingClient(context: Context) {
     fun cancel() {
         longPollJob?.cancel()
         longPollJob = null
+        currentCall?.cancel()
+        currentCall = null
         identityKeyPair = null
         aesKey = null
         hmacKey = null
@@ -145,36 +173,35 @@ class GoogleMessagesPairingClient(context: Context) {
     }
 
     /**
-     * Open the ReceiveMessages long-poll and wait for the pair confirmation.
+     * Open ReceiveMessages long-polls and wait for the pair confirmation,
+     * reopening the stream until we get the pair (returns true), hit a fatal
+     * error (returns false), or the caller's timeout cancels us.
      *
      * The request and response are pblite (JSON-array protobuf), not binary
      * protobuf — sending binary here returns HTTP 400. The response is a
      * streamed JSON array whose elements are LongPollingPayloads; the pair
      * confirmation arrives as a PairEvent (bugleRoute 14) carrying an
      * RPCPairData. We stream-split, decode, persist, and emit Paired.
+     *
+     * @return true if paired, false if fatal (token rejected). Suspends
+     *         (looping) otherwise — the QR-expiry timeout breaks the loop.
      */
-    private fun listenForPairConfirmation() {
-        val token = tachyonAuthToken ?: return
-        longPollJob = scope.launch {
-            // The phone can take several seconds after "you're all set" to
-            // push the pair event, and Google closes idle long-poll
-            // connections. Reopen the stream until we get the pair, hit a
-            // fatal error, or are cancelled. Mirrors mautrix's doLongPoll loop.
-            var attempt = 0
-            while (isActive) {
-                attempt++
-                Log.d(TAG, "long-poll attempt #$attempt")
-                val fatal = runCatching { openLongPollOnce(token, attempt) }
-                    .getOrElse { t ->
-                        if (!isActive) return@launch
-                        Log.e(TAG, "long-poll attempt #$attempt threw", t)
-                        false // transient — retry
-                    }
-                if (fatal) return@launch
-                if (_state.value is GoogleMessagesPairingResult.Paired) return@launch
-                kotlinx.coroutines.delay(2000)
-            }
+    private suspend fun listenUntilPaired(token: ByteArray): Boolean {
+        var attempt = 0
+        while (coroutineContext.isActive) {
+            attempt++
+            Log.d(TAG, "long-poll attempt #$attempt")
+            val fatal = runCatching { openLongPollOnce(token, attempt) }
+                .getOrElse { t ->
+                    if (!coroutineContext.isActive) return false
+                    Log.e(TAG, "long-poll attempt #$attempt threw", t)
+                    false // transient — retry
+                }
+            if (_state.value is GoogleMessagesPairingResult.Paired) return true
+            if (fatal) return false
+            kotlinx.coroutines.delay(2000)
         }
+        return _state.value is GoogleMessagesPairingResult.Paired
     }
 
     /**
@@ -189,7 +216,11 @@ class GoogleMessagesPairingClient(context: Context) {
             .post(pbliteBody.toRequestBody(GMPairingProto.CONTENT_TYPE_PBLITE.toMediaType()))
             .applyRelayHeaders()
             .build()
-        http.newCall(req).execute().use { resp ->
+        // Track the call so the QR-expiry timeout can interrupt the blocking
+        // read (coroutine cancellation alone won't unblock okhttp's reader).
+        val call = http.newCall(req)
+        currentCall = call
+        call.execute().use { resp ->
             Log.d(TAG, "long-poll #$attempt HTTP ${resp.code} ${resp.header("content-type")}")
             if (!resp.isSuccessful) {
                 val body = resp.body?.string().orEmpty()
@@ -218,8 +249,9 @@ class GoogleMessagesPairingClient(context: Context) {
                         ?: continue
                     val account = GoogleMessagesAccount(
                         tachyonAuthToken = paired.tachyonAuthToken,
-                        browserSourceId = paired.browserSourceId,
-                        mobileSourceId = paired.mobileSourceId,
+                        tokenTtl = paired.tokenTtl,
+                        browser = paired.browser,
+                        mobile = paired.mobile,
                         ecdsaPrivatePkcs8 = identityKeyPair!!.private.encoded,
                         aesKey = aesKey!!,
                         hmacKey = hmacKey!!,
@@ -254,6 +286,12 @@ class GoogleMessagesPairingClient(context: Context) {
 
     companion object {
         private const val TAG = "GMPairing"
+
+        /** How long a single QR is offered before we regenerate a fresh one.
+         *  Google's relay pairing key is short-lived; refreshing well within
+         *  that window keeps linking reliable. 90s balances "QR stays scannable
+         *  long enough" against "don't show a dead QR". */
+        private const val QR_TTL_MS = 90_000L
     }
 }
 

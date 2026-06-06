@@ -1,6 +1,17 @@
 package com.offlineinc.dumbdownlauncher.gmessages
 
 /**
+ * A Device proto: { userID=1: int64, sourceID=2: string, network=3: string }.
+ * Public (top-level) because [GoogleMessagesAccount] persists both device
+ * identities and is itself public API of this module.
+ */
+data class GMDeviceInfo(
+    val userId: Long,
+    val sourceId: String,
+    val network: String,
+)
+
+/**
  * The specific Google Messages "Messages for web" pairing protobuf messages,
  * hand-encoded on top of [ProtoWriter] / [ProtoReader].
  *
@@ -33,9 +44,22 @@ internal object GMPairingProto {
         "https://instantmessaging-pa.googleapis.com/\$rpc/" +
             "google.internal.communications.instantmessaging.v1.Messaging"
     const val RECEIVE_MESSAGES_URL = "$MESSAGING_BASE/ReceiveMessages"
+    const val SEND_MESSAGE_URL = "$MESSAGING_BASE/SendMessage"
+    const val ACK_MESSAGES_URL = "$MESSAGING_BASE/AckMessages"
+
+    // NOTE: Registration lives on clients6.google.com, not googleapis.com
+    // (mautrix util/paths.go registrationBaseURL).
+    private const val REGISTRATION_BASE =
+        "https://instantmessaging-pa.clients6.google.com/\$rpc/" +
+            "google.internal.communications.instantmessaging.v1.Registration"
+    const val REGISTER_REFRESH_URL = "$REGISTRATION_BASE/RegisterRefresh"
 
     const val CONTENT_TYPE_PROTOBUF = "application/x-protobuf"
     const val CONTENT_TYPE_PBLITE = "application/json+protobuf"
+
+    /** Media up/download endpoint (download is a GET with the request base64'd
+     *  into the x-goog-download-metadata header). */
+    const val UPLOAD_MEDIA_URL = "https://instantmessaging-pa.googleapis.com/upload"
 
     // ConfigVersion { Year=3, Month=4, Day=5, V1=7, V2=9 } — current libgm config.
     private fun configVersion(): ProtoWriter = ProtoWriter()
@@ -135,19 +159,34 @@ internal object GMPairingProto {
     data class PairedResult(
         /** Long-lived bearer token for the authenticated session. */
         val tachyonAuthToken: ByteArray,
-        /** The primary phone's device id (Device.sourceID). */
-        val mobileSourceId: String,
-        /** Our device id assigned by the phone (Device.sourceID). */
-        val browserSourceId: String,
-    )
+        /** TokenData.TTL — token lifetime; echoed back as OutgoingRPCMessage.TTL. */
+        val tokenTtl: Long,
+        /** The primary phone's device identity. */
+        val mobile: GMDeviceInfo,
+        /** Our device identity assigned by the phone. */
+        val browser: GMDeviceInfo,
+    ) {
+        val mobileSourceId: String get() = mobile.sourceId
+        val browserSourceId: String get() = browser.sourceId
+    }
+
+    private fun parseDevice(bytes: ByteArray?): GMDeviceInfo {
+        if (bytes == null) return GMDeviceInfo(0, "", "")
+        val f = ProtoReader.fields(bytes)
+        return GMDeviceInfo(
+            userId = f[1]?.value ?: 0L,
+            sourceId = f[2]?.bytes?.toString(Charsets.UTF_8) ?: "",
+            network = f[3]?.bytes?.toString(Charsets.UTF_8) ?: "",
+        )
+    }
 
     /**
      * Decode the RPCPairData bytes carried in a PairEvent long-poll frame.
      *
      *   RPCPairData { paired=4: PairedData }            (revoked=5 ignored)
      *   PairedData  { mobile=1: Device, tokenData=2: TokenData, browser=3: Device }
-     *   TokenData   { tachyonAuthToken=1: bytes }
-     *   Device      { sourceID=2: string }
+     *   TokenData   { tachyonAuthToken=1: bytes, TTL=2: int64 }
+     *   Device      { userID=1: int64, sourceID=2: string, network=3: string }
      *
      * Returns null if this isn't a "paired" event (e.g. a revoke).
      */
@@ -155,10 +194,14 @@ internal object GMPairingProto {
         val pairedBytes = ProtoReader.fields(rpcPairData)[4]?.bytes ?: return null
         val pd = ProtoReader.fields(pairedBytes)
         val tokenData = pd[2]?.bytes ?: error("PairedData missing tokenData (field 2)")
-        val tachyon = ProtoReader.fields(tokenData)[1]?.bytes
+        val tokenFields = ProtoReader.fields(tokenData)
+        val tachyon = tokenFields[1]?.bytes
             ?: error("PairedData.tokenData missing tachyonAuthToken (field 1)")
-        val mobile = pd[1]?.bytes?.let { ProtoReader.fields(it)[2]?.bytes?.toString(Charsets.UTF_8) } ?: ""
-        val browser = pd[3]?.bytes?.let { ProtoReader.fields(it)[2]?.bytes?.toString(Charsets.UTF_8) } ?: ""
-        return PairedResult(tachyon, mobile, browser)
+        return PairedResult(
+            tachyonAuthToken = tachyon,
+            tokenTtl = tokenFields[2]?.value ?: 0L,
+            mobile = parseDevice(pd[1]?.bytes),
+            browser = parseDevice(pd[3]?.bytes),
+        )
     }
 }

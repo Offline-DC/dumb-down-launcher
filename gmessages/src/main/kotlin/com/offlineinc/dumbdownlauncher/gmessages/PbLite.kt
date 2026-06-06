@@ -120,13 +120,14 @@ internal object PbLite {
             (this as? Arr)?.items?.getOrNull(i) ?: Null
 
         fun asIntOrNull(): Int? = (this as? Num)?.value?.toInt()
+        fun asLongOrNull(): Long? = (this as? Num)?.value?.toLong()
         fun asStringOrNull(): String? = (this as? Str)?.value
     }
 
     fun parse(json: String): Node = Parser(json).parseValue()
 
     /** JSON-escape a string and wrap it in quotes. */
-    private fun jsonString(s: String): String {
+    fun jsonString(s: String): String {
         val sb = StringBuilder(s.length + 2)
         sb.append('"')
         for (c in s) when (c) {

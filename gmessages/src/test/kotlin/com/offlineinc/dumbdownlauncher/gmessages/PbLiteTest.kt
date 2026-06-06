@@ -76,8 +76,12 @@ class PbLiteTest {
             ?: error("expected a paired result")
         assertEquals("mobile-src-id", result.mobileSourceId)
         assertEquals("browser-src-id", result.browserSourceId)
-        assertEquals("11223344longtoken", String(result.tachyonAuthToken.copyOfRange(4, result.tachyonAuthToken.size)))
-        assertEquals(0x11.toByte(), result.tachyonAuthToken[0])
+        // Token is 4 binary bytes (0x11 0x22 0x33 0x44) + "longtoken".
+        assertEquals("longtoken", String(result.tachyonAuthToken.copyOfRange(4, result.tachyonAuthToken.size)))
+        assertEquals(
+            listOf(0x11.toByte(), 0x22.toByte(), 0x33.toByte(), 0x44.toByte()),
+            result.tachyonAuthToken.take(4),
+        )
     }
 
     @Test

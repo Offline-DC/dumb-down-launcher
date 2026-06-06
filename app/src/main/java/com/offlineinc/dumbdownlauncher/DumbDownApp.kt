@@ -97,6 +97,18 @@ class DumbDownApp : Application() {
         // off. See diagnostics/RebootLoggingService.kt.
         com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
 
+        // Bring up the Google Messages session so incoming texts notify even
+        // when the messenger UI is closed. This is the home launcher, so its
+        // process is long-lived — the session lives as a process-scoped
+        // singleton without needing a foreground service (and its persistent
+        // notification). No-op when unpaired. Off the main thread because the
+        // pairing check opens EncryptedSharedPreferences (~100ms of keystore
+        // work we don't want in the cold-start path). Covers boot too.
+        Thread {
+            com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesRepository
+                .createIfPaired(this)
+        }.start()
+
         UpdateCheckWorker.schedule(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.
