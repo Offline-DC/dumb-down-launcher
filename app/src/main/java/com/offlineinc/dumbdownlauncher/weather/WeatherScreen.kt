@@ -205,6 +205,20 @@ private fun DisplayScreen(
             modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
         )
 
+        // Rough location label so the user can confirm the fix is sensible.
+        // Phrased "near …" because Wi-Fi/GPS fixes are approximate. Only
+        // shown once reverse geocoding resolves; absent until then.
+        if (state.placeName.isNotBlank()) {
+            BasicText(
+                text = "near ${state.placeName}",
+                style = DumbTheme.Text.Subtitle.copy(
+                    fontSize = 13.sp,
+                    color = DumbTheme.Colors.Gray,
+                ),
+                modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
+            )
+        }
+
         // Weather information block — lives in a weighted, vertically-centered
         // inner Column so it sits in the middle of the space between the
         // "weather" title above and the tomorrow row below. horizontalAlignment

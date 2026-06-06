@@ -41,6 +41,9 @@ data class QuackUiState(
     val isInitialLoad: Boolean = true,
     val hasAcceptedRules: Boolean = false,
     val notificationsMuted: Boolean = false,
+    // Rough place label for the active fix (e.g. "Brooklyn, NY") so the user
+    // can confirm quacks are coming from the right area. Empty until resolved.
+    val placeName: String = "",
 )
 
 class QuackViewModel(application: Application) : AndroidViewModel(application) {
@@ -220,6 +223,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 Log.d(TAG, "refreshFromUser: using persisted lat=${loc.first} lng=${loc.second}")
+                resolvePlaceName(loc.first, loc.second)
                 val posts = withContext(Dispatchers.IO) {
                     val arr = QuackApiClient.fetchPosts(loc.first, loc.second)
                     Log.d(TAG, "refreshFromUser: got ${arr.length()} posts")
@@ -242,9 +246,72 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Called when the user presses the "refresh" soft key on the feed.
+     * Unlike [refreshFromUser] (which reuses the cached fix for speed), this
+     * busts every cache and forces a genuinely fresh fix:
+     *   - clears the persisted location so [LocationProvider.live] can't
+     *     short-circuit on a < 2h copy,
+     *   - clears the reverse-geocode cache so the place label re-resolves,
+     *   - blanks the current placeName so a failed re-lookup shows *nothing*
+     *     rather than a stale area the user may have left.
+     * A real fix re-populates the persisted store via QuackLocationHelper.
+     */
+    fun refreshLocationAndFeed() {
+        _state.value = _state.value.copy(mode = QuackMode.LOADING, placeName = "")
+        viewModelScope.launch {
+            try {
+                QuackLocationStore.invalidate(getApplication())
+                ReverseGeocoder.invalidate(getApplication())
+                Log.d(TAG, "refreshLocationAndFeed: forcing live fix (caches busted)")
+                val loc = LocationProvider.live(getApplication())
+                if (loc == null) {
+                    Log.w(TAG, "refreshLocationAndFeed: no live fix — showing location error")
+                    _state.value = _state.value.copy(
+                        mode = QuackMode.ERROR,
+                        errorMessage = LOCATION_ERROR_MSG,
+                    )
+                    return@launch
+                }
+                Log.d(TAG, "refreshLocationAndFeed: live lat=${loc.first} lng=${loc.second}")
+                resolvePlaceName(loc.first, loc.second)
+                val posts = withContext(Dispatchers.IO) {
+                    val arr = QuackApiClient.fetchPosts(loc.first, loc.second)
+                    Log.d(TAG, "refreshLocationAndFeed: got ${arr.length()} posts")
+                    parsePosts(arr)
+                }
+                _state.value = _state.value.copy(
+                    mode = QuackMode.FEED,
+                    posts = posts,
+                    selectedIndex = 0,
+                    errorMessage = "",
+                    isInitialLoad = false,
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "refreshLocationAndFeed: FAILED", e)
+                _state.value = _state.value.copy(
+                    mode = QuackMode.ERROR,
+                    errorMessage = friendlyError(e),
+                )
+            }
+        }
+    }
+
     /** Read the persisted location (any age up to STALE_MAX_AGE_MS). Non-blocking. */
     private fun readPersistedLocation(): Pair<Double, Double>? =
         QuackLocationStore.loadIfUsable(getApplication())
+
+    /**
+     * Reverse-geocode the active fix in the background and fold the resulting
+     * label into state. Cached + best-effort: on failure the existing
+     * placeName is left untouched and the feed simply shows no location line.
+     */
+    private fun resolvePlaceName(lat: Double, lng: Double) {
+        viewModelScope.launch {
+            val name = ReverseGeocoder.resolve(getApplication(), lat, lng) ?: return@launch
+            _state.value = _state.value.copy(placeName = name)
+        }
+    }
 
     fun loadFeed() {
         _state.value = _state.value.copy(mode = QuackMode.LOADING)
@@ -261,6 +328,7 @@ class QuackViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 Log.d(TAG, "loadFeed: using lat=${loc.first} lng=${loc.second}")
+                resolvePlaceName(loc.first, loc.second)
                 val posts = withContext(Dispatchers.IO) {
                     val arr = QuackApiClient.fetchPosts(loc.first, loc.second)
                     Log.d(TAG, "loadFeed: got ${arr.length()} posts")
