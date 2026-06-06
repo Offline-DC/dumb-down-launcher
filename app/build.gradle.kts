@@ -68,12 +68,16 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
 
-    // In-app Google Messages messenger module (Phase A: mock backend; later
-    // phases: real Google Messages protocol). Lives in this repo at
-    // :gmessages. Hosts MessengerActivity, which the launcher opens when
-    // the user picks "android" as their smart-txt platform — replacing the
-    // previous "open messages.google.com/web in Chrome" behaviour.
-    implementation(project(":gmessages"))
+    // In-app Google Messages messenger: backend + pairing/chat UI. Lives in
+    // the matrix-app repo as dpad-messenger-backend's :gmessages module,
+    // pulled in via the composite-build wiring in settings.gradle.kts (the
+    // coordinate below is substituted for that project). It api-exposes the
+    // dpad-messenger UI library, so MessengerActivity gets DpadMessengerTheme
+    // + GoogleMessagesApp transitively. MessengerActivity (in this :app
+    // module) is the launcher-specific shell opened when the user picks
+    // "android" as their smart-txt platform — replacing the previous "open
+    // messages.google.com/web in Chrome" behaviour.
+    implementation("com.offline.dpadmessenger.backend:gmessages:0.1.0-SNAPSHOT")
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

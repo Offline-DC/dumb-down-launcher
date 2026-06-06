@@ -11,8 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import com.offline.dpadmessenger.backend.gmessages.ui.GoogleMessagesApp
 import com.offline.dpadmessenger.ui.theme.DpadMessengerTheme
-import com.offlineinc.dumbdownlauncher.gmessages.ui.GoogleMessagesApp
 
 /**
  * Hosts the in-app Google Messages messenger.
@@ -42,6 +42,11 @@ import com.offlineinc.dumbdownlauncher.gmessages.ui.GoogleMessagesApp
  * AppCompatActivity keeps traditional window fitting, so the content fills
  * the screen without that gap. (All the other launcher activities are
  * AppCompatActivity for the same reason.)
+ *
+ * `android:windowSoftInputMode="adjustResize"` (manifest) resizes the window
+ * for the predictive-text IME so the composer sits directly above the
+ * candidate strip instead of being covered by it. The nav bar stays the shared
+ * theme's black (preferred over a white bar under the strip).
  */
 class MessengerActivity : AppCompatActivity() {
 
@@ -96,7 +101,7 @@ class MessengerActivity : AppCompatActivity() {
         super.onStop()
         // The session keeps running in the launcher process; tell it the UI
         // is gone so the previously-open thread notifies like any other.
-        com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesRepository.notifyUiHidden()
+        com.offline.dpadmessenger.backend.gmessages.GoogleMessagesRepository.notifyUiHidden()
     }
 
     companion object {

@@ -115,6 +115,7 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:clearTaskOnLaunch="true"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <activity

@@ -92,7 +92,7 @@ class MainAppsGridActivity : AppCompatActivity() {
          *     stopped working).
          *
          * Both go away with the in-app messenger: it owns its own session
-         * via [com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesRepository],
+         * via [com.offline.dpadmessenger.backend.gmessages.GoogleMessagesRepository],
          * and the UI was designed for this screen and input model.
          *
          * Mouse stays off: MessengerActivity is fully D-pad navigable.

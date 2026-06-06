@@ -97,6 +97,14 @@ class DumbDownApp : Application() {
         // off. See diagnostics/RebootLoggingService.kt.
         com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
 
+        // Tell the (now-shared) Google Messages backend which Activity its
+        // incoming-message notifications should open. The backend lives in the
+        // matrix-app repo and is host-agnostic, so the launcher supplies its
+        // own messenger Activity by name here.
+        com.offline.dpadmessenger.backend.gmessages.GoogleMessagesConfig
+            .messengerActivityClassName =
+            "com.offlineinc.dumbdownlauncher.messenger.MessengerActivity"
+
         // Bring up the Google Messages session so incoming texts notify even
         // when the messenger UI is closed. This is the home launcher, so its
         // process is long-lived — the session lives as a process-scoped
@@ -105,7 +113,7 @@ class DumbDownApp : Application() {
         // pairing check opens EncryptedSharedPreferences (~100ms of keystore
         // work we don't want in the cold-start path). Covers boot too.
         Thread {
-            com.offlineinc.dumbdownlauncher.gmessages.GoogleMessagesRepository
+            com.offline.dpadmessenger.backend.gmessages.GoogleMessagesRepository
                 .createIfPaired(this)
         }.start()
 
