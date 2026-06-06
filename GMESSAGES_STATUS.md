@@ -233,6 +233,55 @@ the launcher picks them up through the `:gmessages` composite build.
 - Contacts already fall back to local device contacts; the GM contact RPC is
   enrichment that needs a live session.
 
+## Hardening + perf pass (audit-driven)
+
+A thorough security / performance / UI audit drove these changes:
+
+**Security**
+- Stripped logging that leaked the tachyon auth token + device IDs to logcat
+  (`GoogleMessagesPairingClient` raw stream/element/body dumps) — these were
+  also being persisted to disk by the host's rolling-logcat service. Redacted
+  message IDs / mediaId / reaction logs too.
+- **Message cache is now encrypted at rest** (`GoogleMessagesCache` →
+  `EncryptedFile` under a Keystore master key). SMS bodies + contact numbers
+  were previously plaintext JSON in filesDir. Old plaintext caches are migrated
+  then deleted on first load.
+- Bounds-hardened the hand-rolled parsers against malformed network input:
+  `Protobuf` reader (length/varint bounds), `PbLite` JSON parser (recursion
+  depth cap + index bounds + 8 MB stream cap), `GMGcm` (chunk-size shift bound).
+  Previously a crafted frame could OOM / crash via huge allocations or
+  StackOverflow.
+- Resumable media upload now validates the server-returned upload URL host
+  (must be a Google domain) before PUTting bytes there.
+- (Crypto core — encrypt-then-MAC verified before decrypt, constant-time
+  compare, SecureRandom, X25519 low-order rejection, GCM AAD binding — audited
+  as correct and left untouched.)
+
+**Performance (matters on the Flip 2)**
+- Added a process-wide LRU bitmap cache (`ui/util/ImageDecode`) so thumbnails
+  aren't re-decoded from disk every time they scroll back into view — the main
+  source of scroll jank. Used by message thumbnails, the fullscreen viewer, and
+  the picker grid (synchronous cache hit avoids the spinner flash).
+- Fullscreen image decode now targets the actual display size (≤1080) instead
+  of a fixed 1280 — cuts a ~5 MB ARGB bitmap to ~1.5 MB and the OOM risk.
+- Cache load/save moved fully onto `Dispatchers.IO` (was on the constructor
+  thread / CPU pool — a startup-jank/ANR risk); load is guarded so it can't
+  clobber freshly-synced live data.
+- Chat-open now shows a loading spinner until the room's history first loads
+  (or a 2s grace period), so the "say hi" empty-state no longer flashes before
+  messages arrive. (A `WhileSubscribed` timeline experiment was reverted to
+  `Eagerly` — its saving was marginal since the ViewModel is per-open-chat, and
+  it started the flow cold; the spinner is the real fix.)
+
+**UI/UX**
+- Failed sends now have a **"Retry send"** action in the context sheet
+  (`resendMessage` added to the repo contract). A failed *outgoing media* opens
+  the sheet instead of misrouting to a pointless download.
+- Initial DPAD focus added to Settings (was a no-focus dead screen); New-message
+  re-focuses the field on a start error (focus was lost); pairing "Failed" state
+  and the fullscreen video viewer both got proper fallbacks ("Try again" /
+  "Can't play this video").
+
 ### Still to confirm on device
 - If the link keeps dying despite the refresh-on-401 path, capture the refresh
   logs: `adb logcat -s GMSession:*` should show `tachyon token refreshed`
