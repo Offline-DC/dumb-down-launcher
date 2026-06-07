@@ -199,17 +199,10 @@ class MouseAccessibilityService : AccessibilityService() {
         // with progress surfaced back to the UI. (Previously a second socket
         // handled this and the two evicted each other.)
         @Volatile private var gmessagesCallbacks: GmessagesCookieCallbacks? = null
-        @Volatile private var activeGaiaClient: GMGaiaClient? = null
 
-        /** Register (or clear, with null) the cookie sign-in screen's callbacks.
-         *  Clearing them (user left the screen) cancels any in-flight pairing so
-         *  its now-indefinite wait for the phone to confirm doesn't hang. */
+        /** Register (or clear, with null) the cookie sign-in screen's callbacks. */
         fun setGmessagesCookieCallbacks(cb: GmessagesCookieCallbacks?) {
             gmessagesCallbacks = cb
-            if (cb == null) activeGaiaClient?.let {
-                Log.i(RELAY_TAG, "cookie sign-in screen closed — cancelling in-flight pairing")
-                it.cancel()
-            }
         }
 
         private val relayClient = OkHttpClient.Builder()
@@ -423,11 +416,9 @@ class MouseAccessibilityService : AccessibilityService() {
             // for the user to tap the matching emoji), so run off the WS thread.
             Thread {
                 val gaia = GMGaiaClient(ctx)
-                activeGaiaClient = gaia
                 val paired = runCatching {
                     gaia.run(onEmoji = { emoji -> relayHandler.post { cb?.onEmoji?.invoke(emoji) } })
                 }.getOrElse { Log.e(RELAY_TAG, "GMGaia run failed", it); false }
-                activeGaiaClient = null
                 relayHandler.post {
                     if (paired) {
                         cb?.onResult?.invoke(true, "connected — ur dumb phone is paired with google messages.")
