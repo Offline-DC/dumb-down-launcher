@@ -30,6 +30,30 @@ class TypeSyncService : Service() {
         private var instance: TypeSyncService? = null
 
         fun isRunning(): Boolean = instance != null
+
+        // The relay allows only ONE "phone" connection per phone number. Text
+        // sync and the Google Messages cookie receiver both connect as "phone",
+        // so without coordination they evict each other ("replaced" closes) and
+        // cookies arrive only if they land during the cookie receiver's brief
+        // turn. While the cookie sign-in screen is open we suspend text sync's
+        // socket so the cookie receiver owns the slot.
+        @Volatile private var gmessagesSuspended = false
+
+        /** Release the relay phone-slot for the cookie transfer (closes the
+         *  text-sync socket and blocks it from reconnecting until resumed). */
+        fun suspendForGmessages() {
+            gmessagesSuspended = true
+            instance?.let { svc ->
+                runCatching { svc.webSocket?.close(1000, "gmessages-pairing") }
+                svc.webSocket = null
+            }
+        }
+
+        /** Hand the phone-slot back to text sync once cookie sign-in is done. */
+        fun resumeFromGmessages() {
+            gmessagesSuspended = false
+            instance?.connect()
+        }
     }
 
     private var webSocket: WebSocket? = null
@@ -89,6 +113,10 @@ class TypeSyncService : Service() {
     }
 
     private fun connect() {
+        if (gmessagesSuspended) {
+            Log.i(TAG, "connect skipped — suspended for Google Messages cookie pairing")
+            return
+        }
         val phone = flipPhoneNumber ?: return
         val secret = sharedSecret ?: return
 

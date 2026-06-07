@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.offline.dpadmessenger.focus.dpadFocusHighlight
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
+import com.offlineinc.dumbdownlauncher.typesync.TypeSyncService
 import com.offline.dpadmessenger.focus.onDpadAction
 import com.offline.dpadmessenger.ui.theme.DpadMessengerTheme
 
@@ -66,6 +67,15 @@ private fun CookieReceiveScreen(onDone: () -> Unit) {
     // Bump to restart the relay client (Retry): re-connects and waits for a
     // fresh login from the companion. Re-checks the device link too.
     var attempt by remember { mutableStateOf(0) }
+
+    // Text sync and this cookie receiver both connect to the relay as the single
+    // "phone" role — running both at once makes them evict each other. Suspend
+    // text sync for the lifetime of this screen so the cookie receiver owns the
+    // slot, then hand it back on exit.
+    DisposableEffect(Unit) {
+        TypeSyncService.suspendForGmessages()
+        onDispose { TypeSyncService.resumeFromGmessages() }
+    }
 
     // The cookie transfer reuses the Type Sync / Device Link pairing. If the
     // dumb phone isn't linked to a smart phone yet, there's no encrypted channel
