@@ -31,16 +31,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.offline.dpadmessenger.focus.dpadFocusHighlight
+import com.offlineinc.dumbdownlauncher.MouseAccessibilityService
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
-import com.offlineinc.dumbdownlauncher.typesync.TypeSyncService
 import com.offline.dpadmessenger.focus.onDpadAction
 import com.offline.dpadmessenger.ui.theme.DpadMessengerTheme
 
 /**
  * Hosts the "Sign in with your Google account via your phone" flow. The flip
- * phone listens on the Type Sync relay; the companion smartphone signs into
- * Google and sends the cookies over (see [GmessagesCookieRelayClient]).
- * Opened by [MessengerActivity] when the user picks the account sign-in.
+ * phone listens on its single live Type Sync relay (owned by
+ * [MouseAccessibilityService]); the companion smartphone signs into Google and
+ * sends the cookies over, which the relay receives and hands back here via
+ * [GmessagesCookieCallbacks]. Opened by [MessengerActivity] when the user picks
+ * the account sign-in.
  */
 class GoogleCookieReceiveActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,15 +70,6 @@ private fun CookieReceiveScreen(onDone: () -> Unit) {
     // fresh login from the companion. Re-checks the device link too.
     var attempt by remember { mutableStateOf(0) }
 
-    // Text sync and this cookie receiver both connect to the relay as the single
-    // "phone" role — running both at once makes them evict each other. Suspend
-    // text sync for the lifetime of this screen so the cookie receiver owns the
-    // slot, then hand it back on exit.
-    DisposableEffect(Unit) {
-        TypeSyncService.suspendForGmessages()
-        onDispose { TypeSyncService.resumeFromGmessages() }
-    }
-
     // The cookie transfer reuses the Type Sync / Device Link pairing. If the
     // dumb phone isn't linked to a smart phone yet, there's no encrypted channel
     // to receive the login on — so guard up front with a friendly setup prompt
@@ -97,12 +90,19 @@ private fun CookieReceiveScreen(onDone: () -> Unit) {
             result = null
             emoji = null
             signingIn = false
-            val client = GmessagesCookieRelayClient(context)
-            client.start(
-                onCookies = { signingIn = true },
-                onEmoji = { emoji = it },
-            ) { ok, msg -> result = ok to (msg ?: "") }
-            onDispose { client.stop() }
+            // Receive the login over the single, live Type Sync relay owned by
+            // MouseAccessibilityService (the same socket text sync uses — no
+            // competing connection). Register our UI callbacks, then make sure
+            // the relay is up so it owns the phone slot and can receive.
+            MouseAccessibilityService.setGmessagesCookieCallbacks(
+                GmessagesCookieCallbacks(
+                    onCookies = { signingIn = true },
+                    onEmoji = { emoji = it },
+                    onResult = { ok, msg -> result = ok to (msg ?: "") },
+                )
+            )
+            MouseAccessibilityService.startRelay(context, null)
+            onDispose { MouseAccessibilityService.setGmessagesCookieCallbacks(null) }
         }
     }
     BackHandler(onBack = onDone)

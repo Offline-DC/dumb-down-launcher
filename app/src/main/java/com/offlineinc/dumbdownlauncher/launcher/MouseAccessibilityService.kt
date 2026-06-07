@@ -16,8 +16,11 @@ import android.view.KeyEvent
 import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.offline.dpadmessenger.backend.gmessages.GMGaiaClient
+import com.offline.dpadmessenger.backend.gmessages.GoogleMessagesAccountStore
 import com.offlineinc.dumbdownlauncher.launcher.ResetWarningOverlay
 import com.offlineinc.dumbdownlauncher.launcher.qrenlarge.QrEnlargeController
+import com.offlineinc.dumbdownlauncher.messenger.GmessagesCookieCallbacks
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
@@ -190,6 +193,25 @@ class MouseAccessibilityService : AccessibilityService() {
         private var relayPhone: String? = null
         private var relayReconnectCount = 0
 
+        // Google Messages cookie sign-in: the sign-in screen registers callbacks
+        // here so the login (a `gmessages_cookies` message) — which arrives on
+        // THIS, the one live relay socket — can be decrypted, saved, and paired,
+        // with progress surfaced back to the UI. (Previously a second socket
+        // handled this and the two evicted each other.)
+        @Volatile private var gmessagesCallbacks: GmessagesCookieCallbacks? = null
+        @Volatile private var activeGaiaClient: GMGaiaClient? = null
+
+        /** Register (or clear, with null) the cookie sign-in screen's callbacks.
+         *  Clearing them (user left the screen) cancels any in-flight pairing so
+         *  its now-indefinite wait for the phone to confirm doesn't hang. */
+        fun setGmessagesCookieCallbacks(cb: GmessagesCookieCallbacks?) {
+            gmessagesCallbacks = cb
+            if (cb == null) activeGaiaClient?.let {
+                Log.i(RELAY_TAG, "cookie sign-in screen closed — cancelling in-flight pairing")
+                it.cancel()
+            }
+        }
+
         private val relayClient = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
@@ -306,6 +328,7 @@ class MouseAccessibilityService : AccessibilityService() {
                         val msg = JSONObject(text)
                         when (msg.getString("type")) {
                             "text" -> handleRelayText(msg)
+                            "gmessages_cookies" -> handleRelayGmessagesCookies(ws, msg)
                             "auth_failed" -> {
                                 Log.e(RELAY_TAG, "❌ Auth failed: ${msg.optString("reason")}")
                                 stopRelay()
@@ -358,6 +381,64 @@ class MouseAccessibilityService : AccessibilityService() {
             } catch (e: Exception) {
                 Log.e(RELAY_TAG, "❌ Decryption failed", e)
             }
+        }
+
+        /**
+         * Receive the user's Google-account cookies from the companion over this
+         * (single, live) relay socket, decrypt + store them, ack, and run the
+         * GAIA / UKey2 emoji-match pairing. Progress is surfaced to the sign-in
+         * screen via the registered [GmessagesCookieCallbacks].
+         */
+        private fun handleRelayGmessagesCookies(ws: WebSocket, msg: JSONObject) {
+            val secret = relaySecret ?: return
+            val ctx = appContext ?: return
+            val cb = gmessagesCallbacks
+            if (!msg.has("encrypted") || !msg.has("iv")) return
+
+            val cookies = try {
+                val cipher = TypeSyncCrypto.fromBase64(msg.getString("encrypted"))
+                val iv = TypeSyncCrypto.fromBase64(msg.getString("iv"))
+                val plain = TypeSyncCrypto.decryptAesGcm(cipher, iv, secret)
+                val obj = JSONObject(String(plain, Charsets.UTF_8))
+                HashMap<String, String>().apply {
+                    val keys = obj.keys()
+                    while (keys.hasNext()) { val k = keys.next(); put(k, obj.getString(k)) }
+                }
+            } catch (e: Exception) {
+                Log.e(RELAY_TAG, "❌ gmessages cookie decrypt failed", e)
+                relayHandler.post {
+                    cb?.onResult?.invoke(false, "Couldn't read the login from your phone. Try again.")
+                }
+                return
+            }
+
+            GoogleMessagesAccountStore(ctx).saveCookies(cookies)
+            runCatching {
+                ws.send(JSONObject().put("type", "gmessages_cookies_ack").put("ok", true).toString())
+            }
+            Log.i(RELAY_TAG, "🔓 saved ${cookies.size} gmessages cookies; names=${cookies.keys.sorted()} — pairing")
+            relayHandler.post { cb?.onCookies?.invoke() } // UI: "waiting…" → "signing in…"
+
+            // GAIA cookie-auth + UKey2 emoji pairing. Blocks (waits indefinitely
+            // for the user to tap the matching emoji), so run off the WS thread.
+            Thread {
+                val gaia = GMGaiaClient(ctx)
+                activeGaiaClient = gaia
+                val paired = runCatching {
+                    gaia.run(onEmoji = { emoji -> relayHandler.post { cb?.onEmoji?.invoke(emoji) } })
+                }.getOrElse { Log.e(RELAY_TAG, "GMGaia run failed", it); false }
+                activeGaiaClient = null
+                relayHandler.post {
+                    if (paired) {
+                        cb?.onResult?.invoke(true, "connected — ur dumb phone is paired with google messages.")
+                    } else {
+                        cb?.onResult?.invoke(
+                            false,
+                            "Pairing didn't finish. Make sure you tapped the matching emoji on your phone, then try again.",
+                        )
+                    }
+                }
+            }.start()
         }
 
         // ── end relay ────────────────────────────────────────────────────────
