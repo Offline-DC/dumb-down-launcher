@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.offline.dpadmessenger.focus.dpadFocusHighlight
+import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offline.dpadmessenger.focus.onDpadAction
 import com.offline.dpadmessenger.ui.theme.DpadMessengerTheme
 
@@ -63,16 +64,36 @@ private fun CookieReceiveScreen(onDone: () -> Unit) {
     // True once the login has arrived and Google sign-in + pairing is running.
     var signingIn by remember { mutableStateOf(false) }
     // Bump to restart the relay client (Retry): re-connects and waits for a
-    // fresh login from the companion.
+    // fresh login from the companion. Re-checks the device link too.
     var attempt by remember { mutableStateOf(0) }
 
+    // The cookie transfer reuses the Type Sync / Device Link pairing. If the
+    // dumb phone isn't linked to a smart phone yet, there's no encrypted channel
+    // to receive the login on — so guard up front with a friendly setup prompt
+    // instead of spinning forever on "waiting for ur smart phone".
+    val linked = remember(attempt) {
+        val ps = PairingStore(context)
+        !ps.sharedSecret.isNullOrEmpty() && !ps.flipPhoneNumber.isNullOrEmpty()
+    }
+
     DisposableEffect(attempt) {
-        val client = GmessagesCookieRelayClient(context)
-        client.start(
-            onCookies = { signingIn = true },
-            onEmoji = { emoji = it },
-        ) { ok, msg -> result = ok to (msg ?: "") }
-        onDispose { client.stop() }
+        if (!linked) {
+            result = false to (
+                "type sync isn’t set up yet. on ur dumb phone, go to Device Setup and " +
+                    "link ur phones first, then come back and try again."
+                )
+            onDispose { }
+        } else {
+            result = null
+            emoji = null
+            signingIn = false
+            val client = GmessagesCookieRelayClient(context)
+            client.start(
+                onCookies = { signingIn = true },
+                onEmoji = { emoji = it },
+            ) { ok, msg -> result = ok to (msg ?: "") }
+            onDispose { client.stop() }
+        }
     }
     BackHandler(onBack = onDone)
 
