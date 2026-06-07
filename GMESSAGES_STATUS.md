@@ -1,9 +1,22 @@
 # Google Messages integration — status & next steps
 
+> **CURRENT STATUS (working):** Pairing now uses **Google-account / cookie
+> (GAIA) auth**, not QR. Google removed QR pairing for Messages-for-web, so the
+> user signs into Google on the companion smartphone, the cookies are sent to
+> the flip phone over the encrypted Type Sync relay, and the flip phone does the
+> SignInGaia + UKey2 emoji-match pairing itself. **Validated end-to-end on
+> device.** Full design + protocol details:
+> [`GMESSAGES_GAIA_PORT.md`](./GMESSAGES_GAIA_PORT.md). The QR pairing path
+> (`GoogleMessagesPairing*`, `GoogleMessagesLinkScreen`, `QrCode`) has been
+> deleted; the `X25519` / QR-only `GMCrypto`/`GMPairingProto` primitives remain
+> unused (harmless). The notes below describe the original QR implementation and
+> the shared chat/session machinery (still in use).
+
 Goal: "smart txt" on the launcher opens an in-app Google Messages client,
-paired to the user's primary Android phone via QR (like the Signal link
-flow), using Google's "Messages for web" relay protocol. Protocol reference
-throughout: mautrix-gmessages (`pkg/libgm/`).
+paired to the user's primary Android phone, using Google's "Messages for web"
+relay protocol. (Pairing was originally QR-based — see the banner above for the
+move to GAIA cookie auth.) Protocol reference throughout: mautrix-gmessages
+(`pkg/libgm/`).
 
 ## Repo layout (required)
 
@@ -232,6 +245,47 @@ the launcher picks them up through the `:gmessages` composite build.
   button → teardown → QR). Failed sends now show a **red bold "!"**.
 - Contacts already fall back to local device contacts; the GM contact RPC is
   enrichment that needs a live session.
+
+## Group chat creation (DPAD)
+
+- New `GroupConversationStarter` capability interface
+  (`data/ConversationStarter.kt`). The new-message screen
+  (`NewConversationScreen`) gains a DPAD-friendly multi-select "New group" mode:
+  a top "New group" row enters group mode; OK on contact rows toggles selection
+  (round check ↔ filled check); the top row becomes "Create group (N)" and fires
+  when ≥2 are picked. Back exits group mode first. Wired through
+  `MessengerNavigation` (cast repo to `GroupConversationStarter`).
+- gmessages backend implements it: `getOrCreateConversationRequest` now writes
+  repeated `numbers` + `createRCSGroup=true` (mautrix wire shape);
+  `session.getOrCreateConversation(numbers, groupName)` and
+  `repo.startGroupConversation(...)` build the RCS group.
+
+## Signal launcher drop-in (gmessages parity)
+
+Signal can now be hosted by the launcher exactly like Google Messages. New in
+the `:signal` backend module (Compose enabled there; ZXing added):
+- `object SignalRepository` — process-scoped repo+socket holder
+  (`createIfPaired`/`create`/`shutdown`/`reset`), mirroring
+  `GoogleMessagesRepository`.
+- `object SignalPairing` — process-scoped provisioning-client holder
+  (`getOrStart`/`reset`), so the QR + socket survive Activity recreation.
+- `SignalAccountStore.isPaired()`, `object SignalConfig` (parity).
+- `ui/SignalApp()` — the gate composable (linked → `DpadMessengerApp`; unlinked →
+  `SignalLinkScreen` QR flow → saves the account on `Linked`). Plus
+  `ui/SignalLinkScreen` (with "Try again") and `ui/QrCode`.
+
+Launcher wiring: `settings.gradle.kts` substitutes `:signal`; `app/build.gradle`
+depends on it; `SignalMessengerActivity` is the thin shell
+(`setContent { DpadMessengerTheme { SignalApp() } }`), registered in the
+manifest with the same `adjustResize` config. To open it:
+`startActivity(Intent(this, SignalMessengerActivity::class.java))`.
+
+**Parity caveat:** `SignalMessageRepository` currently implements only
+`MessageRepository` (1:1 send/receive). So the Signal drop-in gives full
+linking + chat, but new-conversation, contacts, media, groups, and the initial-
+sync spinner stay dark until those capability interfaces (`ConversationStarter`,
+`ContactsSource`, `MediaDownloader`/`AttachmentSender`, `GroupConversationStarter`,
+`InitialSyncAware`) are implemented on the Signal repo — same set gmessages has.
 
 ## Hardening + perf pass (audit-driven)
 

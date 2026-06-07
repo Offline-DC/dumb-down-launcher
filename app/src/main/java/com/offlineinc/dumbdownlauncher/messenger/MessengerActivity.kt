@@ -85,6 +85,16 @@ class MessengerActivity : AppCompatActivity() {
                     GoogleMessagesApp(
                         initialRoomId = deepLink?.first,
                         initialRoomKey = deepLink?.second,
+                        // Sign in to Google by transferring cookies from the
+                        // companion smartphone over the Type Sync relay.
+                        onCompanionSignIn = {
+                            startActivity(
+                                android.content.Intent(
+                                    this,
+                                    GoogleCookieReceiveActivity::class.java,
+                                ),
+                            )
+                        },
                     )
                 }
             }

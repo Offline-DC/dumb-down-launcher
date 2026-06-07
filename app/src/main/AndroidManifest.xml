@@ -118,6 +118,14 @@
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.DumbDownLauncher" />
 
+        <!-- Receives Google-account cookies from the companion phone over the
+             Type Sync relay (Messages-for-web sign-in). -->
+        <activity
+            android:name=".messenger.GoogleCookieReceiveActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
         <activity
             android:name=".contactsync.ContactSyncActivity"
             android:exported="false"
