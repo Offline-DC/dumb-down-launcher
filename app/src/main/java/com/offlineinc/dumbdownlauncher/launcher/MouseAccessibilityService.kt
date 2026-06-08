@@ -543,9 +543,14 @@ class MouseAccessibilityService : AccessibilityService() {
                     if (paired) {
                         gmessagesCallbacks?.onResult?.invoke(true, "connected — ur dumb phone is paired with google messages.")
                     } else {
+                        // Prefer the specific reason from the GAIA step (e.g. the
+                        // login was rejected as invalid) over the generic emoji
+                        // message — otherwise a cookie failure misleads the user
+                        // into re-tapping an emoji that never appeared.
                         gmessagesCallbacks?.onResult?.invoke(
                             false,
-                            "Pairing didn't finish. Make sure you tapped the matching emoji on your phone, then try again.",
+                            gaia.lastError
+                                ?: "Failed to pair. Make sure you tapped the matching emoji on your phone, then try again.",
                         )
                     }
                 }
