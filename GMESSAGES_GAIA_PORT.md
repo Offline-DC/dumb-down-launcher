@@ -99,10 +99,18 @@ self-refresh from `Set-Cookie` on responses.
   - Backend (`offline-dc-twilio` `keyboardWs.js`): forwards `gmessages_cookies`
     (companion→phone) + `gmessages_cookies_ack` (phone→companion). E2E encrypted;
     relay never sees plaintext.
-  - Flip phone (`dumb-down-launcher`): `GmessagesCookieRelayClient` listens on the
-    relay (role "phone"), decrypts, `GoogleMessagesAccountStore.saveCookies()`,
-    acks. `GoogleCookieReceiveActivity` is the DPAD UI; reached from the link
-    screen's "Sign in with Google account" (`GoogleMessagesApp.onCompanionSignIn`).
+  - Flip phone (`dumb-down-launcher`): the cookies are received on the **single,
+    already-live Type Sync relay** owned by `MouseAccessibilityService` (log tag
+    `TypeSyncRelay`) — the same socket text sync uses. Its `onMessage` handles
+    `gmessages_cookies` inline (`handleRelayGmessagesCookies`): decrypt with the
+    device-link secret → `GoogleMessagesAccountStore.saveCookies()` → ack → run
+    `GMGaiaClient` pairing. `GoogleCookieReceiveActivity` is the DPAD UI; it
+    registers `GmessagesCookieCallbacks` with `MouseAccessibilityService` and
+    calls `startRelay`, then shows waiting → "signing in" → the emoji → result.
+    Reached from the link screen's "Sign in with Google account"
+    (`GoogleMessagesApp.onCompanionSignIn`).
+    See **"Cookie reception reliability"** below for why this replaced the old
+    separate-socket `GmessagesCookieRelayClient` (now deleted).
   - Fallback (kept): the in-flip-phone WebView `GoogleAccountLoginScreen` is still
     wired when there's no host companion handler (standalone/demo).
 - **Phase 2 — FetchConfig + SignInGaia. DONE + validated on-device.**
@@ -201,3 +209,49 @@ cookies:
 
 `GMCookieAuth.sapisidHash()` (Phase 1) is the auth header every Phase 2–4 request
 uses.
+
+## Cookie reception reliability (June 2026 rework)
+
+The cookie transfer was unreliable in the field — the flip phone would sit on
+"waiting for ur smart phone…" forever while the companion resent the cookies,
+unacked. Root cause + fixes:
+
+- **One relay, not two.** The relay backend allows only ONE `role:"phone"`
+  socket per number; a second connecting evicts the first with close reason
+  `replaced`. The launcher already keeps a live `phone` socket for **text sync**
+  inside `MouseAccessibilityService` (tag `TypeSyncRelay`). The old
+  `GmessagesCookieRelayClient` opened a SECOND `phone` socket for cookies, so the
+  two evicted each other; the churn left the slot empty/mid-handshake exactly
+  when the companion sent the login, and it was dropped. **Fix:** delete
+  `GmessagesCookieRelayClient` and handle `gmessages_cookies` on the single live
+  relay (`handleRelayGmessagesCookies`). One stable `phone` socket, login lands
+  first try.
+- **The decisive log.** `D/TypeSyncRelay: ignoring type=gmessages_cookies` — the
+  cookies WERE arriving, on the live relay, which had no case for them. The
+  handler had mistakenly been added to `TypeSyncService` (a second/legacy relay
+  class that isn't the connected socket on-device, so its logs were silent).
+  Lesson: the launcher has two relay clients; the cookie handler must live in the
+  active one, `MouseAccessibilityService`.
+- **Re-pair secret rotation.** A re-pair rotates the device-link shared secret
+  and the backend force-closes both sides with reason `re-paired`. Decrypt with a
+  stale cached secret silently fails. `MouseAccessibilityService`'s relay already
+  re-reads the pairing on each reconnect (`DeviceLinkReader`), so it recovers.
+- **`auth_failed — no active pairing`.** Backend has no pairing row for the
+  number → the relay rejects auth (code 1008). Not a cookie bug: the device-link
+  pairing must exist (and text sync must work) before cookies can flow.
+- **Don't auto-reconnect on clean closes.** Reconnecting on `onClosed` (vs only
+  `onFailure`) turned an `auth_failed` close into a reconnect/re-auth hammer
+  loop. Reconnect only from `onFailure`.
+
+### Pairing wait — indefinite (matrix-app `:gmessages`)
+`GMGaiaPairing` CLIENT_FINISHED now waits **indefinitely** for the user to tap
+the matching emoji (was a 120s timeout), polling in 15s chunks. `GMGaiaPairing`
+/ `GMGaiaClient` expose `cancel()` to end the wait.
+
+> **Cross-repo caveat:** `cancel()` + the `WAIT_FOREVER` change live in
+> `matrix-app/dpad-messenger-backend/gmessages` (a separate repo from the
+> launcher). The launcher deliberately does **not** call `GMGaiaClient.cancel()`
+> yet, so it builds against whatever `:gmessages` version the build pulls. Until
+> those matrix-app changes are committed to the build, cancel-on-screen-leave is
+> inactive (the wait still runs until the phone confirms). Re-add the launcher's
+> `cancel()` call once the two repos are in sync.

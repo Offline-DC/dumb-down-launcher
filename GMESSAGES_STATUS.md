@@ -343,8 +343,36 @@ A thorough security / performance / UI audit drove these changes:
   RegisterRefresh itself is failing (token too old, or a signing/endpoint issue)
   — that's the next thing to dig into.
 
+## Cookie sign-in reliability (June 2026)
+
+The companion→flip-phone cookie transfer was reworked for reliability. Summary
+(full detail in [`GMESSAGES_GAIA_PORT.md`](./GMESSAGES_GAIA_PORT.md) →
+"Cookie reception reliability"):
+
+- Cookies are now received on the **single live Type Sync relay** owned by
+  `MouseAccessibilityService` (tag `TypeSyncRelay`) — the same socket text sync
+  uses — via `handleRelayGmessagesCookies` (decrypt → save → ack → `GMGaiaClient`
+  pairing). `GoogleCookieReceiveActivity` registers `GmessagesCookieCallbacks`
+  and calls `startRelay`.
+- The old separate-socket `GmessagesCookieRelayClient` is **deleted**: a second
+  `role:"phone"` socket fought text sync for the relay's one phone slot
+  (`replaced` churn) and dropped the login. `TypeSyncService` is unchanged
+  (reverted) — it is a legacy/inactive relay class on-device; the cookie handler
+  must live in `MouseAccessibilityService`, the active one.
+- Pairing now waits **indefinitely** for the emoji tap (was 120s). The
+  `WAIT_FOREVER` + `cancel()` changes are in the `matrix-app` `:gmessages` repo;
+  the launcher doesn't call `cancel()` yet (cross-repo build skew) — re-add once
+  the repos are in sync.
+
 ## Test commands
 
 ```
 ./gradlew :gmessages:testDebugUnitTest   # X25519 + protobuf + pblite + session + crypto
+```
+
+Flip-phone cookie sign-in, watch the live relay receive path:
+```
+adb -s <FLIP_SERIAL> logcat -c
+adb -s <FLIP_SERIAL> logcat -v time -s TypeSyncRelay:V GMGaia:V GMGaiaPair:V
+# expect: "🔓 saved N gmessages cookies … — pairing" then the GMGaiaPair emoji line
 ```
