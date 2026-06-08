@@ -85,14 +85,15 @@ class MessengerActivity : AppCompatActivity() {
                     GoogleMessagesApp(
                         initialRoomId = deepLink?.first,
                         initialRoomKey = deepLink?.second,
-                        // Sign in to Google by transferring cookies from the
-                        // companion smartphone over the Type Sync relay.
-                        onCompanionSignIn = {
-                            startActivity(
-                                android.content.Intent(
-                                    this,
-                                    GoogleCookieReceiveActivity::class.java,
-                                ),
+                        // Single unpaired screen, rendered inline: the cookie
+                        // sign-in screen (login arrives from the companion over
+                        // the Type Sync relay). onPaired flips the gate to chats;
+                        // back exits the messenger. No separate Activity / no
+                        // duplicate "waiting" prompt.
+                        companionSignIn = { onPaired ->
+                            GoogleCookieSignInScreen(
+                                onPaired = onPaired,
+                                onExit = { finish() },
                             )
                         },
                     )

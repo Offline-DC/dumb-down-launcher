@@ -16,9 +16,6 @@
       <SelectionState runConfigName="dpad-messenger.demo">
         <option name="selectionMode" value="DROPDOWN" />
       </SelectionState>
-      <SelectionState runConfigName="dpad-messenger-backend.app">
-        <option name="selectionMode" value="DROPDOWN" />
-      </SelectionState>
     </selectionStates>
   </component>
 </project>

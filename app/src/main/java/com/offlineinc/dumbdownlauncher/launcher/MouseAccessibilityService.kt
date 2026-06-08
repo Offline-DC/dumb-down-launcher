@@ -200,9 +200,61 @@ class MouseAccessibilityService : AccessibilityService() {
         // handled this and the two evicted each other.)
         @Volatile private var gmessagesCallbacks: GmessagesCookieCallbacks? = null
 
-        /** Register (or clear, with null) the cookie sign-in screen's callbacks. */
+        // True only while the relay WebSocket is open AND the handshake has been
+        // sent (i.e. we own the `phone` slot and can receive). The cookie
+        // sign-in screen polls this so it can tell the user (and the log)
+        // whether the flip is actually listening when the companion sends.
+        @Volatile private var relayConnected = false
+
+        // In-flight Google Messages pairing state. Only ONE handshake runs at a
+        // time. We track it richly (not a bare boolean) so we can: dedupe the
+        // companion's identical cookie resends (which otherwise spawn overlapping
+        // attempts → Google rejects with NEW_REQUEST_WHILE_WAITING_FOR_VERIFICATION,
+        // errCode 23); supersede a stale/stuck attempt when a genuinely new login
+        // arrives; and replay progress to a screen that (re)opens mid-pairing so it
+        // never sits on "waiting…" while an attempt is actually running.
+        @Volatile private var pairingThread: Thread? = null
+        @Volatile private var pairingClient: com.offline.dpadmessenger.backend.gmessages.GMGaiaClient? = null
+        @Volatile private var pairingCookieFp: String? = null   // sha-256 of the active attempt's cookies
+        @Volatile private var pairingEmoji: String? = null      // last UKey2 emoji shown (for replay)
+        @Volatile private var pairingActive: Boolean = false
+
+        /** Whether the relay socket is currently open (handshake sent). Used by
+         *  the Google Messages sign-in screen to confirm the flip is listening. */
+        fun isRelayConnected(): Boolean = relayConnected
+
+        /** Register (or clear, with null) the cookie sign-in screen's callbacks.
+         *  If a pairing is already running when a screen (re)registers, replay the
+         *  current state to it so it reflects the in-flight attempt instead of
+         *  showing "waiting…" forever. */
         fun setGmessagesCookieCallbacks(cb: GmessagesCookieCallbacks?) {
             gmessagesCallbacks = cb
+            // A pairing can FINISH while no screen is registered, or in the gap
+            // between a screen disposing and re-registering (config change, the
+            // user tabbing out of Smart Txt and back, the host recomposing the
+            // inline sign-in slot). The account is saved, but the freshly
+            // registered screen comes up with result=null and — because
+            // pairingActive is already false — gets no replay, so it sits on
+            // "waiting for ur smart phone…" forever even though we're paired.
+            // Detect that here and replay the terminal success.
+            val alreadyPaired =
+                cb != null && appContext?.let { GoogleMessagesAccountStore(it).isPaired() } == true
+            Log.i(RELAY_TAG, "gmessages cookie callbacks ${if (cb != null) "registered" else "cleared"}; relayConnected=$relayConnected pairingActive=$pairingActive alreadyPaired=$alreadyPaired")
+            if (cb == null) return
+            relayHandler.post {
+                when {
+                    // Pairing already completed before this screen registered →
+                    // advance straight to the connected state instead of waiting.
+                    alreadyPaired ->
+                        cb.onResult?.invoke(true, "connected — ur dumb phone is paired with google messages.")
+                    // Pairing is mid-flight → replay progress so a screen that
+                    // (re)opened mid-pairing shows "signing in…" + the emoji.
+                    pairingActive -> {
+                        cb.onCookies?.invoke()
+                        pairingEmoji?.let { cb.onEmoji?.invoke(it) }
+                    }
+                }
+            }
         }
 
         private val relayClient = OkHttpClient.Builder()
@@ -287,6 +339,7 @@ class MouseAccessibilityService : AccessibilityService() {
             relayWebSocket?.close(1000, "relay stopped")
             relayWebSocket = null
             relayRunning = false
+            relayConnected = false
         }
 
         private fun openRelaySocket(phoneNumber: String) {
@@ -313,6 +366,8 @@ class MouseAccessibilityService : AccessibilityService() {
                         put("hmac",        hmac)
                     }
                     ws.send(handshake.toString())
+                    relayConnected = true
+                    Log.i(RELAY_TAG, "relay listening (phone slot owned) — ready to receive text + gmessages cookies")
                 }
 
                 override fun onMessage(ws: WebSocket, text: String) {
@@ -326,7 +381,7 @@ class MouseAccessibilityService : AccessibilityService() {
                                 Log.e(RELAY_TAG, "❌ Auth failed: ${msg.optString("reason")}")
                                 stopRelay()
                             }
-                            "companion_connected" -> Log.i(RELAY_TAG, "📱 Companion connected: ${msg.optString("role")}")
+                            "companion_connected" -> Log.i(RELAY_TAG, "📱 Companion connected: ${msg.optString("role")} — if signing in, cookies should arrive next")
                             "companion_disconnected" -> Log.i(RELAY_TAG, "📵 Companion disconnected")
                             else -> Log.d(RELAY_TAG, "ignoring type=${msg.getString("type")}")
                         }
@@ -336,6 +391,7 @@ class MouseAccessibilityService : AccessibilityService() {
                 }
 
                 override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                    relayConnected = false
                     Log.e(RELAY_TAG, "❌ WS failure: ${t.message}")
                     relayReconnectCount++
                     if (relayRunning) {
@@ -345,6 +401,7 @@ class MouseAccessibilityService : AccessibilityService() {
                 }
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                    relayConnected = false
                     Log.i(RELAY_TAG, "🔌 WS closed: code=$code reason=\"$reason\"")
                     // Server closed the socket (e.g. "re-paired" or "replaced").
                     // Re-read credentials from the pairing store and reconnect
@@ -383,10 +440,23 @@ class MouseAccessibilityService : AccessibilityService() {
          * screen via the registered [GmessagesCookieCallbacks].
          */
         private fun handleRelayGmessagesCookies(ws: WebSocket, msg: JSONObject) {
-            val secret = relaySecret ?: return
-            val ctx = appContext ?: return
             val cb = gmessagesCallbacks
-            if (!msg.has("encrypted") || !msg.has("iv")) return
+            Log.i(RELAY_TAG, "📥 gmessages_cookies received (callbacksRegistered=${cb != null}, " +
+                "relayConnected=$relayConnected, hasSecret=${relaySecret != null}, hasCtx=${appContext != null})")
+            // Each of these would otherwise drop the login SILENTLY — log so a
+            // missed token is always visible in logcat (tag $RELAY_TAG).
+            val secret = relaySecret ?: run {
+                Log.e(RELAY_TAG, "✋ dropping gmessages_cookies — relaySecret is null (relay not handshaken yet?)")
+                return
+            }
+            val ctx = appContext ?: run {
+                Log.e(RELAY_TAG, "✋ dropping gmessages_cookies — appContext is null")
+                return
+            }
+            if (!msg.has("encrypted") || !msg.has("iv")) {
+                Log.e(RELAY_TAG, "✋ dropping gmessages_cookies — missing encrypted/iv fields; keys=${msg.keys().asSequence().toList()}")
+                return
+            }
 
             val cookies = try {
                 val cipher = TypeSyncCrypto.fromBase64(msg.getString("encrypted"))
@@ -406,31 +476,90 @@ class MouseAccessibilityService : AccessibilityService() {
             }
 
             GoogleMessagesAccountStore(ctx).saveCookies(cookies)
+            // Always re-ack so the companion stops resending the login.
             runCatching {
                 ws.send(JSONObject().put("type", "gmessages_cookies_ack").put("ok", true).toString())
             }
-            Log.i(RELAY_TAG, "🔓 saved ${cookies.size} gmessages cookies; names=${cookies.keys.sorted()} — pairing")
-            relayHandler.post { cb?.onCookies?.invoke() } // UI: "waiting…" → "signing in…"
+            Log.i(RELAY_TAG, "🔓 saved ${cookies.size} gmessages cookies; names=${cookies.keys.sorted()}")
+
+            // Already paired? A stray late resend shouldn't kick off a new
+            // background handshake. Re-pairing always goes through logout (which
+            // clears the store), so isPaired() is false by the time a genuine
+            // re-pair sends fresh cookies.
+            if (GoogleMessagesAccountStore(ctx).isPaired()) {
+                Log.i(RELAY_TAG, "↩︎ already paired — refreshed cookies, not re-pairing")
+                return
+            }
+
+            // ONE handshake at a time, but never let a stale one wedge us:
+            //  - identical resend while an attempt is alive → ignore (re-acked).
+            //    (Overlapping CLIENT_INITs are what cause Google's errCode 23
+            //     NEW_REQUEST_WHILE_WAITING_FOR_VERIFICATION.)
+            //  - a genuinely new login (different cookies) → cancel the old
+            //    attempt and start fresh, so a stuck/abandoned attempt can't
+            //    block re-pairing.
+            val fp = sha256Hex(cookies.toSortedMap().entries.joinToString("&") { "${it.key}=${it.value}" })
+            val running = pairingThread?.isAlive == true && pairingActive
+            if (running) {
+                if (fp == pairingCookieFp) {
+                    Log.i(RELAY_TAG, "↩︎ identical cookies while pairing — ignoring duplicate (re-acked)")
+                    return
+                }
+                Log.i(RELAY_TAG, "⟳ new login while a pairing is running — cancelling the old attempt and restarting")
+                runCatching { pairingClient?.cancel() }
+                runCatching { pairingThread?.interrupt() }
+            }
+
+            pairingCookieFp = fp
+            pairingEmoji = null
+            pairingActive = true
+            Log.i(RELAY_TAG, "▶︎ starting gmessages pairing")
+            relayHandler.post { gmessagesCallbacks?.onCookies?.invoke() } // UI: "waiting…" → "signing in…"
 
             // GAIA cookie-auth + UKey2 emoji pairing. Blocks (waits indefinitely
             // for the user to tap the matching emoji), so run off the WS thread.
-            Thread {
+            // Callbacks are read LIVE (gmessagesCallbacks) so a screen that opens
+            // mid-pairing receives the emoji/result, not a screen that has closed.
+            val t = Thread {
                 val gaia = GMGaiaClient(ctx)
+                pairingClient = gaia
                 val paired = runCatching {
-                    gaia.run(onEmoji = { emoji -> relayHandler.post { cb?.onEmoji?.invoke(emoji) } })
+                    gaia.run(onEmoji = { emoji ->
+                        pairingEmoji = emoji
+                        relayHandler.post { gmessagesCallbacks?.onEmoji?.invoke(emoji) }
+                    })
                 }.getOrElse { Log.e(RELAY_TAG, "GMGaia run failed", it); false }
+                // Only the CURRENT attempt updates shared state / reports a result.
+                // A superseded attempt (a newer login replaced it) must stay silent
+                // so it can't clobber the new attempt or flash a stale failure.
+                if (pairingThread !== Thread.currentThread()) {
+                    Log.i(RELAY_TAG, "▫︎ superseded pairing attempt ended (paired=$paired) — staying quiet")
+                    return@Thread
+                }
+                pairingActive = false
+                pairingEmoji = null
+                Log.i(RELAY_TAG, "■ gmessages pairing finished paired=$paired")
                 relayHandler.post {
                     if (paired) {
-                        cb?.onResult?.invoke(true, "connected — ur dumb phone is paired with google messages.")
+                        gmessagesCallbacks?.onResult?.invoke(true, "connected — ur dumb phone is paired with google messages.")
                     } else {
-                        cb?.onResult?.invoke(
+                        gmessagesCallbacks?.onResult?.invoke(
                             false,
                             "Pairing didn't finish. Make sure you tapped the matching emoji on your phone, then try again.",
                         )
                     }
                 }
-            }.start()
+            }
+            pairingThread = t
+            t.start()
         }
+
+        /** SHA-256 hex of [s] — used to fingerprint cookie payloads so identical
+         *  resends are deduped without keeping the cookies around in memory. */
+        private fun sha256Hex(s: String): String =
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(s.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
 
         // ── end relay ────────────────────────────────────────────────────────
 
