@@ -15,7 +15,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 170
-        versionName = "v4.82.0-beta.10"
+        versionName = "v4.82.0-beta.11"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -60,6 +60,31 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    packaging {
+        jniLibs {
+            // libsignal-android bundles a SECOND native lib per ABI,
+            // `libsignal_jni_testing.so` (~75–83 MB unstripped each), used only
+            // by libsignal's own fuzz/conformance tests — never at runtime.
+            // Across arm64-v8a + armeabi-v7a + x86_64 this alone adds hundreds
+            // of MB to the APK. Drop it; the real `libsignal_jni.so` stays.
+            excludes += "**/libsignal_jni_testing.so"
+        }
+        resources {
+            // libsignal-android also embeds libsignal-client's DESKTOP JNI
+            // natives (macOS .dylib, Windows .dll, and amd64/aarch64 host .so)
+            // as plain Java resources for JVM use. They're dead weight inside an
+            // Android APK (~125 MB) — exclude every host-native variant.
+            excludes += listOf(
+                "**/*.dylib",
+                "**/*.dll",
+                "**/libsignal_jni_amd64.so",
+                "**/libsignal_jni_aarch64.so",
+                "**/libsignal_jni_testing_amd64.so",
+                "**/libsignal_jni_testing_aarch64.so",
+            )
+        }
     }
 }
 
