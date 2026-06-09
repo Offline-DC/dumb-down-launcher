@@ -3,6 +3,7 @@ package com.offlineinc.dumbdownlauncher.openbubbles
 import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
+import androidx.core.content.pm.PackageInfoCompat
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "OpenBubblesOps"
@@ -28,6 +29,26 @@ object OpenBubblesOps {
 
     /** Hard cap on `su` invocations (Magisk warm-up tolerance). */
     private const val SU_TIMEOUT_MS = 30_000L
+
+    /**
+     * Minimum OpenBubbles versionCode required before
+     * [applyDeleteOldMessages] is allowed to touch the retention prefs.
+     *
+     * TODO(jack): set this to the OpenBubbles APK versionCode that ships
+     * the `deleteMessagesAfterDays` behaviour you want to drive. While it
+     * stays at the [Long.MAX_VALUE] sentinel the migration intentionally
+     * defers on every boot (it throws, so the one-time-migration framework
+     * marks it pending and retries) — meaning no device's retention
+     * settings are touched until you pin a real version here.
+     *
+     * Gate semantics are "this version or newer" (`installed >=` this).
+     * If you need to target one exact build instead, switch the `<`
+     * comparison in [applyDeleteOldMessages] to `!=`.
+     */
+    const val DELETE_MESSAGES_MIN_VERSION_CODE: Long = Long.MAX_VALUE
+
+    /** How many days OpenBubbles should keep messages before auto-deleting. */
+    private const val DELETE_MESSAGES_AFTER_DAYS = 3
 
     /**
      * Quietly stops the OpenBubbles process so callers can edit its
@@ -300,6 +321,175 @@ object OpenBubblesOps {
             if (owner.isNotEmpty()) rootExec("chown $owner $FLUTTER_PREFS_PATH")
             rootExec("chmod 660 $FLUTTER_PREFS_PATH")
             Log.i(tag, "OB applyAutoDownloadOff: wrote $changes change(s)")
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    /**
+     * OpenBubbles' installed versionCode, or `null` when OB isn't
+     * installed. Uses [PackageInfoCompat.getLongVersionCode] so it's
+     * correct on both pre- and post-API-28 devices.
+     */
+    @JvmStatic
+    fun installedVersionCode(context: Context): Long? {
+        return try {
+            val info = context.packageManager.getPackageInfo(PKG, 0)
+            PackageInfoCompat.getLongVersionCode(info)
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        }
+    }
+
+    /**
+     * Version-gated retention pass: turns OpenBubbles' "delete old
+     * messages" feature on and pins the window to
+     * [DELETE_MESSAGES_AFTER_DAYS] days. Edits two keys in
+     * FlutterSharedPreferences.xml:
+     *
+     *  - `flutter.deleteMessagesAfterDays`       (boolean) → `true`
+     *  - `flutter.deleteMessagesAfterDaysCount`  (long)    → 3
+     *
+     * The count is a Flutter `int`, which SharedPreferences persists as a
+     * `<long>` element — note the different element tag from the boolean
+     * keys [applyAutoDownloadOff] handles.
+     *
+     * Deferral semantics (all via THROW, so the one-time-migration
+     * framework leaves the migration pending and retries on the next boot):
+     *
+     *  - OB not installed → returns benignly (commits the migration as
+     *    done; a device that will never have OB shouldn't retry forever).
+     *  - OB installed but versionCode < [DELETE_MESSAGES_MIN_VERSION_CODE]
+     *    → throws, so the pass keeps deferring until the user's pinned
+     *    OpenBubbles build is present.
+     *  - OB installed at the right version but never opened (prefs file
+     *    absent) → throws, applies on the next boot after first launch.
+     *
+     * Kills OB first via [stopQuietly] so its in-memory SharedPreferences
+     * cache can't write back over the edit — which also means this THROWS
+     * [IllegalStateException] when OB is the focused app (the framework
+     * just retries next boot).
+     */
+    @JvmStatic
+    fun applyDeleteOldMessages(context: Context, tag: String = TAG) {
+        // 1. Skip cleanly (commit as done) when OB isn't installed.
+        val versionCode = installedVersionCode(context)
+        if (versionCode == null) {
+            Log.d(tag, "OB applyDeleteOldMessages: $PKG not installed — skipping")
+            return
+        }
+
+        // 2. Version gate. Defer until OB reaches the pinned version.
+        //    Switch `<` to `!=` to target one exact build instead of
+        //    "this version or newer".
+        if (versionCode < DELETE_MESSAGES_MIN_VERSION_CODE) {
+            throw IllegalStateException(
+                "OB applyDeleteOldMessages: installed versionCode=$versionCode < required " +
+                    "$DELETE_MESSAGES_MIN_VERSION_CODE — deferring to a future boot"
+            )
+        }
+
+        // 3. Prefs file is created lazily on OB's first launch.
+        val (_, existsOut, _) = rootExec("test -f $FLUTTER_PREFS_PATH && echo y || echo n")
+        if (existsOut != "y") {
+            throw IllegalStateException(
+                "OB applyDeleteOldMessages: $FLUTTER_PREFS_PATH not present yet — open " +
+                    "OpenBubbles once and this will apply on the next boot"
+            )
+        }
+
+        // 4. Kill OB so its in-memory cache can't clobber our write.
+        //    Throws if OB is focused — caller (migration) retries next boot.
+        stopQuietly(tag)
+
+        val (catExit, content, catErr) = rootExec("cat $FLUTTER_PREFS_PATH")
+        if (catExit != 0) {
+            throw RuntimeException(
+                "OB applyDeleteOldMessages: cat failed (exit=$catExit): $catErr"
+            )
+        }
+        val (_, ownerOut, _) = rootExec("stat -c %u:%g $FLUTTER_PREFS_PATH")
+        val owner = ownerOut.trim()
+
+        var modified = content
+        var changes = 0
+
+        // 4a. boolean: flutter.deleteMessagesAfterDays -> true
+        run {
+            val key = "flutter.deleteMessagesAfterDays"
+            val desired = "true"
+            val pattern = Regex(
+                """<boolean\s+name="${Regex.escape(key)}"\s+value="(true|false)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                if (match.groupValues[1] != desired) {
+                    modified = pattern.replace(
+                        modified, """<boolean name="$key" value="$desired" />"""
+                    )
+                    changes++
+                    Log.d(tag, "OB applyDeleteOldMessages: $key ${match.groupValues[1]} -> $desired")
+                }
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <boolean name=\"$key\" value=\"$desired\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "OB applyDeleteOldMessages: $key absent — inserted as $desired")
+            } else {
+                Log.w(tag, "OB applyDeleteOldMessages: prefs missing </map> — skipped $key")
+            }
+        }
+
+        // 4b. long: flutter.deleteMessagesAfterDaysCount -> DELETE_MESSAGES_AFTER_DAYS
+        run {
+            val key = "flutter.deleteMessagesAfterDaysCount"
+            val desired = DELETE_MESSAGES_AFTER_DAYS.toString()
+            val pattern = Regex(
+                """<long\s+name="${Regex.escape(key)}"\s+value="(-?\d+)"\s*/>"""
+            )
+            val match = pattern.find(modified)
+            if (match != null) {
+                if (match.groupValues[1] != desired) {
+                    modified = pattern.replace(
+                        modified, """<long name="$key" value="$desired" />"""
+                    )
+                    changes++
+                    Log.d(tag, "OB applyDeleteOldMessages: $key ${match.groupValues[1]} -> $desired")
+                }
+            } else if (modified.contains("</map>")) {
+                modified = modified.replace(
+                    "</map>",
+                    "    <long name=\"$key\" value=\"$desired\" />\n</map>"
+                )
+                changes++
+                Log.d(tag, "OB applyDeleteOldMessages: $key absent — inserted as $desired")
+            } else {
+                Log.w(tag, "OB applyDeleteOldMessages: prefs missing </map> — skipped $key")
+            }
+        }
+
+        if (changes == 0) {
+            Log.d(tag, "OB applyDeleteOldMessages: already in desired state — no write")
+            return
+        }
+
+        // Stage in cacheDir then cp into place — avoids embedding XML in a
+        // shell heredoc. Restores original ownership + 660 mode.
+        val tmp = java.io.File(context.cacheDir, "_ob_prefs_delete_days.xml")
+        try {
+            tmp.writeText(modified)
+            tmp.setReadable(true, /* ownerOnly = */ false)
+            val (cpExit, _, cpErr) = rootExec("cp ${tmp.absolutePath} $FLUTTER_PREFS_PATH")
+            if (cpExit != 0) {
+                throw RuntimeException(
+                    "OB applyDeleteOldMessages: cp failed (exit=$cpExit): $cpErr"
+                )
+            }
+            if (owner.isNotEmpty()) rootExec("chown $owner $FLUTTER_PREFS_PATH")
+            rootExec("chmod 660 $FLUTTER_PREFS_PATH")
+            Log.i(tag, "OB applyDeleteOldMessages: wrote $changes change(s)")
         } finally {
             tmp.delete()
         }
