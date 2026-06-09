@@ -31,21 +31,23 @@ object OpenBubblesOps {
     private const val SU_TIMEOUT_MS = 30_000L
 
     /**
-     * Minimum OpenBubbles versionCode required before
-     * [applyDeleteOldMessages] is allowed to touch the retention prefs.
+     * The lowest OpenBubbles versionCode we consider "current". Anything
+     * **below** this is treated as outdated, which drives two behaviours
+     * that share this single threshold:
      *
-     * TODO(jack): set this to the OpenBubbles APK versionCode that ships
-     * the `deleteMessagesAfterDays` behaviour you want to drive. While it
-     * stays at the [Long.MAX_VALUE] sentinel the migration intentionally
-     * defers on every boot (it throws, so the one-time-migration framework
-     * marks it pending and retries) — meaning no device's retention
-     * settings are touched until you pin a real version here.
+     *  1. [applyDeleteOldMessages] patches the retention prefs (so old
+     *     builds stuck on a 1-day window get bumped to 3 days). Builds at
+     *     or above this version manage retention themselves and are left
+     *     untouched.
+     *  2. The SmartText launch gate in
+     *     [com.offlineinc.dumbdownlauncher.MainAppsGridActivity] hard-blocks
+     *     opening OpenBubbles (routing the user to the pending update)
+     *     when the installed build is below this and an update is waiting.
      *
-     * Gate semantics are "this version or newer" (`installed >=` this).
-     * If you need to target one exact build instead, switch the `<`
-     * comparison in [applyDeleteOldMessages] to `!=`.
+     * Keep this as the build number of the OpenBubbles release that fixes
+     * the retention behaviour — i.e. the first build users should be on.
      */
-    const val DELETE_MESSAGES_MIN_VERSION_CODE: Long = Long.MAX_VALUE
+    const val MIN_SUPPORTED_VERSION_CODE: Long = 20002231L
 
     /** How many days OpenBubbles should keep messages before auto-deleting. */
     private const val DELETE_MESSAGES_AFTER_DAYS = 3
@@ -354,16 +356,19 @@ object OpenBubblesOps {
      * `<long>` element — note the different element tag from the boolean
      * keys [applyAutoDownloadOff] handles.
      *
-     * Deferral semantics (all via THROW, so the one-time-migration
-     * framework leaves the migration pending and retries on the next boot):
+     * This only patches builds **below** [MIN_SUPPORTED_VERSION_CODE] —
+     * outdated builds whose retention window may be stuck at 1 day. Builds
+     * at or above that version manage retention themselves and are skipped.
+     *
+     * Outcomes:
      *
      *  - OB not installed → returns benignly (commits the migration as
      *    done; a device that will never have OB shouldn't retry forever).
-     *  - OB installed but versionCode < [DELETE_MESSAGES_MIN_VERSION_CODE]
-     *    → throws, so the pass keeps deferring until the user's pinned
-     *    OpenBubbles build is present.
-     *  - OB installed at the right version but never opened (prefs file
-     *    absent) → throws, applies on the next boot after first launch.
+     *  - OB at or above [MIN_SUPPORTED_VERSION_CODE] → returns benignly
+     *    (commits as done; the current build owns its own retention).
+     *  - OB below the threshold but never opened (prefs file absent) →
+     *    THROWS, so the one-time-migration framework leaves the migration
+     *    pending and retries on the next boot after first launch.
      *
      * Kills OB first via [stopQuietly] so its in-memory SharedPreferences
      * cache can't write back over the edit — which also means this THROWS
@@ -379,14 +384,16 @@ object OpenBubblesOps {
             return
         }
 
-        // 2. Version gate. Defer until OB reaches the pinned version.
-        //    Switch `<` to `!=` to target one exact build instead of
-        //    "this version or newer".
-        if (versionCode < DELETE_MESSAGES_MIN_VERSION_CODE) {
-            throw IllegalStateException(
-                "OB applyDeleteOldMessages: installed versionCode=$versionCode < required " +
-                    "$DELETE_MESSAGES_MIN_VERSION_CODE — deferring to a future boot"
+        // 2. Version gate. Only patch outdated builds (below the minimum
+        //    supported version); current builds manage retention themselves,
+        //    so skip + commit as done.
+        if (versionCode >= MIN_SUPPORTED_VERSION_CODE) {
+            Log.d(
+                tag,
+                "OB applyDeleteOldMessages: versionCode=$versionCode >= " +
+                    "$MIN_SUPPORTED_VERSION_CODE — current build manages retention, skipping"
             )
+            return
         }
 
         // 3. Prefs file is created lazily on OB's first launch.

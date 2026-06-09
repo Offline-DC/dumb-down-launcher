@@ -41,6 +41,13 @@ class MainAppsGridActivity : AppCompatActivity() {
 
     companion object {
         /**
+         * One-shot flag (in launcher_prefs): set once the OpenBubbles "delete
+         * after 3 days" retention toggle has been applied on a first smart-txt
+         * open. Bump the _vN suffix to force the one-time apply to run again.
+         */
+        private const val OB_RETENTION_APPLIED_KEY = "ob_retention_3day_applied_v1"
+
+        /**
          * Process-level cache for the 9 fixed grid apps.
          * Built once and reused on every subsequent launch for instant display.
          * Cleared when the platform preference changes (messaging app swap).
@@ -446,20 +453,135 @@ class MainAppsGridActivity : AppCompatActivity() {
                 overridePendingTransition(0, 0)
             }
             else -> {
+                // Hard-block opening OpenBubbles (smart txt, iOS mode) when the
+                // installed build is outdated AND an update is already waiting
+                // in the notifications page — route the user there to install
+                // it first. When no update is available we fall through and
+                // open normally (can't force an update the user can't get yet).
+                if (item.packageName == "com.openbubbles.messaging" &&
+                    isOpenBubblesUpdateRequired()) {
+                    startActivity(
+                        Intent(
+                            this,
+                            com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesUpdateRequiredActivity::class.java
+                        ).addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                    )
+                    overridePendingTransition(0, 0)
+                    return
+                }
                 val component = item.launchComponent ?: return
-                if ((item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this)) ||
-                    item.packageName == "com.ubercab.uberlite" ||
-                    item.packageName == "com.google.android.apps.mapslite") {
-                    MouseAccessibilityService.setMouseEnabled(this, true)
+
+                // First time smart txt is opened after this launcher version:
+                // apply the OpenBubbles "delete after 3 days" retention toggle
+                // once, THEN launch. Done here (not as a boot migration) so the
+                // prefs edit — which kills OpenBubbles first — only ever happens
+                // while OB is backgrounded and we're about to relaunch it
+                // anyway, never racing a live/foreground OB session.
+                if (item.packageName == "com.openbubbles.messaging" &&
+                    !isOpenBubblesRetentionApplied()) {
+                    applyOpenBubblesRetentionThenLaunch(item, component)
+                    return
                 }
-                val intent = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                    setComponent(component)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
-                overridePendingTransition(0, 0)
+
+                startComponentApp(item, component)
             }
+        }
+    }
+
+    /**
+     * Mouse-enable (where needed) + launch an app by its launcher component.
+     * Shared by the normal grid-launch path and the OpenBubbles first-run
+     * retention path so the two can't drift.
+     */
+    private fun startComponentApp(item: AppItem, component: android.content.ComponentName) {
+        if ((item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this)) ||
+            item.packageName == "com.ubercab.uberlite" ||
+            item.packageName == "com.google.android.apps.mapslite") {
+            MouseAccessibilityService.setMouseEnabled(this, true)
+        }
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            setComponent(component)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        overridePendingTransition(0, 0)
+    }
+
+    /** Whether the one-time OpenBubbles retention toggle has already run. */
+    private fun isOpenBubblesRetentionApplied(): Boolean =
+        getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+            .getBoolean(OB_RETENTION_APPLIED_KEY, false)
+
+    /**
+     * One-shot: on the first smart-txt open, turn on OpenBubbles' "delete
+     * messages after 3 days" toggle, then launch OpenBubbles.
+     *
+     * Runs on a background thread because
+     * [com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps.applyDeleteOldMessages]
+     * shells out to `su` and edits a file (it also kills OB first so its
+     * in-memory cache can't clobber the edit) — none of which can run on the
+     * main thread. OpenBubbles is launched afterwards on the main thread so it
+     * cold-starts with the new setting already on disk.
+     *
+     * The "applied" flag is only set when the helper returns without throwing
+     * (applied, or an intentional no-op: OB up-to-date / already set / not
+     * installed). Its deferral cases throw — OB's prefs file not created yet
+     * (OB never opened) or OB currently focused — and we leave the flag unset
+     * so the next open retries. Either way we still launch OB.
+     */
+    private fun applyOpenBubblesRetentionThenLaunch(
+        item: AppItem,
+        component: android.content.ComponentName,
+    ) {
+        Thread {
+            try {
+                com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps
+                    .applyDeleteOldMessages(this, "SmartTxtFirstRun")
+                getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+                    .edit().putBoolean(OB_RETENTION_APPLIED_KEY, true).apply()
+            } catch (e: Exception) {
+                android.util.Log.w(
+                    "MainAppsGrid",
+                    "OB retention first-run deferred (will retry next open): ${e.message}"
+                )
+            }
+            runOnUiThread { startComponentApp(item, component) }
+        }.start()
+    }
+
+    /**
+     * True when tapping smart txt should be blocked behind the OpenBubbles
+     * update prompt: iOS messaging mode, installed OpenBubbles older than
+     * [com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE],
+     * and an update already posted to the notifications page. All three must
+     * hold — if no update is waiting we let the user open OpenBubbles normally.
+     */
+    private fun isOpenBubblesUpdateRequired(): Boolean {
+        if (PlatformPreferences.getChoice(this) != "ios") return false
+        val installed = com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps
+            .installedVersionCode(this) ?: return false
+        if (installed >= com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE) {
+            return false
+        }
+        return isOpenBubblesUpdateAvailable()
+    }
+
+    /**
+     * True when the launcher currently has the OpenBubbles update
+     * notification posted — the same "update available" tile the in-launcher
+     * notifications page renders and the user taps to download/install. The
+     * launcher posts it itself, so it appears in getActiveNotifications()
+     * with no extra permission.
+     */
+    private fun isOpenBubblesUpdateAvailable(): Boolean {
+        val nm = getSystemService(android.app.NotificationManager::class.java) ?: return false
+        return try {
+            nm.activeNotifications.any {
+                it.id == com.offlineinc.dumbdownlauncher.update.UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 

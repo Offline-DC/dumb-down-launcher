@@ -159,9 +159,59 @@ object UpdateNotificationManager {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setAutoCancel(false)
+            // Indeterminate bar until the first progress poll reports real
+            // byte counts (see notifyDownloadProgress).
+            .setProgress(100, 0, true)
+            .setOnlyAlertOnce(true)
             .build()
         nm.notify(notificationId, notification)
     }
+
+    /**
+     * Re-post the "Downloading update" notification for [appKey] with live
+     * progress — a determinate bar plus "X / Y MB (Z%)" text, WhatsApp-style.
+     * Posted to the same notification ID as [notifyDownloading] so it updates
+     * the existing tile in place. [setOnlyAlertOnce] keeps the ~1s re-posts
+     * from re-sounding/vibrating each tick. While [totalBytes] is unknown
+     * (DownloadManager reports -1 until it has response headers) the bar stays
+     * indeterminate and the text shows bytes-so-far only.
+     */
+    fun notifyDownloadProgress(
+        context: Context,
+        appKey: String,
+        downloadedBytes: Long,
+        totalBytes: Long,
+    ) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationId = notificationIdFor(appKey)
+        val appDisplayName = displayNameFor(appKey)
+
+        val knownTotal = totalBytes > 0
+        val pct = if (knownTotal) {
+            ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
+        } else 0
+        val text = if (knownTotal) {
+            "$appDisplayName: ${formatMb(downloadedBytes)} / ${formatMb(totalBytes)} MB ($pct%)"
+        } else {
+            "$appDisplayName: ${formatMb(downloadedBytes)} MB so far…"
+        }
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Downloading update")
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setProgress(100, pct, !knownTotal)
+            .setOnlyAlertOnce(true)
+            .build()
+        nm.notify(notificationId, notification)
+    }
+
+    private fun formatMb(bytes: Long): String =
+        String.format("%.1f", bytes / (1024.0 * 1024.0))
 
     fun notifyFailed(context: Context, appKey: String) {
         ensureChannel(context)
@@ -200,20 +250,49 @@ object UpdateNotificationManager {
      * for that app's update state. Auto-cancels so it disappears once tapped;
      * the next periodic update check will re-post the regular tile if the
      * update is still pending.
+     *
+     * Tapping it routes through [WifiThenUpdateActivity], which decides at tap
+     * time: if the phone is already on Wi-Fi it fires the download; otherwise
+     * it opens the system Wi-Fi settings so the user can connect, then tap
+     * again. An activity-typed PendingIntent is used deliberately: notification
+     * taps are exempt from the Android 10+/12+ background-activity-start and
+     * notification-trampoline restrictions only when the PendingIntent targets
+     * an activity directly — see
+     * [com.offlineinc.dumbdownlauncher.wifinudge.WifiNudgeTapActivity] for the
+     * full rationale. [downloadUrl] is carried through so the tap-time download
+     * can be re-fired.
      */
-    fun notifyWifiRequired(context: Context, appKey: String) {
+    fun notifyWifiRequired(context: Context, appKey: String, downloadUrl: String) {
         ensureChannel(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notificationId = notificationIdFor(appKey)
-        val appDisplayName = displayNameFor(appKey)
+
+        val tapIntent = Intent(context, WifiThenUpdateActivity::class.java).apply {
+            putExtra(EXTRA_DOWNLOAD_URL, downloadUrl)
+            putExtra(EXTRA_APP_KEY, appKey)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId,
+            tapIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        // FLAG_NO_CLEAR exempts this from the shade's "Clear all" button AND
+        // the in-launcher Clear All (which calls cancelAllNotifications(),
+        // which likewise skips no-clear notifications) — so a sweep can't lose
+        // the "you must get on Wi-Fi to update" prompt. autoCancel still
+        // removes it on tap, and the user can still swipe it away individually.
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setContentTitle("Connect to Wi-Fi to update")
-            .setContentText("$appDisplayName update needs Wi-Fi — connect, then tap again")
+            .setContentTitle("connect to wifi to update")
+            .setContentText("then click to update smart txt")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(false)
             .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
             .build()
+            .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
         nm.notify(notificationId, notification)
     }
 

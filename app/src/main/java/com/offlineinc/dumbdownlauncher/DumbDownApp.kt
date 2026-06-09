@@ -1155,36 +1155,15 @@ class DumbDownApp : Application() {
             "openbubbles_setup_v1" to {
                 applyOpenBubblesPerfSettings(tag)
             },
-            // One-time OpenBubbles retention pass, gated on the installed
-            // OpenBubbles version. Flips two values in
-            // FlutterSharedPreferences.xml:
-            //
-            //   - flutter.deleteMessagesAfterDays       (boolean) -> true
-            //   - flutter.deleteMessagesAfterDaysCount  (long)    -> 3
-            //
-            // i.e. turns on "delete old messages" and pins the window to
-            // 3 days (devices in the field have been observed pinned to 1).
-            //
-            // [OpenBubblesOps.applyDeleteOldMessages] handles all the
-            // deferral cases itself by throwing — which makes the
-            // framework leave this migration pending and retry on the next
-            // boot — so the key is NOT committed until the edit lands:
-            //
-            //   - OB not installed                       -> skip + commit (no retry)
-            //   - OB versionCode < the pinned minimum     -> throw, retry next boot
-            //   - OB never opened (prefs file absent)     -> throw, retry next boot
-            //   - OB currently focused                    -> throw, retry next boot
-            //
-            // The version is pinned via
-            // OpenBubblesOps.DELETE_MESSAGES_MIN_VERSION_CODE — it ships
-            // as a Long.MAX_VALUE sentinel that defers on every device
-            // until a real versionCode is set there.
-            //
-            // Bump the v-suffix (-> _v2 etc.) to force every device to
-            // re-apply after you change the pinned version or day count.
-            "openbubbles_delete_messages_after_days_v1" to {
-                OpenBubblesOps.applyDeleteOldMessages(this, tag)
-            },
+            // NOTE: the OpenBubbles "delete after 3 days" retention toggle is
+            // intentionally NOT a boot migration. It runs the first time the
+            // user opens smart txt instead — see
+            // [com.offlineinc.dumbdownlauncher.MainAppsGridActivity]
+            // .applyOpenBubblesRetentionThenLaunch. Doing it at launch time
+            // guarantees [OpenBubblesOps.applyDeleteOldMessages] (which kills
+            // OB before editing its prefs) only fires while OB is backgrounded
+            // and about to be relaunched, never racing a live OB session the
+            // way a boot-time pass could.
             // One-time WhatsApp media-settings pass. Flips three values
             // in com.whatsapp_preferences_light.xml:
             //
