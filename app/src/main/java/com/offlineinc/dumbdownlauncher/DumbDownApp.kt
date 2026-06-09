@@ -117,6 +117,20 @@ class DumbDownApp : Application() {
                 .createIfPaired(this)
         }.start()
 
+        // Dumb Signal: same host-agnostic pattern as Google Messages above.
+        // Tell the shared :signal backend which Activity a future Signal
+        // notifier should open on tap, then bring up the linked-account
+        // session so incoming Signal messages arrive even when the messenger
+        // UI is closed (no-op when no Signal device is linked). Off the main
+        // thread — createIfPaired opens EncryptedSharedPreferences.
+        com.offline.dpadmessenger.backend.signal.SignalConfig
+            .messengerActivityClassName =
+            "com.offlineinc.dumbdownlauncher.messenger.SignalMessengerActivity"
+        Thread {
+            com.offline.dpadmessenger.backend.signal.SignalRepository
+                .createIfPaired(this)
+        }.start()
+
         UpdateCheckWorker.schedule(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.

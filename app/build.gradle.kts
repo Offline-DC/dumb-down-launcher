@@ -44,8 +44,17 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        // Java 17 to match the :signal backend + its demo app. libsignal-client
+        // ships Java 17 bytecode (incl. records); compiling the app at a lower
+        // target makes D8 take the record-desugaring path that fails dexing
+        // ("global synthetic for 'Record desugaring' without a consumer"). The
+        // backend's own app builds libsignal cleanly with exactly this config
+        // (Java 17 + core library desugaring), so we mirror it.
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        // Required because :signal + libsignal-android use Java 8+ APIs
+        // (java.time, etc.) that need core library desugaring at minSdk 24.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     buildFeatures {
@@ -56,7 +65,7 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_11)
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
@@ -78,6 +87,21 @@ dependencies {
     // "android" as their smart-txt platform — replacing the previous "open
     // messages.google.com/web in Chrome" behaviour.
     implementation("com.offline.dpadmessenger.backend:gmessages:0.1.0-SNAPSHOT")
+
+    // Dumb Signal: in-app Signal messenger — backend + QR device-link/chat UI.
+    // Lives in the matrix-app repo as dpad-messenger-backend's :signal module,
+    // pulled in via the composite-build substitution in settings.gradle.kts
+    // (the coordinate below maps to that project). Like :gmessages it
+    // api-exposes the dpad-messenger UI library, so SignalMessengerActivity
+    // gets DpadMessengerTheme + SignalApp transitively. The link flow shows a
+    // QR the user scans from their primary Signal device (Signal's standard
+    // linked-device provisioning).
+    implementation("com.offline.dpadmessenger.backend:signal:0.1.0-SNAPSHOT")
+
+    // Core library desugaring runtime — required by :signal + libsignal-android
+    // (see compileOptions.isCoreLibraryDesugaringEnabled above). Same version
+    // the :signal module pins.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

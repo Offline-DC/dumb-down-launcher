@@ -168,6 +168,18 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
+            // Signal 4 Dumb — always available as a built-in app. Opens the
+            // in-app Signal messenger (SignalMessengerActivity → SignalApp),
+            // which shows the QR device-link screen until the user links it
+            // from their primary Signal app, then the chat UI.
+            appItems.add(AppItem(
+                packageName = DUMB_SIGNAL,
+                label = "signal (beta)",
+                icon = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_signal)
+                    ?: pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+
             // Free up space — built-in storage cleanup tile. Always shown
             // so users on tight-storage devices (TCL Flip 2 etc.) have
             // a one-tap way to recover MBs.
@@ -511,6 +523,13 @@ class AllAppsActivity : AppCompatActivity() {
                     WEATHER -> {
                         startActivity(
                             Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.weather.WeatherActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
+                    DUMB_SIGNAL -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.messenger.SignalMessengerActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         )
                         overridePendingTransition(0, 0)
