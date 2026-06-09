@@ -14,9 +14,16 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 170
-        versionName = "v4.82.0-beta.11"
+        versionCode = 171
+        versionName = "v4.82.0-beta.12"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // armeabi-v7a ONLY — mirrors the :signal module. A single 32-bit ARM
+            // lib runs on every physical phone (incl. the TCL Flip 2) and avoids
+            // shipping libsignal's ~74 MB arm64-v8a / ~75 MB x86_64 native libs.
+            abiFilters.add("armeabi-v7a")
+        }
     }
 
     signingConfigs {
