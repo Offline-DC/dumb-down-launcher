@@ -14,8 +14,8 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 169
-        versionName = "v4.82.0-beta.9"
+        versionCode = 170
+        versionName = "v4.82.0-beta.10"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
