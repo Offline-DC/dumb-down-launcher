@@ -27,6 +27,7 @@ import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.storage.SpotifyOfflineCleanupWorker
 import com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
+import com.offlineinc.dumbdownlauncher.update.UpdateNotificationManager
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -98,6 +99,13 @@ class DumbDownApp : Application() {
         com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
 
         UpdateCheckWorker.schedule(this)
+
+        // Re-post the sticky OpenBubbles forced-update tile if an update is
+        // still pending. The OS clears all notifications on reboot; this runs
+        // on launcher start (≈ boot, since we're the home app) so the prompt —
+        // and therefore the usage block — survives restarts. No-ops / clears
+        // itself once OpenBubbles has been updated.
+        UpdateNotificationManager.repostOpenBubblesUpdateIfPending(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.
         // The flag is persisted in PairingStore — a long-press on "updates"

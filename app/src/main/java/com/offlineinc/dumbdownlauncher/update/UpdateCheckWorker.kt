@@ -115,11 +115,14 @@ class UpdateCheckWorker(
         private const val WORK_NAME = "update_check"
 
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(30, TimeUnit.DAYS)
+            // Weekly background check. UPDATE (not KEEP) so devices previously
+            // scheduled on the old 30-day interval pick up the weekly cadence
+            // without a reinstall.
+            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(7, TimeUnit.DAYS)
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request,
             )
         }

@@ -83,21 +83,30 @@ class NotificationsActivity : AppCompatActivity() {
                             "NotificationsActivity",
                             "onOpen: pkg=${item.packageName} title='${item.title}' hasIntent=${item.contentIntent != null}"
                         )
-                        val pi = item.contentIntent
-                        if (pi != null) {
-                            val needsMouse = item.packageName in MouseAccessibilityService.AUDIO_APP_PACKAGES
-                                || (item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this@NotificationsActivity))
-                                || item.packageName == "org.chromium.chrome"
-                                || item.packageName == "com.android.chrome"
-                            if (needsMouse) {
-                                MouseAccessibilityService.setMouseEnabled(this@NotificationsActivity, true)
-                            }
-                            pi.send()
+                        // Gate OpenBubbles notification taps the same way the
+                        // grid / All Apps do: if an update is required, show the
+                        // update modal instead of opening OpenBubbles.
+                        if (item.packageName == com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate.PKG &&
+                            com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate.isUpdateRequired(this@NotificationsActivity)) {
+                            com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate.showUpdateRequired(this@NotificationsActivity)
                             overridePendingTransition(0, 0)
-                            if (item.packageName != packageName) {
-                                finish()
-                            } else {
-                                scrollToKey = item.key
+                        } else {
+                            val pi = item.contentIntent
+                            if (pi != null) {
+                                val needsMouse = item.packageName in MouseAccessibilityService.AUDIO_APP_PACKAGES
+                                    || (item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this@NotificationsActivity))
+                                    || item.packageName == "org.chromium.chrome"
+                                    || item.packageName == "com.android.chrome"
+                                if (needsMouse) {
+                                    MouseAccessibilityService.setMouseEnabled(this@NotificationsActivity, true)
+                                }
+                                pi.send()
+                                overridePendingTransition(0, 0)
+                                if (item.packageName != packageName) {
+                                    finish()
+                                } else {
+                                    scrollToKey = item.key
+                                }
                             }
                         }
                     } catch (e: Exception) {

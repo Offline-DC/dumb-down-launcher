@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps
 
 object UpdateNotificationManager {
 
@@ -33,6 +34,12 @@ object UpdateNotificationManager {
     const val ACTION_DOWNLOAD_APK = "com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK"
     const val EXTRA_DOWNLOAD_URL = "extra_download_url"
     const val EXTRA_APP_KEY = "extra_app_key"
+
+    // Persisted state for the sticky OpenBubbles forced-update tile, so it can
+    // be re-posted after a reboot (which clears all notifications).
+    private const val OB_PENDING_PREFS = "ob_update_pending"
+    private const val KEY_OB_PENDING_URL = "url"
+    private const val KEY_OB_PENDING_VERSION = "version"
 
     fun ensureChannel(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -131,20 +138,67 @@ object UpdateNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        // FLAG_NO_CLEAR exempts this from the shade's "Clear all" button
-        // so a casual sweep doesn't lose the update prompt — but the user
-        // can still swipe it away individually if they want.
+        // OpenBubbles is a forced update — its tile is fully sticky: ongoing
+        // (can't be swiped away) AND persisted so it can be re-posted after a
+        // reboot (the OS clears all notifications on boot). Other apps' update
+        // tiles stay dismissable-by-swipe but exempt from "Clear all".
+        val isForced = appKey == "openbubbles-messaging"
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("Update available")
             .setContentText("$appDisplayName v$versionName is ready to install")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(false)
+            .setOngoing(isForced)
             .setContentIntent(pendingIntent)
             .build()
+            // FLAG_NO_CLEAR exempts from the shade's "Clear all" button; for the
+            // forced OpenBubbles tile FLAG_ONGOING_EVENT (via setOngoing) also
+            // blocks individual swipe-away.
             .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
 
+        if (isForced) {
+            // Persist so we can re-post on the next launcher start (≈ boot).
+            context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_OB_PENDING_URL, downloadUrl)
+                .putString(KEY_OB_PENDING_VERSION, versionName)
+                .apply()
+        }
+
         nm.notify(notificationId, notification)
+    }
+
+    /**
+     * Re-posts the sticky OpenBubbles "update available" tile from persisted
+     * state if an update is still pending. Called on launcher start (which on a
+     * home launcher is effectively boot) so the forced-update prompt survives
+     * reboots — Android clears all posted notifications on boot. If OpenBubbles
+     * has since been updated to [OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE] or
+     * newer, the persisted state is cleared and the tile cancelled instead.
+     */
+    fun repostOpenBubblesUpdateIfPending(context: Context) {
+        val prefs = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+        val url = prefs.getString(KEY_OB_PENDING_URL, null) ?: return
+        val versionName = prefs.getString(KEY_OB_PENDING_VERSION, "") ?: ""
+
+        val installed = OpenBubblesOps.installedVersionCode(context)
+        if (installed == null || installed >= OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE) {
+            // Updated (or uninstalled) — clear the forced prompt.
+            prefs.edit().clear().apply()
+            cancel(context, NOTIFICATION_ID_OPENBUBBLES)
+            return
+        }
+
+        notify(
+            context = context,
+            notificationId = NOTIFICATION_ID_OPENBUBBLES,
+            appKey = "openbubbles-messaging",
+            appDisplayName = displayNameFor("openbubbles-messaging"),
+            versionName = versionName,
+            downloadUrl = url,
+        )
     }
 
     fun notifyDownloading(context: Context, appKey: String) {
