@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
@@ -221,6 +222,13 @@ private fun DiagMenuScreen(
 
     var selectedIndex by remember { mutableIntStateOf(0) }
 
+    // The center key that long-press-launched this menu is usually still
+    // held when we open — its auto-repeat KeyDowns and eventual KeyUp land
+    // here and would instantly (and repeatedly) toggle the first row.
+    // Guard: stay disarmed until we've seen a center KeyUp, and ignore
+    // auto-repeats (repeatCount > 0) so a held press only ever fires once.
+    var centerArmed by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
     Box(modifier = Modifier.fillMaxSize().background(DumbTheme.Colors.Black)) {
@@ -231,6 +239,15 @@ private fun DiagMenuScreen(
                 .focusRequester(focusRequester)
                 .focusable()
                 .onPreviewKeyEvent { event ->
+                    val isCenterKey = event.key == Key.Enter ||
+                        event.key == Key.NumPadEnter ||
+                        event.key == Key.DirectionCenter
+                    if (event.type == KeyEventType.KeyUp && isCenterKey) {
+                        // Release of the launching long-press (or of any
+                        // later press). From here on, presses count.
+                        centerArmed = true
+                        return@onPreviewKeyEvent true
+                    }
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (event.key) {
                         Key.DirectionDown -> {
@@ -242,7 +259,9 @@ private fun DiagMenuScreen(
                             true
                         }
                         Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                            rows[selectedIndex].onActivate()
+                            if (centerArmed && event.nativeKeyEvent.repeatCount == 0) {
+                                rows[selectedIndex].onActivate()
+                            }
                             true
                         }
                         Key.Back -> { onBack(); true }
