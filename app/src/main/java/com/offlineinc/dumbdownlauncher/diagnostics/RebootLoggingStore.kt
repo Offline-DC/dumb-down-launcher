@@ -6,7 +6,7 @@ import android.content.Context
  * Runtime opt-in flag for the diagnostic-logging module. Single boolean:
  * the rolling-logcat tail only runs when this is true.
  *
- * Flipped from the long-press-on-weather hook in [AllAppsActivity] —
+ * Flipped from the diagnostics screen opened by long-pressing "quack" in All Apps —
  * mirroring the long-press-on-updates beta-tester toggle. Also writable
  * directly from adb without UI, mainly for support escalations:
  *

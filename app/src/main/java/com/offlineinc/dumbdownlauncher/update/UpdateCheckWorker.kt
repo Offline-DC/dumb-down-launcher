@@ -10,6 +10,7 @@ import androidx.work.WorkerParameters
 import androidx.work.WorkManager
 import com.offlineinc.dumbdownlauncher.BuildConfig
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
+import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import java.util.concurrent.TimeUnit
 
@@ -77,12 +78,11 @@ class UpdateCheckWorker(
                 }
             }
 
-            // Check OpenBubbles messaging update (only if installed). Mirrors
-            // the snake path — we only nudge the user when the app is actually
-            // on the device, since the launcher itself never installs it from
-            // scratch.
+            // Check OpenBubbles messaging update — only when the user picked
+            // iOS for smart txt (OpenBubbles is their linked-device path) AND
+            // it's actually installed. If they're on Android/none, don't bother.
             val openBubblesInfo = latest["openbubbles-messaging"]
-            if (openBubblesInfo != null) {
+            if (openBubblesInfo != null && PlatformPreferences.getChoice(context) == "ios") {
                 val installedCode = getInstalledVersionCode("com.openbubbles.messaging")
                 if (installedCode != null && openBubblesInfo.versionCode > installedCode) {
                     UpdateNotificationManager.notify(
@@ -188,7 +188,7 @@ class UpdateCheckWorker(
                 }
 
                 val openBubblesInfo = latest["openbubbles-messaging"]
-                if (openBubblesInfo != null) {
+                if (openBubblesInfo != null && PlatformPreferences.getChoice(context) == "ios") {
                     val installedCode = try {
                         val info = context.packageManager.getPackageInfo("com.openbubbles.messaging", 0)
                         PackageInfoCompat.getLongVersionCode(info).toInt()

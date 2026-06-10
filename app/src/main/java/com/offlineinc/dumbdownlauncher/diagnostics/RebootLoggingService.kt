@@ -28,14 +28,14 @@ import androidx.core.app.NotificationCompat
  *
  * Started from [com.offlineinc.dumbdownlauncher.DumbDownApp.onCreate]
  * via [startIfEnabled] (gated by the runtime opt-in alone — no
- * compile-time flag) and from the long-press-on-weather toggle in
+ * compile-time flag) and from the rolling-adb-logs toggle in
  * [com.offlineinc.dumbdownlauncher.AllAppsActivity]. Runs as
  * START_STICKY so the OS restarts it after low-memory kills — exactly
  * the case where we'd otherwise lose the recent log lines we want.
  *
- * The user-visible notification reads "Diagnostic logs being collected"
+ * The user-visible notification reads "Logging diagnostics"
  * and instructs the user how to turn collection off (long-press
- * weather) so the foreground-service notification doubles as
+ * quack) so the foreground-service notification doubles as
  * disclosure. No persistent UI state otherwise.
  */
 class RebootLoggingService : Service() {
@@ -108,8 +108,8 @@ class RebootLoggingService : Service() {
 
         return NotificationCompat.Builder(this, RebootLoggingConfig.NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(iconRes)
-            .setContentTitle("Diagnostic logs being collected")
-            .setContentText("Long-press weather in all apps to stop")
+            .setContentTitle("Logging diagnostics")
+            .setContentText("Long press quack in all apps to stop")
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -127,7 +127,7 @@ class RebootLoggingService : Service() {
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
             description = "Shown while the launcher is recording a rolling 24-hour " +
-                "diagnostic log. Toggled from a long-press on the weather app."
+                "diagnostic log. Toggled from a long press on quack in all apps."
             setShowBadge(false)
             enableLights(false)
             enableVibration(false)

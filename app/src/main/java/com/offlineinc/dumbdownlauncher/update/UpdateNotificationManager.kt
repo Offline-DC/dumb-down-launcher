@@ -185,6 +185,14 @@ object UpdateNotificationManager {
         val url = prefs.getString(KEY_OB_PENDING_URL, null) ?: return
         val versionName = prefs.getString(KEY_OB_PENDING_VERSION, "") ?: ""
 
+        // Only relevant when the user is on the iOS (OpenBubbles) smart-txt
+        // path. If they've switched to Android/none, clear the forced prompt.
+        if (com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences.getChoice(context) != "ios") {
+            prefs.edit().clear().apply()
+            cancel(context, NOTIFICATION_ID_OPENBUBBLES)
+            return
+        }
+
         val installed = OpenBubblesOps.installedVersionCode(context)
         if (installed == null || installed >= OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE) {
             // Updated (or uninstalled) — clear the forced prompt.
@@ -283,6 +291,58 @@ object UpdateNotificationManager {
             .setAutoCancel(true)
             .build()
         nm.notify(notificationId, notification)
+    }
+
+    /**
+     * Replace the (now-finished) download tile with an "Installing…" state —
+     * ongoing + indeterminate bar — for the stretch between download-complete
+     * and the install result. Without this the frozen download progress bar
+     * lingers at whatever % it last polled (e.g. 94%) through the whole
+     * multi-minute split install, which looks stuck.
+     */
+    fun notifyInstalling(context: Context, appKey: String) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val appDisplayName = displayNameFor(appKey)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Installing update")
+            .setContentText("$appDisplayName is installing…")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setProgress(0, 0, true) // indeterminate
+            .setOnlyAlertOnce(true)
+            .build()
+        nm.notify(notificationIdFor(appKey), notification)
+    }
+
+    /**
+     * Success confirmation, replacing the "Installing…" tile. Clearable and
+     * self-dismisses after a few seconds so it doesn't linger. For OpenBubbles
+     * it also clears the persisted forced-update state so the sticky prompt
+     * never comes back for this version.
+     */
+    fun notifyInstalled(context: Context, appKey: String) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val appDisplayName = displayNameFor(appKey)
+
+        if (appKey == "openbubbles-messaging") {
+            context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        }
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Update installed")
+            .setContentText("$appDisplayName is up to date")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setTimeoutAfter(8_000L) // auto-dismiss after 8s
+            .build()
+        nm.notify(notificationIdFor(appKey), notification)
     }
 
     private fun notificationIdFor(appKey: String) = when (appKey) {

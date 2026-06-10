@@ -229,6 +229,9 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             val sizeMb = apkFile.length() / (1024 * 1024)
             val freeMb = (apkFile.parentFile?.freeSpace ?: -1L) / (1024 * 1024)
             Log.i(TAG, "triggerInstall: OB split-zip install size=${sizeMb}MB free=${freeMb}MB")
+            // Swap the (now-frozen) download bar for an "Installing…" state for
+            // the duration of the split write + commit.
+            UpdateNotificationManager.notifyInstalling(context, appKey)
             val started = SplitApkInstaller.installFromZip(context, apkFile, appKey)
             if (!started) {
                 Log.e(TAG, "triggerInstall: split install couldn't start for $appKey")
@@ -364,7 +367,10 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             }
             PackageInstaller.STATUS_SUCCESS -> {
                 Log.i(TAG, "install SUCCESS for $appKey")
-                UpdateNotificationManager.cancel(context, notificationIdForKey(appKey))
+                // Show a brief "Update installed" confirmation (replaces the
+                // "Installing…" tile and self-dismisses) instead of silently
+                // cancelling, so the user gets a clear "done" signal.
+                UpdateNotificationManager.notifyInstalled(context, appKey)
                 cleanupDownloadedFile(context, appKey)
             }
             else -> {
