@@ -260,33 +260,6 @@ the launcher picks them up through the `:gmessages` composite build.
   `session.getOrCreateConversation(numbers, groupName)` and
   `repo.startGroupConversation(...)` build the RCS group.
 
-## Signal launcher drop-in (gmessages parity)
-
-Signal can now be hosted by the launcher exactly like Google Messages. New in
-the `:signal` backend module (Compose enabled there; ZXing added):
-- `object SignalRepository` — process-scoped repo+socket holder
-  (`createIfPaired`/`create`/`shutdown`/`reset`), mirroring
-  `GoogleMessagesRepository`.
-- `object SignalPairing` — process-scoped provisioning-client holder
-  (`getOrStart`/`reset`), so the QR + socket survive Activity recreation.
-- `SignalAccountStore.isPaired()`, `object SignalConfig` (parity).
-- `ui/SignalApp()` — the gate composable (linked → `DpadMessengerApp`; unlinked →
-  `SignalLinkScreen` QR flow → saves the account on `Linked`). Plus
-  `ui/SignalLinkScreen` (with "Try again") and `ui/QrCode`.
-
-Launcher wiring: `settings.gradle.kts` substitutes `:signal`; `app/build.gradle`
-depends on it; `SignalMessengerActivity` is the thin shell
-(`setContent { DpadMessengerTheme { SignalApp() } }`), registered in the
-manifest with the same `adjustResize` config. To open it:
-`startActivity(Intent(this, SignalMessengerActivity::class.java))`.
-
-**Parity caveat:** `SignalMessageRepository` currently implements only
-`MessageRepository` (1:1 send/receive). So the Signal drop-in gives full
-linking + chat, but new-conversation, contacts, media, groups, and the initial-
-sync spinner stay dark until those capability interfaces (`ConversationStarter`,
-`ContactsSource`, `MediaDownloader`/`AttachmentSender`, `GroupConversationStarter`,
-`InitialSyncAware`) are implemented on the Signal repo — same set gmessages has.
-
 ## Hardening + perf pass (audit-driven)
 
 A thorough security / performance / UI audit drove these changes:

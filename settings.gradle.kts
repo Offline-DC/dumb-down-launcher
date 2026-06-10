@@ -44,14 +44,5 @@ includeBuild("../matrix-app/dpad-messenger-backend") {
     dependencySubstitution {
         substitute(module("com.offline.dpadmessenger.backend:gmessages"))
             .using(project(":gmessages"))
-        // Dumb Signal: the launcher hosts the matrix-app backend's :signal
-        // module the same way it hosts :gmessages. `SignalMessengerActivity`
-        // is a thin window around `SignalApp()` (the Signal twin of
-        // `GoogleMessagesApp()`), which gates on link state and shows the
-        // QR device-link screen until the user scans it from their primary
-        // Signal app. Substituting the bare module coordinate lets :app
-        // depend on it from source — no Maven publish needed.
-        substitute(module("com.offline.dpadmessenger.backend:signal"))
-            .using(project(":signal"))
     }
 }

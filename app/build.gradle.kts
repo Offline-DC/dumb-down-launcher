@@ -17,13 +17,6 @@ android {
         versionCode = 173
         versionName = "v4.82.0-beta.14"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        ndk {
-            // armeabi-v7a ONLY — mirrors the :signal module. A single 32-bit ARM
-            // lib runs on every physical phone (incl. the TCL Flip 2) and avoids
-            // shipping libsignal's ~74 MB arm64-v8a / ~75 MB x86_64 native libs.
-            abiFilters.add("armeabi-v7a")
-        }
     }
 
     signingConfigs {
@@ -51,47 +44,15 @@ android {
     }
 
     compileOptions {
-        // Java 17 to match the :signal backend + its demo app. libsignal-client
-        // ships Java 17 bytecode (incl. records); compiling the app at a lower
-        // target makes D8 take the record-desugaring path that fails dexing
-        // ("global synthetic for 'Record desugaring' without a consumer"). The
-        // backend's own app builds libsignal cleanly with exactly this config
-        // (Java 17 + core library desugaring), so we mirror it.
+        // Java 17 to match the dpad-messenger-backend modules (:gmessages and
+        // friends all compile at Java 17), mirroring the backend's own demo app.
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-        // Required because :signal + libsignal-android use Java 8+ APIs
-        // (java.time, etc.) that need core library desugaring at minSdk 24.
-        isCoreLibraryDesugaringEnabled = true
     }
 
     buildFeatures {
         compose = true
         buildConfig = true
-    }
-
-    packaging {
-        jniLibs {
-            // libsignal-android bundles a SECOND native lib per ABI,
-            // `libsignal_jni_testing.so` (~75–83 MB unstripped each), used only
-            // by libsignal's own fuzz/conformance tests — never at runtime.
-            // Across arm64-v8a + armeabi-v7a + x86_64 this alone adds hundreds
-            // of MB to the APK. Drop it; the real `libsignal_jni.so` stays.
-            excludes += "**/libsignal_jni_testing.so"
-        }
-        resources {
-            // libsignal-android also embeds libsignal-client's DESKTOP JNI
-            // natives (macOS .dylib, Windows .dll, and amd64/aarch64 host .so)
-            // as plain Java resources for JVM use. They're dead weight inside an
-            // Android APK (~125 MB) — exclude every host-native variant.
-            excludes += listOf(
-                "**/*.dylib",
-                "**/*.dll",
-                "**/libsignal_jni_amd64.so",
-                "**/libsignal_jni_aarch64.so",
-                "**/libsignal_jni_testing_amd64.so",
-                "**/libsignal_jni_testing_aarch64.so",
-            )
-        }
     }
 }
 
@@ -119,21 +80,6 @@ dependencies {
     // "android" as their smart-txt platform — replacing the previous "open
     // messages.google.com/web in Chrome" behaviour.
     implementation("com.offline.dpadmessenger.backend:gmessages:0.1.0-SNAPSHOT")
-
-    // Dumb Signal: in-app Signal messenger — backend + QR device-link/chat UI.
-    // Lives in the matrix-app repo as dpad-messenger-backend's :signal module,
-    // pulled in via the composite-build substitution in settings.gradle.kts
-    // (the coordinate below maps to that project). Like :gmessages it
-    // api-exposes the dpad-messenger UI library, so SignalMessengerActivity
-    // gets DpadMessengerTheme + SignalApp transitively. The link flow shows a
-    // QR the user scans from their primary Signal device (Signal's standard
-    // linked-device provisioning).
-    implementation("com.offline.dpadmessenger.backend:signal:0.1.0-SNAPSHOT")
-
-    // Core library desugaring runtime — required by :signal + libsignal-android
-    // (see compileOptions.isCoreLibraryDesugaringEnabled above). Same version
-    // the :signal module pins.
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

@@ -112,36 +112,17 @@
              other apps already have.
 
              Distinct taskAffinity puts this messenger in its OWN task,
-             separate from Signal and from the home/grid task. Without it,
-             both messenger activities share the default (package) affinity,
-             so opening one on top of the other stacks them in a single task
-             — then pressing the red/home key and later opening the other
-             messenger would let Back walk into the first one instead of
-             returning to the grid. Its own task keeps each app self-contained:
-             home goes home, and Back from here returns to wherever it was
-             launched (the grid). -->
+             separate from the home/grid task. Without it, the messenger
+             shares the default (package) affinity with the grid, so Back
+             could walk into stale launcher state instead of returning to
+             the grid. Its own task keeps the app self-contained: home goes
+             home, and Back from here returns to wherever it was launched
+             (the grid). -->
         <activity
             android:name=".messenger.MessengerActivity"
             android:exported="false"
             android:launchMode="singleTask"
             android:taskAffinity="com.offlineinc.dumbdownlauncher.task.gmessages"
-            android:clearTaskOnLaunch="true"
-            android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.DumbDownLauncher" />
-
-        <!-- Dumb Signal: in-app Signal messenger. Thin shell around
-             SignalApp() (matrix-app :signal module). Shows the QR
-             device-link screen until the user scans it from their primary
-             Signal app, then the chat UI. Same launchMode/clearTaskOnLaunch
-             as MessengerActivity so re-launching from All Apps always lands
-             on the room list. Distinct taskAffinity (its own task, separate
-             from Google Messages and the home/grid) so the two messengers
-             never share a back stack — see the MessengerActivity note. -->
-        <activity
-            android:name=".messenger.SignalMessengerActivity"
-            android:exported="false"
-            android:launchMode="singleTask"
-            android:taskAffinity="com.offlineinc.dumbdownlauncher.task.signal"
             android:clearTaskOnLaunch="true"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.DumbDownLauncher" />
