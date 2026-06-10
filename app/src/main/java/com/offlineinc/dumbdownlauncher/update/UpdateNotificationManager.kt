@@ -326,23 +326,42 @@ object UpdateNotificationManager {
     fun notifyInstalled(context: Context, appKey: String) {
         ensureChannel(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val appDisplayName = displayNameFor(appKey)
+        // On this device OpenBubbles is branded "smart txt".
+        val displayName =
+            if (appKey == "openbubbles-messaging") "smart txt" else displayNameFor(appKey)
 
         if (appKey == "openbubbles-messaging") {
             context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
                 .edit().clear().apply()
         }
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+        // Tapping the success tile opens the freshly-updated app and clears the
+        // notification (setAutoCancel). Only wired for OpenBubbles ("smart txt").
+        val launchIntent = if (appKey == "openbubbles-messaging") {
+            context.packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
+                ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        } else {
+            null
+        }
+        val contentIntent = launchIntent?.let {
+            PendingIntent.getActivity(
+                context,
+                notificationIdFor(appKey),
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("Update installed")
-            .setContentText("$appDisplayName is up to date")
+            .setContentText("$displayName is up to date")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setOngoing(false)
             .setAutoCancel(true)
-            .setTimeoutAfter(8_000L) // auto-dismiss after 8s
-            .build()
-        nm.notify(notificationIdFor(appKey), notification)
+            .setTimeoutAfter(8_000L) // auto-dismiss after 8s if not tapped
+        if (contentIntent != null) builder.setContentIntent(contentIntent)
+        nm.notify(notificationIdFor(appKey), builder.build())
     }
 
     private fun notificationIdFor(appKey: String) = when (appKey) {
