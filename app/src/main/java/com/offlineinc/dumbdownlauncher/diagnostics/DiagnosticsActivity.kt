@@ -269,22 +269,8 @@ private fun DiagnosticsScreen(
                 }
         ) {
             BasicText(
-                text = "battery diagnostics",
+                text = "diagnostics",
                 style = TextStyle(color = DumbTheme.Colors.White, fontSize = 20.sp, fontFamily = fontFamily),
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-
-            BasicText(
-                text = "battery analysis collects battery samples, screen/power/doze "
-                    + "events, and privileged dumpsys + logcat snapshots. rolling adb "
-                    + "logs keeps a 24h logcat buffer. Both write into /sdcard/Android/"
-                    + "data/${BuildConfig.APPLICATION_ID}/files/diag/ (adb pull command "
-                    + "below). submit logs zips it all and uploads it for support.",
-                style = TextStyle(
-                    color = DumbTheme.Colors.White.copy(alpha = 0.55f),
-                    fontSize = 11.sp,
-                    fontFamily = fontFamily,
-                ),
                 modifier = Modifier.padding(bottom = 10.dp),
             )
 
