@@ -197,7 +197,7 @@ private fun DiagnosticsScreen(
         },
         Row.Action(
             "submit logs",
-            secondary = if (uploading) "uploading…" else "press center to upload",
+            secondary = if (uploading) "uploading…" else "press OK to upload",
         ) {
             // One in-flight upload at a time; center-mashing while a 40 MB
             // zip crawls up LTE must not queue duplicates.
