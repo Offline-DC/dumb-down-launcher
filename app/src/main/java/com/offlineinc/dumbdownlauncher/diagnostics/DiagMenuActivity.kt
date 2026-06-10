@@ -38,8 +38,12 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import com.offlineinc.dumbdownlauncher.BuildConfig
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Hidden diagnostics menu, opened via long-press on the "weather" row in
@@ -52,6 +56,9 @@ import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
  *   • battery analysis   – battery sampling + privileged dumpsys snapshots
  *                          ([DiagnosticsStore] / [DiagnosticsService]);
  *                          row only shown when BuildConfig.DIAGNOSTICS_ENABLED
+ *   • submit logs        – zips the whole diag/ tree (battery + rolling
+ *                          logs) and uploads it to S3 via the backend's
+ *                          presigned-URL flow ([DiagLogUploader])
  *
  * D-pad navigable, mirroring DiagnosticsActivity:
  *   ↑/↓     – move selection
@@ -115,6 +122,35 @@ class DiagMenuActivity : AppCompatActivity() {
                         ).show()
                     }
                 },
+                onSubmitLogs = { onDone ->
+                    Toast.makeText(
+                        this@DiagMenuActivity,
+                        "submitting logs…",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        val result = runCatching { DiagLogUploader.submit(applicationContext) }
+                        withContext(Dispatchers.Main) {
+                            result.fold(
+                                onSuccess = { upload ->
+                                    Toast.makeText(
+                                        this@DiagMenuActivity,
+                                        "logs submitted (${upload.sizeBytes / 1024 / 1024} MB)",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                },
+                                onFailure = { t ->
+                                    Toast.makeText(
+                                        this@DiagMenuActivity,
+                                        "submit failed: ${t.message ?: "unknown error"}",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                },
+                            )
+                            onDone()
+                        }
+                    }
+                },
                 onBack = { finish() },
             )
         }
@@ -129,6 +165,7 @@ private fun DiagMenuScreen(
     diagnosticsStore: DiagnosticsStore,
     onToggleRollingLogs: (Boolean) -> Unit,
     onToggleBatteryAnalysis: (Boolean) -> Unit,
+    onSubmitLogs: (onDone: () -> Unit) -> Unit,
     onBack: () -> Unit,
 ) {
     val fontFamily = DumbTheme.BioRhyme
@@ -137,13 +174,14 @@ private fun DiagMenuScreen(
 
     var rollingLogsEnabled by remember { mutableStateOf(rebootLoggingStore.enabled) }
     var batteryAnalysisEnabled by remember { mutableStateOf(diagnosticsStore.enabled) }
+    var uploading by remember { mutableStateOf(false) }
 
     val rows = buildList {
         add(
-            MenuRow(
+            MenuRow.Toggle(
                 label = "rolling adb logs",
                 value = rollingLogsEnabled,
-                onToggle = {
+                onActivate = {
                     val next = !rollingLogsEnabled
                     rollingLogsEnabled = next
                     onToggleRollingLogs(next)
@@ -154,10 +192,10 @@ private fun DiagMenuScreen(
         // AllAppsActivity — production builds drop the row entirely.
         if (BuildConfig.DIAGNOSTICS_ENABLED) {
             add(
-                MenuRow(
+                MenuRow.Toggle(
                     label = "battery analysis",
                     value = batteryAnalysisEnabled,
-                    onToggle = {
+                    onActivate = {
                         val next = !batteryAnalysisEnabled
                         batteryAnalysisEnabled = next
                         onToggleBatteryAnalysis(next)
@@ -165,6 +203,20 @@ private fun DiagMenuScreen(
                 )
             )
         }
+        add(
+            MenuRow.Action(
+                label = "submit logs",
+                secondary = if (uploading) "uploading…" else "press center to upload",
+                onActivate = {
+                    // One in-flight upload at a time; center-mashing while
+                    // a 40 MB zip crawls up LTE must not queue duplicates.
+                    if (!uploading) {
+                        uploading = true
+                        onSubmitLogs { uploading = false }
+                    }
+                },
+            )
+        )
     }
 
     var selectedIndex by remember { mutableIntStateOf(0) }
@@ -190,7 +242,7 @@ private fun DiagMenuScreen(
                             true
                         }
                         Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                            rows[selectedIndex].onToggle()
+                            rows[selectedIndex].onActivate()
                             true
                         }
                         Key.Back -> { onBack(); true }
@@ -207,7 +259,8 @@ private fun DiagMenuScreen(
             BasicText(
                 text = "rolling adb logs keeps a 24h logcat buffer on device. "
                     + "battery analysis collects battery samples and privileged "
-                    + "dumpsys snapshots. press center to toggle.",
+                    + "dumpsys snapshots. submit logs zips both and uploads "
+                    + "them for support. press center to toggle / run.",
                 style = TextStyle(
                     color = DumbTheme.Colors.White.copy(alpha = 0.55f),
                     fontSize = 11.sp,
@@ -248,7 +301,10 @@ private fun DiagMenuRow(
         )
         Spacer(Modifier.size(2.dp))
         BasicText(
-            text = if (row.value) "on" else "off",
+            text = when (row) {
+                is MenuRow.Toggle -> if (row.value) "on" else "off"
+                is MenuRow.Action -> row.secondary
+            },
             style = TextStyle(
                 fontFamily = fontFamily,
                 fontSize = 12.sp,
@@ -259,8 +315,10 @@ private fun DiagMenuRow(
     }
 }
 
-private class MenuRow(
-    val label: String,
-    val value: Boolean,
-    val onToggle: () -> Unit,
-)
+private sealed class MenuRow(val label: String, val onActivate: () -> Unit) {
+    class Toggle(label: String, val value: Boolean, onActivate: () -> Unit) :
+        MenuRow(label, onActivate)
+
+    class Action(label: String, val secondary: String, onActivate: () -> Unit) :
+        MenuRow(label, onActivate)
+}
