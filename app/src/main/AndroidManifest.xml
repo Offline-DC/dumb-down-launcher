@@ -25,8 +25,15 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
-    <!-- Foreground service permissions removed — Type Sync relay now runs
-         inside MouseAccessibilityService (no notification needed). -->
+    <!-- Diagnostic logging (runtime opt-in via long-press on "weather" in
+         All Apps). RebootLoggingService runs as a foreground service so
+         the rolling 24-hour logcat tail survives doze/idle — a service
+         that the OS kills the moment the screen goes off would miss the
+         exact window we need. The privileged `logcat` read is executed
+         via `su -c` (root via Magisk) so READ_LOGS isn't required on the
+         app itself. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
     <!-- Required by TelephonyManager.sendUssdRequest in the USSD fallback path
@@ -149,6 +156,17 @@
             android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
 
+        <!-- Hidden diagnostics menu. Opened by long-pressing the "weather"
+             row in All Apps. Toggles for rolling ADB logs
+             (RebootLoggingService) and battery analysis (DiagnosticsService,
+             row shown only when BuildConfig.DIAGNOSTICS_ENABLED). -->
+        <activity
+            android:name=".diagnostics.DiagMenuActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
         <!-- Battery diagnostics foreground service. Per-minute battery
              sampling, broadcast receivers for screen/power/doze, and an
              hourly privileged dumpsys snapshot scheduler. Runs only when
@@ -198,6 +216,16 @@
         <service
             android:name=".coverdisplay.CoverDisplayService"
             android:exported="false" />
+
+        <!-- Diagnostic logging foreground service. Owns the rolling
+             24-hour logcat tail (size-rotated ring under
+             <filesDir>/diag/rolling-logcat/). Runs only when the user
+             has flipped the runtime opt-in via the long-press-on-
+             weather toggle in AllAppsActivity. -->
+        <service
+            android:name=".diagnostics.RebootLoggingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".notifications.DumbNotificationListenerService"

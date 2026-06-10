@@ -16,6 +16,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlineinc.dumbdownlauncher.quack.LocationProvider
 import com.offlineinc.dumbdownlauncher.quack.QuackLocationStore
+import com.offlineinc.dumbdownlauncher.quack.ReverseGeocoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +52,9 @@ data class WeatherUiState(
     val tomorrowIcon: ImageVector = Icons.Filled.WbSunny,
     // Last update time (human-readable)
     val updatedAt: String = "",
+    // Rough place label for the active fix (e.g. "Brooklyn, NY"), so the
+    // user can sanity-check the location. Empty until reverse-geocoded.
+    val placeName: String = "",
     // Error
     val errorMessage: String = "",
 )
@@ -87,7 +91,13 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                     fetchWeatherData(loc.first, loc.second)
                 }
                 lastFetchedAt = System.currentTimeMillis()
-                _state.value = weather.copy(mode = WeatherMode.DISPLAY)
+                // Preserve any place label we already resolved so it doesn't
+                // flicker away; then refresh it for the current fix.
+                _state.value = weather.copy(
+                    mode = WeatherMode.DISPLAY,
+                    placeName = _state.value.placeName,
+                )
+                resolvePlaceName(loc.first, loc.second)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch weather", e)
                 _state.value = _state.value.copy(
@@ -120,11 +130,29 @@ class WeatherViewModel(application: Application) : AndroidViewModel(application)
                 // Only update if still on display
                 if (_state.value.mode == WeatherMode.DISPLAY) {
                     lastFetchedAt = System.currentTimeMillis()
-                    _state.value = weather.copy(mode = WeatherMode.DISPLAY)
+                    _state.value = weather.copy(
+                        mode = WeatherMode.DISPLAY,
+                        placeName = _state.value.placeName,
+                    )
+                    resolvePlaceName(loc.first, loc.second)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "refreshWeather: silent fail", e)
                 // Silent — don't disrupt the user
+            }
+        }
+    }
+
+    /**
+     * Reverse-geocode the active fix in the background and fold the resulting
+     * label into state. Cached + best-effort: if it fails, the existing
+     * placeName is left untouched and the screen simply shows no location line.
+     */
+    private fun resolvePlaceName(lat: Double, lng: Double) {
+        viewModelScope.launch {
+            val name = ReverseGeocoder.resolve(getApplication(), lat, lng) ?: return@launch
+            if (_state.value.mode == WeatherMode.DISPLAY) {
+                _state.value = _state.value.copy(placeName = name)
             }
         }
     }

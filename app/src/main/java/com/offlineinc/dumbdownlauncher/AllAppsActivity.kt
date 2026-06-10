@@ -65,6 +65,11 @@ class AllAppsActivity : AppCompatActivity() {
             "com.mediatek.duraspeed",         // MTK DuraSpeed
             "com.mediatek.callrecorder",      // MTK call recorder
             "com.mediatek.calendarimporter",  // MTK calendar importer
+            "com.mediatek.gnss.nonframeworklbs", // MTK non-framework LBS
+            // Stock note app (replaced by other note-taking flows)
+            "com.android.note",
+            // Stock Chromium browser
+            "org.chromium.chrome",
             // SIM tool kit
             "com.android.stk",
             // Snake — now built into the launcher as a virtual app
@@ -320,6 +325,76 @@ class AllAppsActivity : AppCompatActivity() {
                             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         )
                         overridePendingTransition(0, 0)
+                    } else if (item.packageName == WEATHER) {
+                        // Long-press on "weather" opens the hidden diagnostics
+                        // menu — toggles for the rolling 24h ADB (logcat)
+                        // collection and for battery analysis. Previously this
+                        // long-press flipped the rolling-log flag directly; the
+                        // menu replaces that so both diagnostics opt-ins live
+                        // in one place. See diagnostics/DiagMenuActivity.kt.
+                        startActivity(
+                            Intent(
+                                this@AllAppsActivity,
+                                com.offlineinc.dumbdownlauncher.diagnostics.DiagMenuActivity::class.java,
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
+                    } else if (item.packageName == "com.spotify.music") {
+                        // Long-press hard-reset for Spotify. Runs
+                        // `pm clear com.spotify.music` via root. Result
+                        // is surfaced via Toast only — no shade
+                        // notification, because the user explicitly
+                        // triggered the action a moment ago and a
+                        // lingering notification would just be noise
+                        // for an action they already know happened.
+                        //
+                        // Why this exists: the nightly
+                        // [com.offlineinc.dumbdownlauncher.storage.SpotifyOfflineCleanupWorker]
+                        // wipe is now scoped to `spotifycache/Storage/`
+                        // and intentionally preserves the auth LevelDB
+                        // (see SPOTIFY_CACHE_DIR doc-comment). But if a
+                        // user *does* end up with corrupted session
+                        // state — from an older build, a Spotify-side
+                        // glitch, or any reason their login is stuck
+                        // bootstrapping with `AuthErrorCode: 15` — the
+                        // only known recovery is `pm clear` + re-login.
+                        // Exposing it as a long-press gesture means
+                        // power users can recover without needing adb.
+                        //
+                        // `pm clear` requires either platform signature
+                        // or root. The launcher is third-party-signed,
+                        // so we shell out to `su -c` — same pattern
+                        // used by the boot-time migrations in
+                        // [DumbDownApp.runOneTimeMigrations]. No
+                        // confirm dialog, mirroring the other
+                        // destructive long-presses (DEVICE_SETUP wipe,
+                        // diagnostic-logging toggle, etc.).
+                        Toast.makeText(
+                            this@AllAppsActivity,
+                            "Resetting Spotify…",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            val ok = runCatching {
+                                val proc = Runtime.getRuntime().exec(
+                                    arrayOf("su", "-c", "pm clear com.spotify.music")
+                                )
+                                // Drain stderr so the pipe doesn't deadlock
+                                // before waitFor; mirrors the convention
+                                // used by every other rootExec call site.
+                                proc.errorStream.bufferedReader().readText()
+                                proc.inputStream.bufferedReader().readText()
+                                proc.waitFor() == 0
+                            }.getOrDefault(false)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    this@AllAppsActivity,
+                                    if (ok) "Spotify reset — log in again on next open"
+                                    else "Spotify reset failed (root unavailable?)",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }
                     } else if (item.packageName == CHECK_UPDATES) {
                         // Beta tester opt-in/out toggle. The AppListScreen
                         // long-press fires after ~300 ms of D-pad center hold;

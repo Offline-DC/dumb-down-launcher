@@ -7,6 +7,9 @@ import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import com.offlineinc.dumbdownlauncher.notifications.NotificationStore
 import kotlinx.coroutines.delay
+import java.util.concurrent.Executor
 
 /**
  * Drives live state (clock, battery, notifications, overlay logic) then
@@ -103,6 +107,56 @@ fun CoverScreen() {
         onDispose { try { context.unregisterReceiver(receiver) } catch (_: Exception) {} }
     }
 
+    // Telephony call state — used to gate the call overlay so a stale CATEGORY_CALL
+    // notification (left behind by the dialer across a reboot or crash) can't pin
+    // the cover display to an "incoming call" overlay for a contact that isn't
+    // actually calling. We only ever show the overlay while the radio reports a
+    // real RINGING or OFFHOOK state.
+    val telephonyManager = remember {
+        context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+    }
+    var callState by remember { mutableIntStateOf(TelephonyManager.CALL_STATE_IDLE) }
+    DisposableEffect(Unit) {
+        // Inline executor: state updates are trivial and we want them on the same
+        // thread that owns the Compose state to avoid an extra hop.
+        val executor = Executor { it.run() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                override fun onCallStateChanged(state: Int) { callState = state }
+            }
+            try {
+                telephonyManager.registerTelephonyCallback(executor, cb)
+            } catch (_: SecurityException) {
+                // READ_PHONE_STATE not granted — fall through; overlay simply
+                // won't be gated, matching pre-patch behaviour for this user.
+            }
+            onDispose {
+                try { telephonyManager.unregisterTelephonyCallback(cb) } catch (_: Exception) {}
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            val listener = object : PhoneStateListener() {
+                @Deprecated("Pre-S API; replaced by TelephonyCallback above")
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    callState = state
+                }
+            }
+            try {
+                @Suppress("DEPRECATION")
+                telephonyManager.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
+            } catch (_: SecurityException) {}
+            onDispose {
+                try {
+                    @Suppress("DEPRECATION")
+                    telephonyManager.listen(listener, PhoneStateListener.LISTEN_NONE)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+    val phoneRingingOrOffHook =
+        callState == TelephonyManager.CALL_STATE_RINGING ||
+        callState == TelephonyManager.CALL_STATE_OFFHOOK
+
     // Notifications
     val allNotifs by NotificationStore.items().observeAsState(emptyList())
     val sessionStart  = remember { System.currentTimeMillis() }
@@ -112,10 +166,19 @@ fun CoverScreen() {
     // transitions the same notification from CATEGORY_CALL (ringing) to ongoing-call
     // (category changes, but key stays the same). Missed-call notifications arrive
     // as separate entries with a different key and won't match.
+    //
+    // The call-state gate above is the safety net: even if a stale call notification
+    // is in the store, we refuse to surface it as an overlay unless the telephony
+    // layer agrees there is a real call. When callState returns to IDLE we drop
+    // effectiveCallNotif to null, which lets the existing clear branch run.
     var trackedCallKey by remember { mutableStateOf<String?>(null) }
-    val callNotif = remember(allNotifs) { allNotifs.firstOrNull { it.isCall() } }
-    val effectiveCallNotif = remember(allNotifs, trackedCallKey) {
-        callNotif ?: allNotifs.firstOrNull { it.key == trackedCallKey }
+    val callNotif = remember(allNotifs, phoneRingingOrOffHook) {
+        if (!phoneRingingOrOffHook) null
+        else allNotifs.firstOrNull { it.isCall() }
+    }
+    val effectiveCallNotif = remember(allNotifs, trackedCallKey, phoneRingingOrOffHook) {
+        if (!phoneRingingOrOffHook) null
+        else callNotif ?: allNotifs.firstOrNull { it.key == trackedCallKey }
     }
 
     val latestMsg = remember(allNotifs) {

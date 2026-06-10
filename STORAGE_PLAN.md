@@ -62,11 +62,11 @@ This device has heavy AntennaPod + Spotify use, light WhatsApp, light Apple Musi
 ### 0.6 Estimated one-time + nightly reclaim on this device
 
 - **One-time at next-update boot:** ~256 MB from swap removal.
-- **First nightly run (auto only):** ~78 MB OpenBubbles attachments + small change from WhatsApp. Spotify *won't* fire on the audit device because its cache is currently well under the 400 MB threshold; on a device with a heavy listener and a 1+ GB cache, Spotify adds ~1 GB to the auto recovery the night it crosses the threshold.
+- **First nightly run (auto only):** ~78 MB OpenBubbles attachments + small change from WhatsApp. Spotify *won't* fire on the audit device because its cache is currently well under the 1 GB threshold; on a device with a heavy listener and a 1+ GB cache, Spotify adds ~1 GB to the auto recovery the night it crosses the threshold.
 - **If the user also taps every "Clear" button in the Free Up Space screen on day one:** another ~110 MB Spotify offline + ~105 MB AntennaPod episodes + ~50–150 MB from `pm trim-caches` (whatever portion of the 246 MB cache total is actually evictable) + small change from Apple Music.
 - **Total recovered within 24 hours: ~600–700 MB** (auto + manual combined) on a heavy-Spotify device. A 922-MB-free phone becomes a ~1.5–1.6-GB-free phone.
 
-Recurring win for heavy Spotify users: the auto tier is bursty by design — nothing happens night-to-night while the cache is under 400 MB, then a single ~400 MB+ wipe when it crosses. Light listeners and users with only downloads stay below the threshold indefinitely and see no auto-clearing of Spotify at all. Either way, the cache is bounded — it can't reach the 1.3 GB figure observed in the wild without triggering a wipe within 24 hours.
+Recurring win for heavy Spotify users: the auto tier is bursty by design — nothing happens night-to-night while the cache is under 1 GB, then a single ~1 GB+ wipe when it crosses. Light listeners and users with only downloads stay below the threshold indefinitely and see no auto-clearing of Spotify at all. Either way, the cache is bounded — it can't grow far past the 1.3 GB figure observed in the wild without triggering a wipe within 24 hours.
 
 ## 1. Two tiers: nightly auto (low-surprise) vs. manual-only (user-curated content)
 
@@ -85,7 +85,7 @@ All run via `PeriodicWorkRequest`, all share one `nextRunAt(hour=4, minute=0)` h
 - **`WhatsAppAttachmentCleanupWorker`** (existing) — reschedule to 4 AM. Two-step run:
   1. **Re-apply** `autodownload_cellular_mask=0`, `autodownload_wifi_mask=0`, `autodownload_roaming_mask=0` in `/data/data/com.whatsapp/shared_prefs/com.whatsapp_preferences_light.xml`. Same defense-in-depth reasoning — today these only get set at launcher boot via `DumbDownApp.applyWhatsAppMediaSettings`, and WhatsApp absolutely rewrites this file on its own schedule.
   2. **Wipe** Images / Video / `.Links` under `/sdcard/Android/media/com.whatsapp/WhatsApp/Media/`. Retention 7d → **0d** — wipe every file every night. Keep the `.nomedia` exclusion. Keep voice notes / docs / GIFs / audio preserved. Messages re-download from WhatsApp servers on demand.
-- **`SpotifyOfflineCleanupWorker`** (new) — nightly at 4 AM. Single-step: call `StorageCleanupOps.clearSpotifyOfflineIfOverThreshold`, which size-gates against `SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES` (500 MB). Under-threshold runs log "skipping wipe" and return without touching the dir or the `last_run_at_ms` record — the UI's "last cleared" subtitle stays correct (nothing happened, nothing reported). Over-threshold runs delegate to the same unconditional `clearSpotifyOffline` op that backs the manual button and the adb trigger receiver, so all three paths share one deletion implementation and one record-update site. No prefs-assertion step — Spotify exposes no relevant knob (see §0.3).
+- **`SpotifyOfflineCleanupWorker`** (new) — nightly at 4 AM. Single-step: call `StorageCleanupOps.clearSpotifyOfflineIfOverThreshold`, which size-gates against `SPOTIFY_AUTO_CLEAR_THRESHOLD_BYTES` (1 GB). Under-threshold runs log "skipping wipe" and return without touching the dir or the `last_run_at_ms` record — the UI's "last cleared" subtitle stays correct (nothing happened, nothing reported). Over-threshold runs delegate to the same unconditional `clearSpotifyOffline` op that backs the manual button and the adb trigger receiver, so all three paths share one deletion implementation and one record-update site. No prefs-assertion step — Spotify exposes no relevant knob (see §0.3).
 
 The pref re-apply step in the WA / OB workers should be **idempotent and quiet** — if the XML already has the right values, no rewrite, no log entry. The launcher already has helpers for this (the upsert-or-insert pattern in `applyOpenBubblesPerfSettings` / `applyWhatsAppMediaSettings`); these workers call the same helpers.
 
@@ -154,7 +154,7 @@ Per-package totals from `StorageStatsManager.queryStatsForPackage(UUID_DEFAULT, 
 | Row | Source |
 |---|---|
 | Podcasts | scoped `du` of `/data/data/de.danoeh.antennapod/cache/` |
-| Spotify offline | scoped `du` of `/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/` (Device-Encrypted storage, root only — we have it) |
+| Spotify offline | scoped `du` of `/data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/Storage/` — the audio-chunk subdir only, **not** the parent `spotifycache/`. Wiping the parent kills `Users/<userid>/primary.ldb` (auth state) and logs the user out; `Storage/` holds the only part that actually grows past 1 GB. Device-Encrypted, root only — we have it |
 | Apple Music offline | size from heuristic `find` matching audio extensions under `/data/data/com.apple.android.music/files/` (audit didn't fully localize the offline dir) |
 | App caches | sum of `StorageStats.cacheBytes` across installed packages — no `du` |
 
@@ -163,7 +163,7 @@ Per-package totals from `StorageStatsManager.queryStatsForPackage(UUID_DEFAULT, 
 | Button | Underlying op | Logs out? | Cost to user |
 |---|---|---|---|
 | Clear podcasts | `find /data/data/de.danoeh.antennapod/cache -type f -delete` | no | episodes re-download on play |
-| Clear Spotify offline | `find /data/user_de/0/com.spotify.music/.../spotifycache -type f -delete` | no | Wi-Fi re-download |
+| Clear Spotify offline | `find /data/user_de/0/com.spotify.music/.../spotifycache/Storage -mindepth 1 -delete` | no | Wi-Fi re-download |
 | Clear Apple Music offline | `find … -delete` on Apple Music offline dir | no | Wi-Fi re-download |
 | Clear app caches | `pm trim-caches 99999999999` | no | UI thumbnails + AntennaPod episodes (warned in dialog) |
 
@@ -226,7 +226,7 @@ The launcher update will ship the workers and the "Free up space" screen, but fo
 - `adb shell su -c 'swapoff /data/swapfile && rm -f /data/swapfile'` — instantly frees 256 MB. The new `remove_swap_256m_v1` migration will do this automatically once the next launcher build ships; this is the manual version.
 - `adb shell pm trim-caches 99999999999` — instantly clears every app's cache. Same op the "Clear app caches" button will run.
 - `adb shell su -c 'find /data/data/com.openbubbles.messaging/app_flutter/attachments -mindepth 1 -delete'` — manual equivalent of the OpenBubbles attachment cleanup (frees ~78 MB on the audit device).
-- `adb shell su -c 'find /data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache -type f -delete'` — manual Spotify offline wipe (~109 MB).
+- `adb shell su -c 'find /data/user_de/0/com.spotify.music/Android/data/com.spotify.music/files/spotifycache/Storage -mindepth 1 -delete'` — manual Spotify offline wipe (~109 MB). Scoped to the `Storage/` subdir to avoid wiping `Users/<userid>/primary.ldb` (auth state) — wiping the parent `spotifycache/` logs the user out and the next bootstrap fails with `AuthErrorCode: 15`.
 - `adb shell su -c 'find /data/data/de.danoeh.antennapod/cache -type f -delete'` — manual AntennaPod episode wipe (~105 MB).
 - In WhatsApp on-device: Settings → Storage and data → Manage storage → wipe "Forwarded many times" and any chat over 50 MB. (Cosmetic on the audit device since `/sdcard/...WhatsApp/Media` is already only 10 MB, but useful on phones with heavy WhatsApp users.)
 - In AntennaPod on-device: Settings → Network → Automatic Download → off. Not strictly needed once the nightly cache trim is exposed in the UI, but reduces background data.

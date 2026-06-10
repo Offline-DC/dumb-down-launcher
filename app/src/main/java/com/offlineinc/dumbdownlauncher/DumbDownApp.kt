@@ -96,6 +96,14 @@ class DumbDownApp : Application() {
         // investigation plan.
         com.offlineinc.dumbdownlauncher.diagnostics.DiagnosticsService.startIfEnabled(this)
 
+        // Rolling 24-hour diagnostic logcat. Off by default; user opts
+        // in via the long-press-on-weather diagnostics menu in All Apps.
+        // The flag lives in shared_prefs/reboot_logging_prefs.xml so it
+        // survives reboots — re-arm the foreground service here so the
+        // rolling buffer continues to capture across restarts. No-op when
+        // opt-in is off. See diagnostics/RebootLoggingService.kt.
+        com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
+
         UpdateCheckWorker.schedule(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.
@@ -793,6 +801,24 @@ class DumbDownApp : Application() {
                     Log.d(tag, "Deleted old type_sync notification channel")
                 }
             },
+            // Delete the "battery_fix" notification channel that was used by
+            // the now-removed BatteryFixNotificationManager (it posted a
+            // "press and hold power to restart" notification after the
+            // disable_reducesar_v2 migration ran). The current
+            // disable_reducesar_v3 migration intentionally does not post a
+            // notification — affected users are messaged out-of-band. Also
+            // cancel notification ID 4901 (BatteryFixNotificationManager
+            // .NOTIFICATION_ID_REBOOT_TO_APPLY) in case the prompt is still
+            // live on the shade from a previous boot.
+            "delete_battery_fix_channel" to {
+                val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                // 4901 was BatteryFixNotificationManager.NOTIFICATION_ID_REBOOT_TO_APPLY
+                nm.cancel(4901)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    nm.deleteNotificationChannel("battery_fix")
+                    Log.d(tag, "Deleted old battery_fix notification channel")
+                }
+            },
             // Remove the 256 MB swap file that an earlier build (the
             // historic `create_swap_256m` migration) allocated. With
             // `/data` capped at ~4.5 GB on the TCL Flip 2 the swap was
@@ -869,36 +895,141 @@ class DumbDownApp : Application() {
                     Log.w(tag, "Cannot disable com.tcl.fota.system: ${e.message}")
                 }
             },
-            // Disable the TCT/TCL OEM "phone" companion app. Despite its name,
-            // this is NOT the AOSP telephony framework (com.android.phone) or
-            // the dialer (com.android.dialer / com.google.android.dialer) that
-            // the launcher actually routes calls through — it's a TCT-branded
-            // overlay app whose visible behaviour on the TCL Flip 2 is a
-            // persistent "the inserted SIM does not support all of the
-            // features" nag notification plus a voicemail/dial prompt. Calls
-            // and SMS continue to work after disabling it because the real
-            // telephony stack lives in com.android.phone /
-            // com.android.server.telecom.
+            // Re-enable com.tct.phone for devices on which the now-removed
+            // `disable_tct_phone` migration turned it off. That earlier
+            // migration ran `pm disable-user --user 0 com.tct.phone` to
+            // suppress a TCT-branded overlay app whose visible behaviour
+            // on the TCL Flip 2 was a persistent "the inserted SIM does
+            // not support all of the features" nag notification plus a
+            // voicemail/dial prompt. Disabling it cleared the nag but
+            // appears to be implicated in calls dropping on some devices
+            // — despite the AOSP telephony stack (com.android.phone /
+            // com.android.server.telecom) being what the launcher
+            // nominally routes through, some carrier/firmware
+            // combinations evidently still rely on com.tct.phone for
+            // pieces of the in-call signalling path. Until we can
+            // isolate exactly which side-channel matters, put the
+            // package back the way stock firmware ships it.
             //
-            // Uses `pm disable-user --user 0` rather than `pm uninstall` so the
-            // change is fully reversible with `pm enable com.tct.phone` if it
-            // turns out to provide something we missed (e.g. visual voicemail
-            // on a specific carrier). Same shape as disable_tcl_fota above.
-            "disable_tct_phone" to {
-                try {
-                    val proc = Runtime.getRuntime().exec(
-                        arrayOf("su", "-c", "pm disable-user --user 0 com.tct.phone")
-                    )
-                    val stderr = proc.errorStream.bufferedReader().readText().trim()
-                    val exit = proc.waitFor()
-                    if (exit == 0) {
-                        Log.d(tag, "Disabled com.tct.phone")
-                    } else {
-                        Log.w(tag, "Failed to disable com.tct.phone (exit=$exit): $stderr")
-                    }
-                } catch (e: Exception) {
-                    Log.w(tag, "Cannot disable com.tct.phone: ${e.message}")
+            // Idempotent: `pm enable` on an already-enabled or
+            // default-state package exits 0 and is a no-op, so this is
+            // safe to run on devices that never saw the disable. If
+            // com.tct.phone isn't installed at all (non-TCT variant),
+            // skip cleanly. Same shape as disable_reducesar_v3 below,
+            // just in the enable direction.
+            //
+            // Keyed _v1 because this is a distinct semantic migration,
+            // not another iteration of the disable. If a future change
+            // wants to disable com.tct.phone again selectively, bump
+            // that migration's suffix rather than repurposing this key.
+            "reenable_tct_phone_for_call_drops_v1" to {
+                val pkg = "com.tct.phone"
+
+                // 1. Skip cleanly if com.tct.phone isn't installed on
+                //    this variant.
+                val pathProc = Runtime.getRuntime().exec(arrayOf("pm", "path", pkg))
+                val pathOut = pathProc.inputStream.bufferedReader().readText().trim()
+                pathProc.errorStream.bufferedReader().readText() // drain
+                pathProc.waitFor()
+                if (!pathOut.contains("package:")) {
+                    Log.d(tag, "$pkg not installed — nothing to re-enable")
+                    return@to
                 }
+
+                // 2. pm enable the package for user 0 — mirrors the
+                //    `--user 0` scoping the original disable used so
+                //    we're undoing exactly the same state change.
+                val enableProc = Runtime.getRuntime().exec(arrayOf(
+                    "su", "-c", "pm enable --user 0 $pkg"
+                ))
+                val enableOut = enableProc.inputStream.bufferedReader().readText().trim()
+                val enableErr = enableProc.errorStream.bufferedReader().readText().trim()
+                val enableExit = enableProc.waitFor()
+                if (enableExit != 0) {
+                    throw RuntimeException(
+                        "pm enable --user 0 $pkg failed (exit=$enableExit): " +
+                            "out=$enableOut err=$enableErr"
+                    )
+                }
+                Log.i(tag, "✅ Re-enabled $pkg (out=$enableOut)")
+            },
+            // Disable com.tct.reducesar/.MtkCommonSarService to reclaim
+            // the ~141 mA of idle drain its persistent GnssStatus listener
+            // costs on the 4058G (Verizon) Flip 2 variant. TCL ships
+            // reducesar pinned at PERSISTENT_PROC_ADJ (-800) with a
+            // GnssStatus listener that keeps the GPS subsystem warm and
+            // blocks deep doze; killing the component drops idle draw
+            // from ~276 mA → ~135 mA and lets deep-idle finally show up
+            // in `dumpsys deviceidle` Idling history.
+            //
+            // History — the original `disable_reducesar_v2` migration did
+            // exactly this and was then reverted by
+            // `reenable_reducesar_for_md_bug_v1` because the disable
+            // unmasked a MOLY.LR12A.R3.MP.V179.5.P53 modem firmware bug
+            // on the MT6739: with the GPS keepalive gone, the AP can
+            // enter deep doze, and active VoLTE calls then risk an
+            // `R12_CONN2AP_SPM_WAKEUP_B` wake hitting MD exception
+            // 0x54430007 / 0x53320000 ("MD exception HIF 0" → full modem
+            // reset). Symptom: call audio cuts, UI freezes ~10–15 s while
+            // telephony binders block on a dead modem, call ends with
+            // DisconnectCause LOCAL even though neither party hung up.
+            //
+            // We're re-applying the disable knowingly — the battery win
+            // is taking priority again on this build. Bumped to _v3 (not
+            // a reuse of _v2) so devices that already cleared the v2 flag
+            // re-run the disable on the next boot.
+            //
+            // Idempotent: `pm disable` on an already-disabled component
+            // exits 0 and is a no-op. If reducesar isn't installed at all
+            // (4058W or any non-TCL variant), skip cleanly.
+            //
+            // Effect takes hold on next reboot — the persistent process
+            // has to respawn for the per-component disable to drop the
+            // GnssStatus listener. The Log.i success line is the audit
+            // trail for when the disable actually fired on a given
+            // device.
+            "disable_reducesar_v3" to {
+                val pkg = "com.tct.reducesar"
+                val component = "$pkg/.MtkCommonSarService"
+
+                // 1. Skip cleanly if reducesar isn't installed on this
+                //    variant (4058W or any non-TCL build the launcher may
+                //    someday run on).
+                val pathProc = Runtime.getRuntime().exec(arrayOf("pm", "path", pkg))
+                val pathOut = pathProc.inputStream.bufferedReader().readText().trim()
+                pathProc.errorStream.bufferedReader().readText() // drain
+                pathProc.waitFor()
+                if (!pathOut.contains("package:")) {
+                    Log.d(tag, "$pkg not installed — nothing to disable")
+                    return@to
+                }
+
+                // 2. pm disable the component. PackageManager accepts the
+                //    per-component disable; ActivityManager honors it
+                //    when the persistent process respawns on the next boot.
+                val disableProc = Runtime.getRuntime().exec(arrayOf(
+                    "su", "-c", "pm disable $component"
+                ))
+                val disableOut = disableProc.inputStream.bufferedReader().readText().trim()
+                val disableErr = disableProc.errorStream.bufferedReader().readText().trim()
+                val disableExit = disableProc.waitFor()
+                if (disableExit != 0) {
+                    throw RuntimeException(
+                        "pm disable $component failed (exit=$disableExit): " +
+                            "out=$disableOut err=$disableErr"
+                    )
+                }
+                if (!disableOut.contains("new state: disabled")) {
+                    // Some firmware variants emit a slightly different
+                    // success line; if the command exited 0 we trust it
+                    // and just log the unexpected output for forensics.
+                    Log.d(tag, "pm disable $component returned: $disableOut")
+                }
+                Log.i(tag, "✅ Disabled $component — restart required to apply")
+
+                // 3. No notification — affected users are told to restart
+                //    out-of-band. The Log.i above is the audit trail for
+                //    when the disable actually fired.
             },
             // Disable Android's Wi-Fi scan throttle (default 4 scans / 2 min
             // for foreground apps, ~1 scan / 30 min in background) so that

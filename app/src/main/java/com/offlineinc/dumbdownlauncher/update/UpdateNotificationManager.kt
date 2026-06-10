@@ -1,5 +1,6 @@
 package com.offlineinc.dumbdownlauncher.update
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -91,6 +92,9 @@ object UpdateNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
+        // FLAG_NO_CLEAR keeps this exempt from the shade's "Clear all"
+        // button so a daily-cron reminder isn't wiped by an unrelated
+        // shade sweep; the user can still swipe it away individually.
         val notification = NotificationCompat.Builder(context, BETA_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("New beta build available")
@@ -99,6 +103,7 @@ object UpdateNotificationManager {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
+            .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
         nm.notify(NOTIFICATION_ID_BETA_REMINDER, notification)
     }
 
@@ -125,15 +130,18 @@ object UpdateNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
+        // FLAG_NO_CLEAR exempts this from the shade's "Clear all" button
+        // so a casual sweep doesn't lose the update prompt — but the user
+        // can still swipe it away individually if they want.
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("Update available")
             .setContentText("$appDisplayName v$versionName is ready to install")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setOngoing(true)
             .setAutoCancel(false)
             .setContentIntent(pendingIntent)
             .build()
+            .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
 
         nm.notify(notificationId, notification)
     }

@@ -276,7 +276,7 @@ private fun FeedScreen(
                         if (repeat == 0) viewModel.enterCompose(); true
                     }
                     Key.DirectionCenter -> {
-                        if (repeat == 0) viewModel.refreshFromUser(); true
+                        if (repeat == 0) viewModel.refreshLocationAndFeed(); true
                     }
                     Key.SoftRight -> {
                         if (repeat == 0) viewModel.showRules(); true
@@ -297,6 +297,7 @@ private fun FeedScreen(
                 style = DumbTheme.Text.PageTitle.copy(color = DumbTheme.Colors.Yellow),
                 modifier = Modifier.padding(horizontal = DumbTheme.Spacing.ScreenPaddingH),
             )
+            LocationHeader(state.placeName)
             Spacer(Modifier.height(8.dp))
             BasicText(
                 text = "no quacks nearby.\nbe the first to quack.",
@@ -306,6 +307,7 @@ private fun FeedScreen(
                     .weight(1f),
             )
         } else {
+            LocationHeader(state.placeName)
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),
@@ -323,6 +325,30 @@ private fun FeedScreen(
             rightLabel = "rulez",
         )
     }
+}
+
+/**
+ * Subtle "near <place>" line at the top of the feed so the user can confirm
+ * quacks are coming from roughly the right area. Renders nothing until the
+ * fix has been reverse-geocoded. Phrased "near" because the fix is coarse.
+ */
+@Composable
+private fun LocationHeader(placeName: String) {
+    if (placeName.isBlank()) return
+    BasicText(
+        text = "near $placeName",
+        style = DumbTheme.Text.Hint.copy(
+            fontSize = 12.sp,
+            color = DumbTheme.Colors.Gray,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = DumbTheme.Spacing.ScreenPaddingH,
+                vertical = 6.dp,
+            ),
+    )
 }
 
 @Composable

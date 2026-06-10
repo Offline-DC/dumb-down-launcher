@@ -19,13 +19,16 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.offlineinc.dumbdownlauncher.notifications.isMissedCall
 import com.offlineinc.dumbdownlauncher.notifications.model.NotificationItem
+import com.offlineinc.dumbdownlauncher.notifications.ui.components.formatNotificationTime
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 
 // Local aliases pointing at the central theme so the rest of this file
@@ -428,21 +431,58 @@ private fun NotificationRow(
     ) {
         // Title: 20sp line height (down from 22) trims the padding below the
         // title while still leaving room for descenders at 16sp.
-        BasicText(
-            text = item.title,
-            style = TextStyle(
-                color = if (selected) Black else White,
-                fontSize = 16.sp,
-                lineHeight = 20.sp,
-                fontFamily = fontFamily,
-                platformStyle = PlatformTextStyle(includeFontPadding = true),
-                lineHeightStyle = LineHeightStyle(
-                    alignment = LineHeightStyle.Alignment.Center,
-                    trim = LineHeightStyle.Trim.None,
+        //
+        // For missed-call rows, the title ("Missed call") shares its line
+        // with an end-aligned timestamp ("2:20 PM", "Yesterday", "Monday",
+        // "5/27/26"). The title takes weight(1f) so it truncates rather
+        // than pushing the time off-screen on long category strings.
+        val missed = item.isMissedCall()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                text = item.title,
+                style = TextStyle(
+                    color = if (selected) Black else White,
+                    fontSize = 16.sp,
+                    lineHeight = 20.sp,
+                    fontFamily = fontFamily,
+                    platformStyle = PlatformTextStyle(includeFontPadding = true),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.None,
+                    ),
                 ),
-            ),
-            maxLines = 1
-        )
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+            if (missed) {
+                val context = LocalContext.current
+                // Re-derive when [item] changes so a dialer that updates
+                // the same notification (multiple missed calls from the
+                // same contact bumping the timestamp) re-renders the line.
+                val timeLabel = remember(item.whenTime) {
+                    formatNotificationTime(context, item.whenTime)
+                }
+                Spacer(Modifier.width(8.dp))
+                BasicText(
+                    text = timeLabel,
+                    style = TextStyle(
+                        color = if (selected) Black else Gray,
+                        fontSize = 12.sp,
+                        lineHeight = 14.sp,
+                        fontFamily = fontFamily,
+                        platformStyle = PlatformTextStyle(includeFontPadding = true),
+                        lineHeightStyle = LineHeightStyle(
+                            alignment = LineHeightStyle.Alignment.Center,
+                            trim = LineHeightStyle.Trim.None,
+                        ),
+                    ),
+                    maxLines = 1,
+                )
+            }
+        }
         // Description (body): lineHeight reduced 20 → 16 so the two visible
         // lines sit closer together. The row-wide 2.dp spacer is gone —
         // Trim.None + the body's own lineHeight padding already provide

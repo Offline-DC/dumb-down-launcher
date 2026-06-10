@@ -1,9 +1,11 @@
 package com.offlineinc.dumbdownlauncher.notifications
 
+import android.app.Notification
 import android.content.Context
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.telephony.TelephonyManager
 import android.util.Log
 import com.offlineinc.dumbdownlauncher.launcher.dnd.MuteState
 import com.offlineinc.dumbdownlauncher.notifications.model.NotificationItem
@@ -76,7 +78,49 @@ class DumbNotificationListenerService : NotificationListenerService() {
 
     private fun seedFromActive() {
         try {
-            val current = activeNotifications?.map { it.toItem() } ?: emptyList()
+            val active = activeNotifications ?: emptyArray<StatusBarNotification>()
+
+            // Self-heal stuck call overlays on cover display.
+            //
+            // The cover screen treats any CATEGORY_CALL notification as a live
+            // incoming/ongoing call and renders a full-screen overlay for the
+            // caller. If the dialer process is killed mid-call (reboot, OOM,
+            // force-stop) it can leave an orphan call notification behind that
+            // the system happily re-posts on every listener reconnect. Without
+            // this cleanup, seedFromActive() would shovel the orphan straight
+            // back into NotificationStore and the overlay would re-appear with
+            // the same caller name forever — surviving any number of reboots.
+            //
+            // Rule: if the radio reports CALL_STATE_IDLE, no CATEGORY_CALL
+            // notification can possibly be valid, so cancel it from the system
+            // *and* exclude it from the seed.
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+            val callState = try {
+                @Suppress("DEPRECATION") // sync getter, sufficient for a one-shot check
+                tm?.callState ?: TelephonyManager.CALL_STATE_IDLE
+            } catch (_: SecurityException) {
+                TelephonyManager.CALL_STATE_IDLE
+            }
+            val orphanCallKeys: Set<String> =
+                if (callState == TelephonyManager.CALL_STATE_IDLE) {
+                    active.asSequence()
+                        .filter { it.notification?.category == Notification.CATEGORY_CALL }
+                        .map { it.key }
+                        .toSet()
+                } else emptySet()
+            for (key in orphanCallKeys) {
+                try {
+                    cancelNotification(key)
+                    Log.i(TAG, "Cancelled orphan call notification on seed: $key")
+                } catch (_: Exception) {
+                    // best-effort; if it can't be cancelled, the CoverScreen
+                    // call-state gate will still prevent it from rendering.
+                }
+            }
+
+            val current = active
+                .filter { it.key !in orphanCallKeys }
+                .map { it.toItem() }
             NotificationStore.setAll(current)
         } catch (_: Exception) {
             // ignore
@@ -91,6 +135,10 @@ class DumbNotificationListenerService : NotificationListenerService() {
             extras.getCharSequence("android.text")?.toString()?.trim()
                 ?: extras.getCharSequence("android.bigText")?.toString()?.trim()
                 ?: ""
+        // Prefer the poster's explicit "when" (the event time — for missed
+        // calls this is when the call ended). Some posters leave this at 0L,
+        // in which case fall back to postTime so the field is always usable.
+        val whenTime = if (n.`when` > 0L) n.`when` else postTime
         return NotificationItem(
             key = key,
             packageName = packageName,
@@ -99,6 +147,7 @@ class DumbNotificationListenerService : NotificationListenerService() {
             postTime = postTime,
             contentIntent = n.contentIntent,
             category = n.category,
+            whenTime = whenTime,
         )
     }
 
