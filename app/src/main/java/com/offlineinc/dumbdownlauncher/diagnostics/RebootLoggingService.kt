@@ -33,7 +33,7 @@ import androidx.core.app.NotificationCompat
  * START_STICKY so the OS restarts it after low-memory kills — exactly
  * the case where we'd otherwise lose the recent log lines we want.
  *
- * The user-visible notification reads "Diagnostic logs being collected"
+ * The user-visible notification reads "Logging diagnostics"
  * and instructs the user how to turn collection off (long-press
  * quack) so the foreground-service notification doubles as
  * disclosure. No persistent UI state otherwise.
@@ -108,7 +108,7 @@ class RebootLoggingService : Service() {
 
         return NotificationCompat.Builder(this, RebootLoggingConfig.NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(iconRes)
-            .setContentTitle("Diagnostic logs being collected")
+            .setContentTitle("Logging diagnostics")
             .setContentText("Long press quack in all apps to stop")
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
