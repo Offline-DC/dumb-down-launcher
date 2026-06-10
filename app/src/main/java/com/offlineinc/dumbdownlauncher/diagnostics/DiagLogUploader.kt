@@ -22,7 +22,7 @@ import java.util.zip.ZipOutputStream
 /**
  * Zips the on-device diag/ tree and uploads it to S3 via the backend's
  * presigned-URL flow. Triggered by the "submit logs" row in
- * [DiagMenuActivity].
+ * [DiagnosticsActivity] (long-press "quack" in All Apps).
  *
  * Both diagnostics modules write into the same `<filesDir>/diag/` root
  * (see [DiagPaths] / [DiagnosticsPaths]), so one zip captures everything:

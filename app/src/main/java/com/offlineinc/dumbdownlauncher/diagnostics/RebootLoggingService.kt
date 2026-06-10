@@ -28,7 +28,7 @@ import androidx.core.app.NotificationCompat
  *
  * Started from [com.offlineinc.dumbdownlauncher.DumbDownApp.onCreate]
  * via [startIfEnabled] (gated by the runtime opt-in alone — no
- * compile-time flag) and from the long-press-on-weather toggle in
+ * compile-time flag) and from the rolling-adb-logs toggle in
  * [com.offlineinc.dumbdownlauncher.AllAppsActivity]. Runs as
  * START_STICKY so the OS restarts it after low-memory kills — exactly
  * the case where we'd otherwise lose the recent log lines we want.

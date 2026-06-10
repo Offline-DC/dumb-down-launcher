@@ -325,20 +325,6 @@ class AllAppsActivity : AppCompatActivity() {
                             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         )
                         overridePendingTransition(0, 0)
-                    } else if (item.packageName == WEATHER) {
-                        // Long-press on "weather" opens the hidden diagnostics
-                        // menu — toggles for the rolling 24h ADB (logcat)
-                        // collection and for battery analysis. Previously this
-                        // long-press flipped the rolling-log flag directly; the
-                        // menu replaces that so both diagnostics opt-ins live
-                        // in one place. See diagnostics/DiagMenuActivity.kt.
-                        startActivity(
-                            Intent(
-                                this@AllAppsActivity,
-                                com.offlineinc.dumbdownlauncher.diagnostics.DiagMenuActivity::class.java,
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        )
-                        overridePendingTransition(0, 0)
                     } else if (item.packageName == "com.spotify.music") {
                         // Long-press hard-reset for Spotify. Runs
                         // `pm clear com.spotify.music` via root. Result

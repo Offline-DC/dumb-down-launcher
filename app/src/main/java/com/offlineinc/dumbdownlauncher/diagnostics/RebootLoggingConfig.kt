@@ -2,7 +2,7 @@ package com.offlineinc.dumbdownlauncher.diagnostics
 
 /**
  * Compile-time knobs for the rolling diagnostic-logging module. See
- * the long-press-on-weather entry point in [AllAppsActivity] for the
+ * the long-press-on-quack diagnostics screen (DiagnosticsActivity) for the
  * user-facing on/off switch.
  *
  * Scope is intentionally tight: we keep a rolling logcat tail on disk
@@ -21,7 +21,7 @@ package com.offlineinc.dumbdownlauncher.diagnostics
  *
  * Inherited verbatim from feature/reboot-logging-24h, with one
  * deliberate difference: there is no BuildConfig compile-time gate.
- * The user-facing weather long-press is the only switch — production
+ * The user-facing toggle in DiagnosticsActivity is the only switch — production
  * builds compile the path in but the service stays asleep until the
  * runtime opt-in flips.
  */

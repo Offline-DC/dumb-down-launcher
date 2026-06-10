@@ -97,7 +97,7 @@ class DumbDownApp : Application() {
         com.offlineinc.dumbdownlauncher.diagnostics.DiagnosticsService.startIfEnabled(this)
 
         // Rolling 24-hour diagnostic logcat. Off by default; user opts
-        // in via the long-press-on-weather diagnostics menu in All Apps.
+        // in via the long-press-on-quack diagnostics screen in All Apps.
         // The flag lives in shared_prefs/reboot_logging_prefs.xml so it
         // survives reboots — re-arm the foreground service here so the
         // rolling buffer continues to capture across restarts. No-op when

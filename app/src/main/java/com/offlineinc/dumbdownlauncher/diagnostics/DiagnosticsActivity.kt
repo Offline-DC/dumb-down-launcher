@@ -34,17 +34,31 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import com.offlineinc.dumbdownlauncher.BuildConfig
 import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Hidden settings screen for the battery diagnostics module. Opened via
- * long-press on the "quack" row in All Apps (see AllAppsActivity).
+ * Hidden diagnostics screen. Opened via long-press on the "quack" row in
+ * All Apps (see AllAppsActivity).
+ *
+ * Hosts all three diagnostics controls:
+ *   • diagnostics        – battery analysis sampling + privileged dumpsys
+ *                          snapshots ([DiagnosticsStore] / [DiagnosticsService])
+ *   • rolling adb logs   – the rolling 24h logcat tail
+ *                          ([RebootLoggingStore] / [RebootLoggingService])
+ *   • submit logs        – zips the whole diag/ tree (battery + rolling
+ *                          logs) and uploads it to S3 via the backend's
+ *                          presigned-URL flow ([DiagLogUploader])
  *
  * D-pad navigable:
  *   ↑/↓     – move selection
@@ -58,6 +72,7 @@ import com.offlineinc.dumbdownlauncher.ui.theme.DumbTheme
 class DiagnosticsActivity : AppCompatActivity() {
 
     private lateinit var store: DiagnosticsStore
+    private lateinit var rebootLoggingStore: RebootLoggingStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,10 +85,12 @@ class DiagnosticsActivity : AppCompatActivity() {
         }
 
         store = DiagnosticsStore(this)
+        rebootLoggingStore = RebootLoggingStore(this)
 
         setContent {
             DiagnosticsScreen(
                 store = store,
+                rebootLoggingStore = rebootLoggingStore,
                 onToggleEnabled = { newValue ->
                     if (newValue) {
                         if (store.enabledSinceMs == 0L) store.enabledSinceMs = System.currentTimeMillis()
@@ -84,6 +101,54 @@ class DiagnosticsActivity : AppCompatActivity() {
                         store.enabled = false
                         DiagnosticsService.stop(this@DiagnosticsActivity)
                         Toast.makeText(this@DiagnosticsActivity, "Diagnostics stopped", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onToggleRollingLogs = { newValue ->
+                    rebootLoggingStore.enabled = newValue
+                    if (newValue) {
+                        rebootLoggingStore.enabledSinceMs = System.currentTimeMillis()
+                        RebootLoggingService.startIfEnabled(applicationContext)
+                        Toast.makeText(
+                            this@DiagnosticsActivity,
+                            "rolling adb logs on — 24h logcat being collected",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else {
+                        RebootLoggingService.stop(applicationContext)
+                        Toast.makeText(
+                            this@DiagnosticsActivity,
+                            "rolling adb logs off",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                },
+                onSubmitLogs = { onDone ->
+                    Toast.makeText(
+                        this@DiagnosticsActivity,
+                        "submitting logs…",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        val result = runCatching { DiagLogUploader.submit(applicationContext) }
+                        withContext(Dispatchers.Main) {
+                            result.fold(
+                                onSuccess = { upload ->
+                                    Toast.makeText(
+                                        this@DiagnosticsActivity,
+                                        "logs submitted (${upload.sizeBytes / 1024 / 1024} MB)",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                },
+                                onFailure = { t ->
+                                    Toast.makeText(
+                                        this@DiagnosticsActivity,
+                                        "submit failed: ${t.message ?: "unknown error"}",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                },
+                            )
+                            onDone()
+                        }
                     }
                 },
                 onResetSession = {
@@ -101,7 +166,10 @@ class DiagnosticsActivity : AppCompatActivity() {
 @Composable
 private fun DiagnosticsScreen(
     store: DiagnosticsStore,
+    rebootLoggingStore: RebootLoggingStore,
     onToggleEnabled: (Boolean) -> Unit,
+    onToggleRollingLogs: (Boolean) -> Unit,
+    onSubmitLogs: (onDone: () -> Unit) -> Unit,
     onResetSession: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -110,16 +178,34 @@ private fun DiagnosticsScreen(
     val focusRequester = remember { FocusRequester() }
 
     var enabled by remember { mutableStateOf(store.enabled) }
+    var rollingLogsEnabled by remember { mutableStateOf(rebootLoggingStore.enabled) }
+    var uploading by remember { mutableStateOf(false) }
     val sessionId = remember { store.captureSessionId }
     var sessionVersion by remember { mutableIntStateOf(0) }
     // Reading captureSessionId again after resetSession() yields the new uuid.
     val displaySessionId = remember(sessionVersion) { store.captureSessionId }
 
     val rows = listOf(
-        Row.Toggle("diagnostics", value = enabled) {
+        Row.Toggle("battery analysis", value = enabled) {
             val next = !enabled
             enabled = next
             onToggleEnabled(next)
+        },
+        Row.Toggle("rolling adb logs", value = rollingLogsEnabled) {
+            val next = !rollingLogsEnabled
+            rollingLogsEnabled = next
+            onToggleRollingLogs(next)
+        },
+        Row.Action(
+            "submit logs",
+            secondary = if (uploading) "uploading…" else "press center to upload",
+        ) {
+            // One in-flight upload at a time; center-mashing while a 40 MB
+            // zip crawls up LTE must not queue duplicates.
+            if (!uploading) {
+                uploading = true
+                onSubmitLogs { uploading = false }
+            }
         },
         Row.Action("reset session") {
             sessionVersion += 1
@@ -133,6 +219,12 @@ private fun DiagnosticsScreen(
 
     var selectedIndex by remember { mutableIntStateOf(0) }
 
+    // The center key that long-press-launched this screen is usually still
+    // held when we open — its auto-repeat KeyDowns would instantly toggle
+    // the first row, over and over. Stay disarmed until a center KeyUp is
+    // seen, and ignore auto-repeats so a held press fires at most once.
+    var centerArmed by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
     Box(modifier = Modifier.fillMaxSize().background(DumbTheme.Colors.Black)) {
@@ -143,6 +235,15 @@ private fun DiagnosticsScreen(
                 .focusRequester(focusRequester)
                 .focusable()
                 .onPreviewKeyEvent { event ->
+                    val isCenterKey = event.key == Key.Enter ||
+                        event.key == Key.NumPadEnter ||
+                        event.key == Key.DirectionCenter
+                    if (event.type == KeyEventType.KeyUp && isCenterKey) {
+                        // Release of the launching long-press (or of any
+                        // later press). From here on, presses count.
+                        centerArmed = true
+                        return@onPreviewKeyEvent true
+                    }
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (event.key) {
                         Key.DirectionDown -> {
@@ -154,10 +255,12 @@ private fun DiagnosticsScreen(
                             true
                         }
                         Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
-                            when (val r = rows[selectedIndex]) {
-                                is Row.Toggle -> r.onToggle()
-                                is Row.Action -> r.onActivate()
-                                is Row.Info -> { /* no-op */ }
+                            if (centerArmed && event.nativeKeyEvent.repeatCount == 0) {
+                                when (val r = rows[selectedIndex]) {
+                                    is Row.Toggle -> r.onToggle()
+                                    is Row.Action -> r.onActivate()
+                                    is Row.Info -> { /* no-op */ }
+                                }
                             }
                             true
                         }
@@ -173,11 +276,11 @@ private fun DiagnosticsScreen(
             )
 
             BasicText(
-                text = "Collects battery samples, screen/power/doze events, and "
-                    + "privileged dumpsys + logcat snapshots into /sdcard/Android/data/"
-                    + "${BuildConfig.APPLICATION_ID}/files/diag/. Files are also written to "
-                    + "the app private dir as the canonical copy. Use the adb pull command "
-                    + "below to retrieve them.",
+                text = "battery analysis collects battery samples, screen/power/doze "
+                    + "events, and privileged dumpsys + logcat snapshots. rolling adb "
+                    + "logs keeps a 24h logcat buffer. Both write into /sdcard/Android/"
+                    + "data/${BuildConfig.APPLICATION_ID}/files/diag/ (adb pull command "
+                    + "below). submit logs zips it all and uploads it for support.",
                 style = TextStyle(
                     color = DumbTheme.Colors.White.copy(alpha = 0.55f),
                     fontSize = 11.sp,
@@ -219,7 +322,7 @@ private fun DiagRow(
         val secondary: String? = when (row) {
             is Row.Toggle -> if (row.value) "on" else "off"
             is Row.Info -> row.value
-            is Row.Action -> "press center to run"
+            is Row.Action -> row.secondary
         }
         if (secondary != null) {
             Spacer(Modifier.size(2.dp))
@@ -238,7 +341,11 @@ private fun DiagRow(
 
 private sealed class Row(val label: String) {
     class Toggle(label: String, val value: Boolean, val onToggle: () -> Unit) : Row(label)
-    class Action(label: String, val onActivate: () -> Unit) : Row(label)
+    class Action(
+        label: String,
+        val secondary: String = "press center to run",
+        val onActivate: () -> Unit,
+    ) : Row(label)
     class Info(label: String, val value: String) : Row(label)
 }
 
