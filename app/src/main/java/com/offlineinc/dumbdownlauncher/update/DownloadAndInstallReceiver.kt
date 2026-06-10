@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Environment
 import android.util.Log
@@ -77,17 +78,34 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
                 DownloadManager.ACTION_DOWNLOAD_COMPLETE -> {
                     val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
                     Log.i(TAG, "download complete: id=$downloadId")
-                    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    for (appKey in APP_KEYS) {
-                        val key = downloadIdKey(appKey)
-                        val savedId = prefs.getLong(key, -1L)
-                        if (downloadId == savedId) {
-                            Log.i(TAG, "download complete matched appKey=$appKey — installing")
-                            prefs.edit().remove(key).apply()
-                            triggerInstall(context, downloadId, appKey)
-                            break
+                    // triggerInstall() can stream a 200 MB zip into an install
+                    // session — keep it off the BroadcastReceiver main thread.
+                    val pending = goAsync()
+                    Thread {
+                        try {
+                            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            for (appKey in APP_KEYS) {
+                                val key = downloadIdKey(appKey)
+                                val savedId = prefs.getLong(key, -1L)
+                                if (downloadId == savedId) {
+                                    Log.i(TAG, "download complete matched appKey=$appKey — installing")
+                                    prefs.edit().remove(key).apply()
+                                    triggerInstall(context, downloadId, appKey)
+                                    break
+                                }
+                            }
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "download-complete handling failed", t)
+                        } finally {
+                            try {
+                                pending.finish()
+                            } catch (_: Throwable) {
+                            }
                         }
-                    }
+                    }.start()
+                }
+                UpdateNotificationManager.ACTION_INSTALL_RESULT -> {
+                    handleInstallResult(context, intent)
                 }
             }
         } catch (t: Throwable) {
@@ -98,7 +116,9 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
     private fun startDownload(context: Context, url: String, appKey: String) {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
             ?: throw IllegalStateException("DownloadManager service unavailable (download provider disabled?)")
-        val fileName = "$appKey.apk"
+        // OpenBubbles is a .zip of split APKs; everything else is a single .apk.
+        val isSplitZip = appKey == "openbubbles-messaging"
+        val fileName = if (isSplitZip) "$appKey.zip" else "$appKey.apk"
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle("Downloading $appKey update")
             // Hidden: the system's DownloadManager notification only shows
@@ -202,6 +222,21 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             return
         })
 
+        // OpenBubbles ships as a .zip of split APKs — install the whole set via
+        // a PackageInstaller session (ACTION_VIEW can't install splits). The
+        // success/failure result arrives asynchronously at handleInstallResult.
+        if (appKey == "openbubbles-messaging") {
+            val sizeMb = apkFile.length() / (1024 * 1024)
+            val freeMb = (apkFile.parentFile?.freeSpace ?: -1L) / (1024 * 1024)
+            Log.i(TAG, "triggerInstall: OB split-zip install size=${sizeMb}MB free=${freeMb}MB")
+            val started = SplitApkInstaller.installFromZip(context, apkFile, appKey)
+            if (!started) {
+                Log.e(TAG, "triggerInstall: split install couldn't start for $appKey")
+                UpdateNotificationManager.notifyFailed(context, appKey)
+            }
+            return
+        }
+
         // Diagnostics: the system installer ("App not installed") doesn't tell
         // us *why*, so log how the downloaded APK compares to what's installed
         // (package, versionCode, signature) plus free space, which covers the
@@ -293,6 +328,68 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
         } catch (_: Exception) {
             "?"
         }
+
+    /**
+     * Handles the async result broadcast from a [SplitApkInstaller] session.
+     *   - PENDING_USER_ACTION → launch the system confirm dialog.
+     *   - SUCCESS → cancel the update tile, delete the downloaded zip.
+     *   - anything else → log the real INSTALL_FAILED_* message, notify failed,
+     *     delete the zip.
+     */
+    private fun handleInstallResult(context: Context, intent: Intent) {
+        val appKey = intent.getStringExtra(UpdateNotificationManager.EXTRA_APP_KEY) ?: "app"
+        val status = intent.getIntExtra(
+            PackageInstaller.EXTRA_STATUS,
+            PackageInstaller.STATUS_FAILURE,
+        )
+        val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+        Log.i(TAG, "install result: appKey=$appKey status=$status message=$message")
+
+        when (status) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                @Suppress("DEPRECATION")
+                val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                if (confirm != null) {
+                    confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try {
+                        context.startActivity(confirm)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "failed to launch install confirm dialog for $appKey", t)
+                        UpdateNotificationManager.notifyFailed(context, appKey)
+                    }
+                } else {
+                    Log.e(TAG, "PENDING_USER_ACTION but no confirm intent for $appKey")
+                    UpdateNotificationManager.notifyFailed(context, appKey)
+                }
+            }
+            PackageInstaller.STATUS_SUCCESS -> {
+                Log.i(TAG, "install SUCCESS for $appKey")
+                UpdateNotificationManager.cancel(context, notificationIdForKey(appKey))
+                cleanupDownloadedFile(context, appKey)
+            }
+            else -> {
+                Log.e(TAG, "install FAILED for $appKey status=$status: $message")
+                UpdateNotificationManager.notifyFailed(context, appKey)
+                cleanupDownloadedFile(context, appKey)
+            }
+        }
+    }
+
+    /** Best-effort delete of the downloaded artifact for [appKey]. */
+    private fun cleanupDownloadedFile(context: Context, appKey: String) {
+        try {
+            val ext = if (appKey == "openbubbles-messaging") "zip" else "apk"
+            val file = File(
+                context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
+                "$appKey.$ext",
+            )
+            if (file.exists() && file.delete()) {
+                Log.i(TAG, "cleaned up downloaded $appKey.$ext")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "cleanup of downloaded file for $appKey failed", t)
+        }
+    }
 
     companion object {
         private const val TAG = "DownloadInstall"

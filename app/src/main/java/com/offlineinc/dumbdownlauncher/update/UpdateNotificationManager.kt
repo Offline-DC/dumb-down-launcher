@@ -32,6 +32,8 @@ object UpdateNotificationManager {
     const val NOTIFICATION_ID_BETA_REMINDER = 1010
 
     const val ACTION_DOWNLOAD_APK = "com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK"
+    // Result broadcast from a PackageInstaller split-APK session (OpenBubbles).
+    const val ACTION_INSTALL_RESULT = "com.offlineinc.dumbdownlauncher.action.INSTALL_RESULT"
     const val EXTRA_DOWNLOAD_URL = "extra_download_url"
     const val EXTRA_APP_KEY = "extra_app_key"
 

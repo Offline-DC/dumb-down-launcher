@@ -38,7 +38,12 @@ object UpdateChecker {
             fetchHighestRelease(LAUNCHER_API, includePrereleases)?.let { put("dumb-down-launcher", it) }
             // Contact sync is now integrated into the launcher — no separate update check needed
             fetchHighestRelease(SNAKE_API, includePrereleases)?.let { put("snake", it) }
-            fetchHighestRelease(OPENBUBBLES_API, includePrereleases)?.let { put("openbubbles-messaging", it) }
+            // OpenBubbles ships as a .zip of split APKs, not a single .apk.
+            fetchHighestRelease(
+                OPENBUBBLES_API,
+                includePrereleases,
+                assetMatcher = { it.endsWith(".zip") },
+            )?.let { put("openbubbles-messaging", it) }
         }
     }
 
