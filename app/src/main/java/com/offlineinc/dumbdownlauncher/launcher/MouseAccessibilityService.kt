@@ -18,6 +18,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.offlineinc.dumbdownlauncher.launcher.ResetWarningOverlay
 import com.offlineinc.dumbdownlauncher.launcher.qrenlarge.QrEnlargeController
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
@@ -34,6 +35,12 @@ class MouseAccessibilityService : AccessibilityService() {
 
     private var mouseEnabled = false
     private var currentPackage = ""
+
+    // Tracks whether OpenBubbles is the current foreground app, so we can apply
+    // the one-time retention toggle the moment the user leaves it (when it's
+    // backgrounded and safe to edit). See the OpenBubbles block in
+    // onAccessibilityEvent.
+    private var openBubblesForeground = false
     private var currentDensity = -1
 
     // True while the star-key special-char picker is open.
@@ -857,6 +864,29 @@ class MouseAccessibilityService : AccessibilityService() {
 
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: pkg=$pkg className=$className")
+
+            // ── OpenBubbles update gate + one-time retention toggle ────────
+            // Central chokepoint: this fires no matter how OpenBubbles was
+            // launched — home grid, All Apps, a notification tap, or recents.
+            if (pkg == OpenBubblesGate.PKG && className.contains("Activity")) {
+                if (OpenBubblesGate.isUpdateRequired(this)) {
+                    // Outdated build with an update waiting: bounce to home and
+                    // slam the update modal over it (HOME first so backing out
+                    // of the modal lands on the launcher, not back in OB).
+                    Log.i("MOUSE_SVC", "OpenBubbles foreground but update required — redirecting to update")
+                    openBubblesForeground = false
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    OpenBubblesGate.showUpdateRequired(this)
+                    return
+                }
+                openBubblesForeground = true
+            } else if (openBubblesForeground && pkg != OpenBubblesGate.PKG && className.contains("Activity")) {
+                // User left OpenBubbles → it's backgrounded now, so it's safe to
+                // apply the one-time retention toggle (the edit kills OB first).
+                openBubblesForeground = false
+                OpenBubblesGate.applyRetentionOnceAsync(this)
+            }
+            // ── end OpenBubbles gate ───────────────────────────────────────
 
             // ── Factory-reset warning overlay ──────────────────────────────
             // We only show the warning on the specific Reset options page that
