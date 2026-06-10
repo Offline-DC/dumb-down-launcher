@@ -35,7 +35,7 @@ import androidx.core.app.NotificationCompat
  *
  * The user-visible notification reads "Diagnostic logs being collected"
  * and instructs the user how to turn collection off (long-press
- * weather) so the foreground-service notification doubles as
+ * quack) so the foreground-service notification doubles as
  * disclosure. No persistent UI state otherwise.
  */
 class RebootLoggingService : Service() {
@@ -109,7 +109,7 @@ class RebootLoggingService : Service() {
         return NotificationCompat.Builder(this, RebootLoggingConfig.NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(iconRes)
             .setContentTitle("Diagnostic logs being collected")
-            .setContentText("Long-press weather in all apps to stop")
+            .setContentText("Long press quack in all apps to stop")
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -127,7 +127,7 @@ class RebootLoggingService : Service() {
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
             description = "Shown while the launcher is recording a rolling 24-hour " +
-                "diagnostic log. Toggled from a long-press on the weather app."
+                "diagnostic log. Toggled from a long press on quack in all apps."
             setShowBadge(false)
             enableLights(false)
             enableVibration(false)
