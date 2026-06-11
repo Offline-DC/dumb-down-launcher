@@ -89,7 +89,7 @@ class UpdateCheckWorker(
                         context = context,
                         notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
                         appKey = "openbubbles-messaging",
-                        appDisplayName = "OpenBubbles",
+                        appDisplayName = "Smart Txt",
                         versionName = openBubblesInfo.versionName,
                         downloadUrl = openBubblesInfo.downloadUrl,
                     )
@@ -198,7 +198,7 @@ class UpdateCheckWorker(
                             context = context,
                             notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
                             appKey = "openbubbles-messaging",
-                            appDisplayName = "OpenBubbles",
+                            appDisplayName = "Smart Txt",
                             versionName = openBubblesInfo.versionName,
                             downloadUrl = openBubblesInfo.downloadUrl,
                         )

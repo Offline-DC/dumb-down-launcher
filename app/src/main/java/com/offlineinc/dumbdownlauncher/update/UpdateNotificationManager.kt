@@ -326,9 +326,7 @@ object UpdateNotificationManager {
     fun notifyInstalled(context: Context, appKey: String) {
         ensureChannel(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        // On this device OpenBubbles is branded "smart txt".
-        val displayName =
-            if (appKey == "openbubbles-messaging") "smart txt" else displayNameFor(appKey)
+        val displayName = displayNameFor(appKey)
 
         if (appKey == "openbubbles-messaging") {
             context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
@@ -374,7 +372,8 @@ object UpdateNotificationManager {
     private fun displayNameFor(appKey: String) = when (appKey) {
         "dumb-down-launcher" -> "Dumb Launcher"
         "snake" -> "Snake"
-        "openbubbles-messaging" -> "OpenBubbles"
+        // User-facing brand on this device is "Smart Txt", not "OpenBubbles".
+        "openbubbles-messaging" -> "Smart Txt"
         else -> appKey
     }
 
@@ -421,7 +420,7 @@ object UpdateNotificationManager {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle("connect to wifi to update")
-            .setContentText("then click to update smart txt")
+            .setContentText("then click to update Smart Txt")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(false)
             .setAutoCancel(true)
