@@ -344,56 +344,58 @@ object OpenBubblesOps {
     }
 
     /**
-     * Version-gated retention pass: turns OpenBubbles' "delete old
-     * messages" feature on and pins the window to
+     * One-time retention pass for the **target** OpenBubbles build: turns on
+     * the "delete old messages" feature and pins the window to
      * [DELETE_MESSAGES_AFTER_DAYS] days. Edits two keys in
      * FlutterSharedPreferences.xml:
      *
      *  - `flutter.deleteMessagesAfterDays`       (boolean) → `true`
      *  - `flutter.deleteMessagesAfterDaysCount`  (long)    → 3
      *
-     * The count is a Flutter `int`, which SharedPreferences persists as a
-     * `<long>` element — note the different element tag from the boolean
-     * keys [applyAutoDownloadOff] handles.
+     * The count is a Flutter `int`, persisted as a `<long>` element — note the
+     * different element tag from the boolean keys [applyAutoDownloadOff] handles.
      *
-     * This only patches builds **below** [MIN_SUPPORTED_VERSION_CODE] —
-     * outdated builds whose retention window may be stuck at 1 day. Builds
-     * at or above that version manage retention themselves and are skipped.
+     * Applies ONLY once OpenBubbles is at [MIN_SUPPORTED_VERSION_CODE] or newer
+     * (the build users are updated to). Every other outcome THROWS, so the
+     * caller's one-time guard ([OpenBubblesGate.applyRetentionOnceAsync]) leaves
+     * its "applied" flag unset and retries later. That guarantees the toggle is
+     * written exactly once — the first time OB is on the target build and
+     * editable:
      *
-     * Outcomes:
+     *  - OB not installed                       → THROWS (retry later)
+     *  - OB versionCode < MIN_SUPPORTED          → THROWS (retry after the update)
+     *  - OB prefs file absent (never opened)     → THROWS (retry after first open)
+     *  - OB currently focused                    → THROWS (see [stopQuietly])
+     *  - OB ≥ MIN_SUPPORTED and editable         → writes the toggle, returns
      *
-     *  - OB not installed → returns benignly (commits the migration as
-     *    done; a device that will never have OB shouldn't retry forever).
-     *  - OB at or above [MIN_SUPPORTED_VERSION_CODE] → returns benignly
-     *    (commits as done; the current build owns its own retention).
-     *  - OB below the threshold but never opened (prefs file absent) →
-     *    THROWS, so the one-time-migration framework leaves the migration
-     *    pending and retries on the next boot after first launch.
-     *
-     * Kills OB first via [stopQuietly] so its in-memory SharedPreferences
-     * cache can't write back over the edit — which also means this THROWS
-     * [IllegalStateException] when OB is the focused app (the framework
-     * just retries next boot).
+     * Kills OB first via [stopQuietly] so its in-memory cache can't write back
+     * over the edit.
      */
     @JvmStatic
     fun applyDeleteOldMessages(context: Context, tag: String = TAG) {
-        // 1. Skip cleanly (commit as done) when OB isn't installed.
         val versionCode = installedVersionCode(context)
+        Log.i(
+            tag,
+            "OB applyDeleteOldMessages: installed versionCode=$versionCode, " +
+                "target=$MIN_SUPPORTED_VERSION_CODE"
+        )
+
+        // 1. Must be installed (defer if not, so it applies if OB is later
+        //    installed at the target version).
         if (versionCode == null) {
-            Log.d(tag, "OB applyDeleteOldMessages: $PKG not installed — skipping")
-            return
+            throw IllegalStateException(
+                "OB applyDeleteOldMessages: $PKG not installed — deferring"
+            )
         }
 
-        // 2. Version gate. Only patch outdated builds (below the minimum
-        //    supported version); current builds manage retention themselves,
-        //    so skip + commit as done.
-        if (versionCode >= MIN_SUPPORTED_VERSION_CODE) {
-            Log.d(
-                tag,
-                "OB applyDeleteOldMessages: versionCode=$versionCode >= " +
-                    "$MIN_SUPPORTED_VERSION_CODE — current build manages retention, skipping"
+        // 2. Version gate: apply ONLY on the target build (>= MIN_SUPPORTED) or
+        //    newer. On older builds, defer (throw, don't mark applied) so the
+        //    one-time apply happens AFTER OB updates to the target build.
+        if (versionCode < MIN_SUPPORTED_VERSION_CODE) {
+            throw IllegalStateException(
+                "OB applyDeleteOldMessages: versionCode=$versionCode < " +
+                    "$MIN_SUPPORTED_VERSION_CODE — deferring until OB updates to the target build"
             )
-            return
         }
 
         // 3. Prefs file is created lazily on OB's first launch.
@@ -499,6 +501,42 @@ object OpenBubblesOps {
             Log.i(tag, "OB applyDeleteOldMessages: wrote $changes change(s)")
         } finally {
             tmp.delete()
+        }
+    }
+
+    /**
+     * Diagnostic: logs the installed OpenBubbles versionCode and the current
+     * retention-related keys from its FlutterSharedPreferences.xml
+     * (`deleteMessagesAfterDays`, `deleteMessagesAfterDaysCount`, and OB's own
+     * `lastMessageRetentionCleanup` timestamp). Read-only, never throws — use to
+     * confirm across devices whether the 3-day toggle is actually set and
+     * whether OpenBubbles' retention sweep has run.
+     */
+    @JvmStatic
+    fun logRetentionState(context: Context, tag: String = TAG) {
+        try {
+            val vc = installedVersionCode(context)
+            val (_, existsOut, _) = rootExec("test -f $FLUTTER_PREFS_PATH && echo y || echo n")
+            if (existsOut != "y") {
+                Log.i(tag, "OB retention state: versionCode=$vc — prefs file ABSENT (OB not opened?)")
+                return
+            }
+            val (_, content, _) = rootExec("cat $FLUTTER_PREFS_PATH")
+            // The trailing quote after "...Days" disambiguates the boolean key
+            // from the "...DaysCount" long key.
+            val days = Regex("""deleteMessagesAfterDays"\s+value="(true|false)"""")
+                .find(content)?.groupValues?.get(1)
+            val count = Regex("""deleteMessagesAfterDaysCount"\s+value="(-?\d+)"""")
+                .find(content)?.groupValues?.get(1)
+            val lastCleanup = Regex("""lastMessageRetentionCleanup"\s+value="(-?\d+)"""")
+                .find(content)?.groupValues?.get(1)
+            Log.i(
+                tag,
+                "OB retention state: versionCode=$vc deleteMessagesAfterDays=$days " +
+                    "deleteMessagesAfterDaysCount=$count lastMessageRetentionCleanup=$lastCleanup"
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "OB retention state: failed to read — ${e.message}")
         }
     }
 

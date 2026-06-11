@@ -372,6 +372,15 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
                 // cancelling, so the user gets a clear "done" signal.
                 UpdateNotificationManager.notifyInstalled(context, appKey)
                 cleanupDownloadedFile(context, appKey)
+                // OpenBubbles is now at the target build (>= MIN_SUPPORTED), so
+                // apply the one-time "delete after 3 days" retention toggle now
+                // — before its first post-update launch. The one-time flag makes
+                // this idempotent; the accessibility OB→background trigger is a
+                // fallback if this attempt defers.
+                if (appKey == "openbubbles-messaging") {
+                    com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate
+                        .applyRetentionOnceAsync(context)
+                }
             }
             else -> {
                 Log.e(TAG, "install FAILED for $appKey status=$status: $message")

@@ -71,26 +71,37 @@ object OpenBubblesGate {
 
     /**
      * Apply the one-time "delete after 3 days" retention toggle, off the main
-     * thread. No-op if already applied.
+     * thread. This is the idempotency guard: [RETENTION_APPLIED_KEY] is set ONLY
+     * after a successful write, and checked first, so the toggle is written
+     * exactly once.
      *
-     * MUST be called when OpenBubbles is NOT in the foreground:
-     * [OpenBubblesOps.applyDeleteOldMessages] kills OB before editing its prefs
-     * and throws if OB is the focused app — in which case the flag stays unset
-     * and the next background transition retries. The flag is only set when the
-     * apply returns cleanly (applied, or an intentional no-op: OB up-to-date /
-     * already set / not installed).
+     * [OpenBubblesOps.applyDeleteOldMessages] only writes when OpenBubbles is at
+     * [OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE] or newer; every other case
+     * (older version, prefs file absent, OB focused, not installed) THROWS, so
+     * the flag stays unset and a later trigger retries. Net effect: the toggle
+     * lands exactly once, the first time OB is on the target build and editable.
+     *
+     * MUST be called when OpenBubbles is NOT in the foreground (the edit kills
+     * OB first). Triggered from the install-success path and the accessibility
+     * OB→background transition.
      */
     fun applyRetentionOnceAsync(context: Context) {
         val appContext = context.applicationContext
-        if (isRetentionApplied(appContext)) return
+        val alreadyApplied = isRetentionApplied(appContext)
         Thread {
+            // Always log current state for cross-device diagnosis, even when
+            // the one-time guard short-circuits.
+            OpenBubblesOps.logRetentionState(appContext, TAG)
+            Log.i(TAG, "applyRetentionOnceAsync: alreadyAppliedFlag=$alreadyApplied")
+            if (alreadyApplied) return@Thread
             try {
                 OpenBubblesOps.applyDeleteOldMessages(appContext, TAG)
                 appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                     .edit().putBoolean(RETENTION_APPLIED_KEY, true).apply()
-                Log.i(TAG, "retention toggle applied")
+                Log.i(TAG, "retention toggle APPLIED — flag set, won't run again")
+                OpenBubblesOps.logRetentionState(appContext, TAG)
             } catch (e: Exception) {
-                Log.w(TAG, "retention apply deferred (will retry on next background): ${e.message}")
+                Log.w(TAG, "retention apply deferred (flag stays unset, will retry): ${e.message}")
             }
         }.start()
     }
