@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.offlineinc.dumbdownlauncher.CONTACT_SYNC
 import com.offlineinc.dumbdownlauncher.DEVICE_SETUP
+import com.offlineinc.dumbdownlauncher.DUMB_MAP
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.FREE_UP_SPACE
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
@@ -58,6 +59,7 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
     WEATHER                           to Icons.Filled.WbSunny,
     FREE_UP_SPACE                     to Icons.Filled.CleaningServices,
+    DUMB_MAP                          to Icons.Filled.Map,
 )
 
 /**

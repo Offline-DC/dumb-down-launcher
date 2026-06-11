@@ -125,6 +125,14 @@
             android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
 
+        <!-- dumb map (beta): no noHistory so the route/selection survives
+             leaving and returning via the navigation notification -->
+        <activity
+            android:name=".MapsActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
         <activity
             android:name=".snake.SnakeActivity"
             android:exported="false"
