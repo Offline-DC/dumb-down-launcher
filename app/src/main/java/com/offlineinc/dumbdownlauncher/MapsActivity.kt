@@ -56,6 +56,13 @@ class MapsActivity : AppCompatActivity() {
         web.addJavascriptInterface(Bridge(), "Bridge")
         web.setBackgroundColor(0xFF000000.toInt())
         setContentView(web)
+
+        // black system bars with light icons, regardless of day/night theme
+        window.statusBarColor = android.graphics.Color.BLACK
+        window.navigationBarColor = android.graphics.Color.BLACK
+        window.insetsController?.setSystemBarsAppearance(
+            0, android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS)
+
         web.loadUrl("file:///android_asset/map/index.html")
 
         lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -74,16 +81,40 @@ class MapsActivity : AppCompatActivity() {
         if (hasLocationPermission()) startLocationUpdates()
     }
 
+    /** Actively (re)request location. Called at launch, on permission grant,
+     *  on resume, and every time the user hits locate — re-registering is
+     *  safe and guarantees the GPS engine actually spins up (status-bar icon). */
     @Suppress("MissingPermission")
     private fun startLocationUpdates() {
-        if (locationStarted || !hasLocationPermission()) return
+        if (!hasLocationPermission()) return
         locationStarted = true
         try {
-            for (p in lm.getProviders(true)) {
-                lm.requestLocationUpdates(p, 2000L, 2f, listener)
-                lm.getLastKnownLocation(p)?.let { pushLocation(it) }
+            if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER) &&
+                !lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                web.evaluateJavascript("window.__onLocationOff && __onLocationOff()", null)
+            }
+            lm.removeUpdates(listener)
+            // request explicitly on GPS + network — getProviders(true) can be
+            // empty/partial at cold start, which used to register nothing
+            for (p in arrayOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+                if (lm.allProviders.contains(p)) {
+                    try { lm.requestLocationUpdates(p, 1000L, 0f, listener) } catch (_: Exception) {}
+                }
+            }
+            for (p in lm.allProviders) {
+                try { lm.getLastKnownLocation(p)?.let { pushLocation(it) } } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (locationStarted) startLocationUpdates()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try { lm.removeUpdates(listener) } catch (_: Exception) {}  // save battery while away
     }
 
     private fun pushLocation(l: Location) = runOnUiThread {
@@ -131,7 +162,7 @@ class MapsActivity : AppCompatActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = Notification.Builder(this, "nav")
             .setSmallIcon(R.drawable.ic_map_pin)
-            .setContentTitle("dumb map navigation running")
+            .setContentTitle("map navigation running")
             .setContentText("tap to return to the map")
             .setOngoing(true)
             .setContentIntent(pi)
@@ -144,7 +175,14 @@ class MapsActivity : AppCompatActivity() {
         fun exitApp() = runOnUiThread { finish() }   // back to the launcher
 
         @JavascriptInterface
-        fun startLocation() = runOnUiThread { startLocationUpdates() }
+        fun startLocation() = runOnUiThread {
+            // hitting locate without the permission re-prompts instead of
+            // silently doing nothing
+            if (hasLocationPermission()) startLocationUpdates()
+            else requestPermissions(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION), 1)
+        }
 
         @JavascriptInterface
         fun setNavigating(on: Boolean) = runOnUiThread { showNavNotification(on) }

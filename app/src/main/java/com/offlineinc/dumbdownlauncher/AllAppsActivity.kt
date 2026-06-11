@@ -160,10 +160,10 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
-            // dumb map (beta) — built-in D-pad maps app
+            // map (beta) — built-in D-pad maps app
             appItems.add(AppItem(
                 packageName = DUMB_MAP,
-                label = "dumb map (beta)",
+                label = "map (beta)",
                 icon = pm.defaultActivityIcon,
                 launchComponent = null,
             ))

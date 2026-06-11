@@ -59,7 +59,6 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
     CHECK_UPDATES                     to Icons.Filled.SystemUpdate,
     WEATHER                           to Icons.Filled.WbSunny,
     FREE_UP_SPACE                     to Icons.Filled.CleaningServices,
-    DUMB_MAP                          to Icons.Filled.Map,
 )
 
 /**
@@ -70,4 +69,5 @@ val appVectorIcons: Map<String, ImageVector> = mapOf(
 val appDrawableResIcons: Map<String, Int> = mapOf(
     QUACK to R.drawable.ic_duck,
     SNAKE to R.drawable.ic_snake,
+    DUMB_MAP to R.drawable.ic_dumb_map,
 )

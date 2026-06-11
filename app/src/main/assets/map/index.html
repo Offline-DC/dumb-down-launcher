@@ -11,22 +11,22 @@
   :root { --yellow:#FAF594; --dim:rgba(250,245,148,0.65); --gray:#AAAAAA; --red:#E53935; }
   html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden;
     background:#000; font-family:'HelvNow', sans-serif; }
-  #map { position:absolute; top:0; left:0; right:0; bottom:22px; background:#ddd; }
+  #map { position:absolute; top:0; left:0; right:0; bottom:26px; background:#ddd; }
 
-  #toast { position:absolute; top:6px; left:8px; right:8px; z-index:1100;
+  #toast { position:absolute; top:6px; left:8px; right:8px; z-index:3500;
     background:rgba(0,0,0,0.88); color:var(--yellow); font-size:13px;
     padding:4px 6px; text-align:center; display:none; border:1px solid var(--dim); }
 
   /* softkey bar — exact match of dumb-down-launcher's SoftKeyBar:
      12sp Body font, yellow @ 65%, 10dp/4dp padding, black bg (mdpi: 1dp=1px) */
-  #softbar { position:absolute; bottom:0; left:0; right:0; height:22px; z-index:3000;
-    background:#000; display:flex; align-items:center; padding:0 10px; box-sizing:border-box; }
-  #softbar span { flex:1; font-size:12px; font-family:'HelvNow', sans-serif;
+  #softbar { position:absolute; bottom:0; left:0; right:0; height:26px; z-index:3000;
+    background:#000; display:flex; align-items:center; padding:4px 10px 0; box-sizing:border-box; }
+  #softbar span { flex:1; font-size:14px; font-family:'HelvNow', sans-serif;
     color:var(--dim); overflow:hidden; white-space:nowrap; }
   #sk-l { text-align:left; } #sk-c { text-align:center; } #sk-r { text-align:right; }
 
   /* bottom cards over the map */
-  .card { position:absolute; left:0; right:0; bottom:22px; z-index:1500;
+  .card { position:absolute; left:0; right:0; bottom:26px; z-index:1500;
     background:#000; border-top:2px solid var(--yellow); padding:5px 8px 6px;
     display:none; }
   .card .title { font-size:18px; color:#fff; line-height:1.15; word-wrap:break-word; }
@@ -39,17 +39,17 @@
   #navcard .navdist { font-size:12px; color:var(--yellow); margin-top:1px; }
 
   /* zoom hint badge */
-  #zoomhint { position:absolute; right:6px; bottom:30px; z-index:1400;
+  #zoomhint { position:absolute; right:6px; bottom:34px; z-index:1400;
     background:rgba(0,0,0,0.85); color:var(--yellow); font-size:12px;
     padding:2px 6px; border:1px solid var(--dim); display:none; }
 
   /* full-screen overlays */
-  .overlay { position:absolute; top:0; left:0; right:0; bottom:22px; z-index:2000;
+  .overlay { position:absolute; top:0; left:0; right:0; bottom:26px; z-index:2000;
     background:#000; color:#fff; display:none; flex-direction:column; overflow:hidden; }
   .overlay h1 { font-size:16px; color:var(--yellow); margin:0;
     padding:6px 8px 5px; border-bottom:1px solid #333; flex-shrink:0;
     word-wrap:break-word; }
-  .ovsub { font-size:12px; color:var(--gray); padding:3px 8px 4px; border-bottom:1px solid #222;
+  .ovsub { font-size:14px; color:var(--gray); padding:3px 8px 4px; border-bottom:1px solid #222;
     word-wrap:break-word; }
   .ovbody { flex:1; overflow-y:auto; }
 
@@ -61,10 +61,10 @@
   /* no clear (x) button */
   #searchinput::-webkit-search-cancel-button { -webkit-appearance:none; display:none; }
   #searchhint { font-size:12px; color:var(--gray); padding:0 10px; }
-  .listlabel { font-size:12px; color:var(--gray); padding:6px 10px 2px; }
+  .listlabel { font-size:15px; color:var(--yellow); padding:8px 10px 2px; }
 
   /* roving-focus rows */
-  .row { padding:7px 8px; font-size:15px; line-height:1.25; border:2px solid transparent;
+  .row { padding:7px 8px; font-size:17px; line-height:1.25; border:2px solid transparent;
     color:#ddd; display:flex; align-items:center; }
   .row .rmain { flex:1; min-width:0; }
   .row .sub { font-size:12px; color:var(--gray); display:block; }
@@ -72,7 +72,7 @@
   .row .num { color:var(--yellow); margin-right:5px; }
   .row .glyph { font-size:21px; color:var(--yellow); width:32px; flex-shrink:0;
     text-align:center; font-family:sans-serif; }
-  .row .time { color:var(--yellow); font-size:13px; margin-left:6px; flex-shrink:0; }
+  .row .time { color:var(--yellow); font-size:15px; margin-left:6px; flex-shrink:0; }
   .row .chev { color:var(--gray); margin-left:4px; flex-shrink:0; }
 
   /* details overlay rows wrap fully */
@@ -126,7 +126,7 @@
 
 <!-- search -->
 <div id="search" class="overlay">
-  <h1>search</h1>
+  <h1 id="searchtitle">search</h1>
   <form id="searchform" action="#">
     <input id="searchinput" type="search" autocomplete="off" enterkeyhint="search">
   </form>
@@ -158,7 +158,7 @@
 <div id="help" class="overlay">
   <h1>info</h1>
   <div id="helpbody" class="ovbody">
-    <div>dpad maps v1.0</div>
+    <div>map (beta) v1.0</div>
     <div style="color:var(--gray)">&copy; OpenStreetMap contributors &middot; &copy; CARTO</div>
   </div>
 </div>
@@ -175,6 +175,8 @@ var mode = M.MAP;
 var sel = null;            // {lat,lng,name,sub,full,type,extratags,marker}
 var route = null;
 var loc = null;
+var fromPlace = null;      // custom route start; null = my location
+var searchTarget = 'dest'; // what the search overlay is picking: 'dest' | 'start'
 var following = false;
 var locMarker = null, locCircle = null;
 var results = [], resIdx = 0, listKind = 'results';  // 'results' | 'recent'
@@ -182,15 +184,19 @@ var stepIdx = 0, navIdx = 0, modeIdx = 0;
 var toastTimer = null, zoomHintTimer = null;
 var modeTimes = {};
 
-/* ============ recents (last 5 searches) ============ */
+/* ============ recents (last 10 selected places, most recent first) ============ */
 function getRecents(){
-  try { return JSON.parse(localStorage.getItem('recents') || '[]'); }
+  try { return JSON.parse(localStorage.getItem('recentPlaces') || '[]'); }
   catch(e){ return []; }
 }
-function addRecent(q){
-  var r = getRecents().filter(function(x){ return x.toLowerCase() !== q.toLowerCase(); });
-  r.unshift(q);
-  try { localStorage.setItem('recents', JSON.stringify(r.slice(0,5))); } catch(e){}
+function addRecentPlace(p){
+  var r = getRecents().filter(function(x){
+    return !(x.lat === p.lat && x.lng === p.lng);
+  });
+  r.unshift({ lat:p.lat, lng:p.lng, name:p.name, sub:p.sub, full:p.full,
+              type:p.type, cls:p.cls, extratags:p.extratags || {},
+              osmType:p.osmType || '', osmId:p.osmId || null });
+  try { localStorage.setItem('recentPlaces', JSON.stringify(r.slice(0,10))); } catch(e){}
 }
 
 /* ============ map ============ */
@@ -257,7 +263,7 @@ function refreshChrome(){
     $('routesummary').textContent = route.summaryText;
     $('routevia').textContent = route.via || '';
     showCard('route');
-    setSoftkeys('details', 'go', 'end');
+    setSoftkeys('steps', 'go', 'back');
   } else if (sel){
     $('placename').textContent = sel.name;
     $('placesub').textContent = sel.sub || '';
@@ -265,7 +271,7 @@ function refreshChrome(){
     setSoftkeys('details', 'directions', 'back');
   } else {
     showCard(null);
-    setSoftkeys('search', 'locate', 'info');
+    setSoftkeys('search', 'me', 'info');
   }
 }
 
@@ -294,7 +300,9 @@ function focusSearchInput(){
     if (document.activeElement !== inp && ++tries < 8) requestAnimationFrame(tryFocus);
   })();
 }
-function openSearch(){
+function openSearch(target){
+  searchTarget = target === 'start' ? 'start' : 'dest';
+  $('searchtitle').textContent = searchTarget === 'start' ? 'choose start point' : 'search';
   mode = M.SEARCH;
   openOverlay('search');
   $('searchinput').value = '';
@@ -302,26 +310,80 @@ function openSearch(){
   refreshChrome();
   focusSearchInput();
 }
+/* leaving the search overlay: a start-point search returns to the chooser */
+function closeSearch(){
+  if (searchTarget === 'start'){ searchTarget = 'dest'; openModes(); }
+  else closeOverlays();
+}
 /* return focus to the input WITHOUT clearing anything */
 function backToTyping(){
   mode = M.SEARCH;
   renderResults();        // re-render so the list row drops its highlight
+  $('results').scrollTop = 0;   // show the top of the list ("recent" label)
   refreshChrome();
   focusSearchInput();
 }
 function renderRecents(){
   var rec = getRecents();
   if (!rec.length){ $('results').innerHTML = ''; results = []; return; }
-  results = rec.map(function(q){ return { recent:q }; });
+  results = rec;            // recents ARE results: same shape, same selection
   listKind = 'recent';
   resIdx = 0;
-  var html = '<div class="listlabel">recent</div>';
-  for (var i = 0; i < rec.length; i++){
-    html += '<div class="row" id="res'+i+'"><span class="rmain">' + esc(rec[i]) + '</span></div>';
-  }
-  $('results').innerHTML = html;
+  renderResults();
 }
 var lastSearchAt = 0;
+/* Photon (komoot) = fuzzy, typo-tolerant OSM search ("haydees" finds
+   "Haydee's"). Nominatim stays as fallback — it's better at exact
+   house-number addresses. */
+function photonToPlace(f){
+  var p = f.properties, c = f.geometry.coordinates;
+  var name = p.name ||
+    ((p.housenumber ? p.housenumber + ' ' : '') + (p.street || '')).trim() ||
+    p.city || p.state || 'unnamed';
+  var parts = [];
+  if (p.name && p.street)
+    parts.push(((p.housenumber ? p.housenumber + ' ' : '') + p.street).trim());
+  if (p.district) parts.push(p.district);
+  if (p.city) parts.push(p.city);
+  if (p.state) parts.push(p.state);
+  if (p.postcode) parts.push(p.postcode);
+  var sub = parts.join(', ');
+  return { lat:c[1], lng:c[0], name:name, sub:sub,
+           full: name + (sub ? ', ' + sub : ''),
+           type:(p.osm_value || '').replace(/_/g,' '),
+           cls:p.osm_key || '', extratags:{},
+           osmType:p.osm_type || '', osmId:p.osm_id || null };
+}
+function showSearchResults(list){
+  results = list;
+  resIdx = 0;
+  listKind = 'results';
+  if (!results.length){
+    $('results').innerHTML = '<div class="row">no results</div>';
+  } else {
+    renderResults();   // stay in SEARCH: first ArrowDown lands on result #1
+  }
+  mode = M.SEARCH;
+  refreshChrome();
+}
+function nominatimSearch(q, c){
+  var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=9'
+    + '&addressdetails=1&extratags=1'
+    + '&q=' + encodeURIComponent(q)
+    + '&viewbox=' + (c.lng-1.5) + ',' + (c.lat+1.5) + ',' + (c.lng+1.5) + ',' + (c.lat-1.5)
+    + '&bounded=0';
+  fetch(url).then(function(r){ return r.json(); }).then(function(js){
+    showSearchResults(js.map(function(p){
+      var parts = p.display_name.split(', ');
+      return { lat:+p.lat, lng:+p.lon,
+               name:parts.slice(0,2).join(', '), sub:parts.slice(2).join(', '),
+               full:p.display_name, type:(p.type||'').replace(/_/g,' '),
+               cls:(p.category || p.class || ''), extratags:p.extratags || {} };
+    }));
+  }).catch(function(){
+    $('results').innerHTML = '<div class="row">network error</div>';
+  });
+}
 function runSearch(){
   if (Date.now() - lastSearchAt < 500) return;
   lastSearchAt = Date.now();
@@ -331,32 +393,15 @@ function runSearch(){
   $('results').innerHTML = '<div class="spinwrap"><div class="spinner"></div></div>';
   // bias toward where you are (GPS fix if we have one, else map center)
   var c = loc ? { lat:loc.lat, lng:loc.lng } : map.getCenter();
-  var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=9'
-    + '&addressdetails=1&extratags=1'
+  var url = 'https://photon.komoot.io/api/?limit=9'
     + '&q=' + encodeURIComponent(q)
-    + '&viewbox=' + (c.lng-1.5) + ',' + (c.lat+1.5) + ',' + (c.lng+1.5) + ',' + (c.lat-1.5)
-    + '&bounded=0';
+    + '&lat=' + c.lat + '&lon=' + c.lng;
   fetch(url).then(function(r){ return r.json(); }).then(function(js){
-    results = js.map(function(p){
-      var parts = p.display_name.split(', ');
-      return { lat:+p.lat, lng:+p.lon,
-               name:parts.slice(0,2).join(', '), sub:parts.slice(2).join(', '),
-               full:p.display_name, type:(p.type||'').replace(/_/g,' '),
-               cls:(p.category || p.class || ''), extratags:p.extratags || {} };
-    });
-    resIdx = 0;
-    listKind = 'results';
-    if (!results.length){
-      $('results').innerHTML = '<div class="row">no results</div>';
-      mode = M.SEARCH;
-    } else {
-      renderResults();
-      mode = M.RESULTS;
-      addRecent(q);
-    }
-    refreshChrome();
+    var list = (js.features || []).map(photonToPlace);
+    if (list.length) showSearchResults(list);
+    else nominatimSearch(q, c);          // photon empty -> try exact geocoder
   }).catch(function(){
-    $('results').innerHTML = '<div class="row">network error</div>';
+    nominatimSearch(q, c);               // photon down -> fall back
   });
 }
 function renderResults(){
@@ -364,8 +409,9 @@ function renderResults(){
   var showSel = mode === M.RESULTS;   // no highlight while typing in the input
   for (var i = 0; i < results.length; i++){
     var r = results[i];
-    var main = r.recent !== undefined ? esc(r.recent)
-      : esc(r.name) + (r.sub ? '<span class="sub">' + esc(r.sub) + '</span>' : '');
+    // recents show just the place name, no subtitle clutter
+    var showSub = listKind !== 'recent' && r.sub;
+    var main = esc(r.name) + (showSub ? '<span class="sub">' + esc(r.sub) + '</span>' : '');
     html += '<div class="row' + (showSel && i===resIdx?' sel':'') + '" id="res'+i+'">'
       + '<span class="rmain">' + main + '</span></div>';
   }
@@ -382,15 +428,20 @@ function moveResult(d){
 function chooseResult(i){
   if (i < 0 || i >= results.length) return;
   var r = results[i];
-  if (r.recent !== undefined){           // recent search: fill + run
-    $('searchinput').value = r.recent;
-    mode = M.SEARCH;
-    runSearch();
+  if (searchTarget === 'start'){         // picking a route start point
+    fromPlace = { lat:r.lat, lng:r.lng, name:r.name, sub:r.sub, full:r.full,
+                  type:r.type, cls:r.cls, extratags:r.extratags };
+    addRecentPlace(fromPlace);
+    searchTarget = 'dest';
+    openModes();                         // back to the chooser, times refetch
     return;
   }
   clearRoute(true); clearSelection();
+  fromPlace = null;                      // new destination -> start from me
   sel = { lat:r.lat, lng:r.lng, name:r.name, sub:r.sub, full:r.full,
-          type:r.type, cls:r.cls, extratags:r.extratags };
+          type:r.type, cls:r.cls, extratags:r.extratags,
+          osmType:r.osmType || '', osmId:r.osmId || null };
+  addRecentPlace(sel);                   // bump to front of recents
   sel.marker = L.marker([r.lat, r.lng]).addTo(map);
   closeOverlays();
   following = false;
@@ -403,10 +454,45 @@ function clearSelection(){
 }
 
 /* ============ place details ============ */
-function openDetails(){
-  if (!sel) return;
-  mode = M.DETAILS;
-  $('detailstitle').textContent = sel.name;
+/* OSM opening_hours -> friendly lines: "Th-Sa 00:00-01:30,12:00-24:00"
+   becomes "thu–sat 12am–1:30am, 12pm–12am" */
+function fmtTime(t){
+  var m = t.match(/^(\d{1,2}):(\d{2})$/); if (!m) return t;
+  var h = +m[1], min = m[2];
+  if (h >= 24) h -= 24;
+  var ap = h < 12 ? 'am' : 'pm';
+  var h12 = h % 12 || 12;
+  return h12 + (min !== '00' ? ':' + min : '') + ap;
+}
+var DAY_NAMES = { Mo:'mon', Tu:'tue', We:'wed', Th:'thu', Fr:'fri', Sa:'sat',
+                  Su:'sun', PH:'holidays', SH:'school holidays' };
+function fmtHours(s){
+  if (/^24\s*\/\s*7$/.test(s.trim())) return 'open 24 hours';
+  var out = [];
+  s.split(';').forEach(function(rule){
+    rule = rule.trim();
+    if (!rule) return;
+    var m = rule.match(/^((?:(?:Mo|Tu|We|Th|Fr|Sa|Su|PH|SH)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)(?:,(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)*)\s*(.*)$/);
+    if (!m){ out.push(esc(rule)); return; }
+    var days = m[1].replace(/Mo|Tu|We|Th|Fr|Sa|Su|PH|SH/g,
+        function(d){ return DAY_NAMES[d]; })
+      .replace(/-/g,'–').replace(/,/g,', ');
+    var rest = m[2].trim(), restOut;
+    if (rest === 'off' || rest === 'closed') restOut = 'closed';
+    else if (/^".*"$/.test(rest)) restOut = rest.replace(/"/g,'').toLowerCase();
+    else {
+      restOut = rest.split(',').map(function(span){
+        var t = span.trim().match(/^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/);
+        if (!t) return span.trim().replace(/"/g,'').toLowerCase();
+        return fmtTime(t[1]) + '–' + fmtTime(t[2]);
+      }).join(', ');
+    }
+    out.push(esc(days) + ' ' + esc(restOut));
+  });
+  return out.join('<br>') || esc(s);
+}
+
+function renderDetails(loadingMore){
   var html = '';
   html += '<div class="drow"><span class="dlabel">address</span>' + esc(sel.full || sel.name) + '</div>';
   if (sel.type) html += '<div class="drow"><span class="dlabel">type</span>'
@@ -416,15 +502,42 @@ function openDetails(){
     'contact:phone':'phone', opening_hours:'hours', cuisine:'cuisine',
     wheelchair:'wheelchair', brand:'brand', operator:'operator' };
   for (var k in nice){
-    if (tags[k]) html += '<div class="drow"><span class="dlabel">' + nice[k] + '</span>'
-      + esc(tags[k]) + '</div>';
+    if (tags[k]){
+      var val = (k === 'opening_hours') ? fmtHours(tags[k]) : esc(tags[k]);
+      html += '<div class="drow"><span class="dlabel">' + nice[k] + '</span>' + val + '</div>';
+    }
   }
   html += '<div class="drow"><span class="dlabel">coordinates</span>'
     + sel.lat.toFixed(5) + ', ' + sel.lng.toFixed(5) + '</div>';
+  if (loadingMore) html += '<div class="drow" style="color:var(--gray)">loading more info&hellip;</div>';
   $('detailsbody').innerHTML = html;
+}
+function hasTags(t){ for (var k in t) return true; return false; }
+function openDetails(){
+  if (!sel) return;
+  mode = M.DETAILS;
+  $('detailstitle').textContent = sel.name;
+  // photon results have no extratags — enrich from nominatim by exact OSM id
+  var enrich = !!(sel.osmId && sel.osmType && !sel.enriched && !hasTags(sel.extratags));
+  renderDetails(enrich);
   $('detailsbody').scrollTop = 0;
   openOverlay('details');
   refreshChrome();
+  if (enrich){
+    var s = sel;   // capture: user may move on before the fetch returns
+    s.enriched = true;
+    fetch('https://nominatim.openstreetmap.org/lookup?format=jsonv2&extratags=1'
+        + '&osm_ids=' + s.osmType + s.osmId)
+      .then(function(r){ return r.json(); })
+      .then(function(js){
+        if (js && js.length){
+          s.extratags = js[0].extratags || {};
+          if (js[0].display_name) s.full = js[0].display_name;
+        }
+        if (mode === M.DETAILS && sel === s) renderDetails(false);
+      })
+      .catch(function(){ if (mode === M.DETAILS && sel === s) renderDetails(false); });
+  }
 }
 
 /* ============ location ============ */
@@ -443,6 +556,9 @@ function onLocation(lat, lng, acc){
   if (first && pendingModes && mode === M.MODES){ pendingModes = false; fetchModeTimes(); }
 }
 window.__onLocation = onLocation;
+window.__onLocationOff = function(){
+  toast('location is turned off — enable it in phone settings', 5000);
+};
 
 var browserWatch = null;
 function locate(){
@@ -463,6 +579,8 @@ var PROFILES = [
   { id:'routed-foot', label:'walk'  },
   { id:'routed-bike', label:'bike'  }
 ];
+/* route origin: custom start point if picked, otherwise GPS */
+function origin(){ return fromPlace || loc; }
 function openModes(){
   if (!sel) return;
   mode = M.MODES; modeIdx = 0; modeTimes = {};
@@ -470,15 +588,17 @@ function openModes(){
   renderModes();
   openOverlay('modes');
   refreshChrome();
-  if (!loc){ pendingModes = true; locate(); toast('waiting for GPS fix…', 3500); }
+  if (!origin()){ pendingModes = true; locate(); toast('waiting for GPS fix…', 3500); }
   else fetchModeTimes();
 }
 function renderModes(){
-  var html = '';
+  var fromLabel = fromPlace ? fromPlace.name : 'my location';
+  var html = '<div class="row' + (modeIdx===0?' sel':'') + '">'
+    + '<span class="rmain">from: ' + esc(fromLabel) + '</span>'
+    + '<span class="chev">&#8250;</span></div>';
   for (var i = 0; i < PROFILES.length; i++){
     var p = PROFILES[i];
-    html += '<div class="row' + (i===modeIdx?' sel':'') + '">'
-      + '<span class="num">'+(i+1)+'</span>'
+    html += '<div class="row' + (i+1===modeIdx?' sel':'') + '">'
       + '<span class="rmain">' + p.label + '</span>'
       + '<span class="time">' + (modeTimes[p.id] || '…') + '</span>'
       + '<span class="chev">&#8250;</span></div>';
@@ -486,10 +606,11 @@ function renderModes(){
   $('modesbody').innerHTML = html;
 }
 function fetchModeTimes(){
-  if (!loc || !sel) return;
+  var o = origin();
+  if (!o || !sel) return;
   PROFILES.forEach(function(p){
     var url = 'https://routing.openstreetmap.de/' + p.id + '/route/v1/driving/'
-      + loc.lng + ',' + loc.lat + ';' + sel.lng + ',' + sel.lat + '?overview=false';
+      + o.lng + ',' + o.lat + ';' + sel.lng + ',' + sel.lat + '?overview=false';
     fetch(url).then(function(r){ return r.json(); }).then(function(js){
       if (js.routes && js.routes.length)
         modeTimes[p.id] = fmtDur(js.routes[0].duration);
@@ -500,14 +621,24 @@ function fetchModeTimes(){
 }
 
 /* ============ routing (OSRM) ============ */
+var routeBusy = false;
 function doRoute(profile){
-  if (!sel || !loc) return;
-  toast('getting directions…', 8000);
+  var o = origin();
+  if (!sel || !o || routeBusy) return;
+  routeBusy = true;
+  // spinner under the drive/walk/bike rows while the route loads
+  if (mode === M.MODES)
+    $('modesbody').innerHTML += '<div class="spinwrap"><div class="spinner"></div></div>';
   var url = 'https://routing.openstreetmap.de/' + profile.id + '/route/v1/driving/'
-    + loc.lng + ',' + loc.lat + ';' + sel.lng + ',' + sel.lat
+    + o.lng + ',' + o.lat + ';' + sel.lng + ',' + sel.lat
     + '?overview=full&geometries=geojson&steps=true';
   fetch(url).then(function(r){ return r.json(); }).then(function(js){
-    if (!js.routes || !js.routes.length){ toast('no route found'); return; }
+    routeBusy = false;
+    if (!js.routes || !js.routes.length){
+      toast('no route found');
+      if (mode === M.MODES) renderModes();   // drop the spinner
+      return;
+    }
     var r0 = js.routes[0];
     clearTimeout(toastTimer); $('toast').style.display = 'none';
     clearRoute(true);
@@ -520,6 +651,7 @@ function doRoute(profile){
         latlng: [s.maneuver.location[1], s.maneuver.location[0]] });
     });
     var via = r0.legs[0].summary ? 'via ' + r0.legs[0].summary : '';
+    if (fromPlace) via = 'from ' + fromPlace.name + (via ? ' · ' + via : '');
     route = {
       line:line, casing:casing, steps:steps, profile:profile,
       summaryText: fmtDur(r0.duration) + ' (' + fmtDist(r0.distance) + ') ' + profile.label,
@@ -529,7 +661,11 @@ function doRoute(profile){
     map.fitBounds(line.getBounds(), { padding:[20,20] });
     following = false;
     refreshChrome();
-  }).catch(function(){ toast('routing failed (network?)'); });
+  }).catch(function(){
+    routeBusy = false;
+    toast('routing failed (network?)');
+    if (mode === M.MODES) renderModes();   // drop the spinner
+  });
 }
 function stepGlyph(s){
   var t = s.maneuver.type, m = s.maneuver.modifier || '';
@@ -563,6 +699,7 @@ function clearRoute(keepSel){
   if (route){
     map.removeLayer(route.line); map.removeLayer(route.casing); route = null;
     setNavNotification(false);
+    fromPlace = null;          // ended route -> next one starts from me
   }
   if (!keepSel) clearSelection();
   refreshChrome();
@@ -667,12 +804,13 @@ function handleKey(name, isRepeat){
     return true;
   }
   if (mode === M.MODES){
-    if (name==='ArrowDown'){ modeIdx = Math.min(PROFILES.length-1, modeIdx+1); renderModes(); return true; }
+    if (name==='ArrowDown'){ modeIdx = Math.min(PROFILES.length, modeIdx+1); renderModes(); return true; }
     if (name==='ArrowUp'){ modeIdx = Math.max(0, modeIdx-1); renderModes(); return true; }
     if (name==='Enter'){ if(!isRepeat && gate('ok')){
-        if (!loc){ toast('still waiting for GPS…'); } else doRoute(PROFILES[modeIdx]);
+        if (modeIdx === 0) openSearch('start');                  // pick start point
+        else if (!origin()){ toast('still waiting for GPS…'); }
+        else doRoute(PROFILES[modeIdx-1]);
       } return true; }
-    if (name >= '1' && name <= '3'){ if(!isRepeat && loc) doRoute(PROFILES[+name-1]); return true; }
     if (name==='Back' || name==='SoftRight'){ if(!isRepeat) closeOverlays(); return true; }
     return true;
   }
@@ -687,7 +825,7 @@ function handleKey(name, isRepeat){
     if (name==='Back' || name==='SoftRight'){
       if (isRepeat) return true;
       if (mode===M.RESULTS){ backToTyping(); return true; }   // keep text + list
-      closeOverlays(); return true;
+      closeSearch(); return true;                             // start-picks return to chooser
     }
     if (mode === M.SEARCH){
       // soft-left = search; arrives via Android dispatchKeyEvent so it
@@ -785,7 +923,6 @@ $('searchform').addEventListener('submit', function(ev){
 refreshChrome();
 locate();
 zoomHint();
-setTimeout(function(){ toast('left key = search', 3000); }, 600);
 </script>
 </body>
 </html>
