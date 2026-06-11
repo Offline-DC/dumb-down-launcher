@@ -98,13 +98,17 @@ class MainAppsGridActivity : AppCompatActivity() {
          * Mouse stays off: MessengerActivity is fully D-pad navigable.
          */
         fun openMessagesInChrome(activity: AppCompatActivity) {
-            Log.d("MESSAGES", "Opening in-app Google Messages messenger")
-            val intent = Intent(
-                activity,
-                com.offlineinc.dumbdownlauncher.messenger.MessengerActivity::class.java,
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            activity.startActivity(intent)
-            activity.overridePendingTransition(0, 0)
+            // One-time "Google Messages is built in now" announcement on first
+            // open; opens the messenger afterwards (and directly on later opens).
+            com.offlineinc.dumbdownlauncher.messenger.maybeShowGoogleMessagesAnnouncement(activity) {
+                Log.d("MESSAGES", "Opening in-app Google Messages messenger")
+                val intent = Intent(
+                    activity,
+                    com.offlineinc.dumbdownlauncher.messenger.MessengerActivity::class.java,
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                activity.startActivity(intent)
+                activity.overridePendingTransition(0, 0)
+            }
         }
 
         private val bgExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()

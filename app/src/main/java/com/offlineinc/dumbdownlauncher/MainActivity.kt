@@ -695,13 +695,18 @@ class MainActivity : AppCompatActivity() {
                 // Mouse stays disabled: the messenger handles all navigation
                 // via DPAD, so we don't need the mouse-cursor accessibility
                 // service the web-based path required.
-                Log.d("ONBOARDING", "Launching in-app Google Messages messenger")
-                val intent = Intent(
-                    this,
-                    com.offlineinc.dumbdownlauncher.messenger.MessengerActivity::class.java,
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(intent)
-                overridePendingTransition(0, 0)
+                //
+                // First open also shows the one-time "Google Messages is built
+                // in now — update the app + re-run Configuration" announcement.
+                com.offlineinc.dumbdownlauncher.messenger.maybeShowGoogleMessagesAnnouncement(this) {
+                    Log.d("ONBOARDING", "Launching in-app Google Messages messenger")
+                    val intent = Intent(
+                        this,
+                        com.offlineinc.dumbdownlauncher.messenger.MessengerActivity::class.java,
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    overridePendingTransition(0, 0)
+                }
             }
             "ios" -> {
                 Log.d("ONBOARDING", "Launching OpenBubbles for iOS")
