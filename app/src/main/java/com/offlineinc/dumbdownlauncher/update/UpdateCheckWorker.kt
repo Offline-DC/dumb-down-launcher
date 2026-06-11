@@ -85,6 +85,14 @@ class UpdateCheckWorker(
             if (openBubblesInfo != null && PlatformPreferences.getChoice(context) == "ios") {
                 val installedCode = getInstalledVersionCode("com.openbubbles.messaging")
                 if (installedCode != null && openBubblesInfo.versionCode > installedCode) {
+                    // Record the pending update (with versionCode) BEFORE posting,
+                    // so the launch gate + reboot re-post key off it.
+                    UpdateNotificationManager.markOpenBubblesUpdatePending(
+                        context,
+                        openBubblesInfo.downloadUrl,
+                        openBubblesInfo.versionName,
+                        openBubblesInfo.versionCode,
+                    )
                     UpdateNotificationManager.notify(
                         context = context,
                         notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
@@ -194,6 +202,12 @@ class UpdateCheckWorker(
                         PackageInfoCompat.getLongVersionCode(info).toInt()
                     } catch (_: Exception) { null }
                     if (installedCode != null && openBubblesInfo.versionCode > installedCode) {
+                        UpdateNotificationManager.markOpenBubblesUpdatePending(
+                            context,
+                            openBubblesInfo.downloadUrl,
+                            openBubblesInfo.versionName,
+                            openBubblesInfo.versionCode,
+                        )
                         UpdateNotificationManager.notify(
                             context = context,
                             notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,

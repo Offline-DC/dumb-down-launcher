@@ -42,6 +42,11 @@ object UpdateNotificationManager {
     private const val OB_PENDING_PREFS = "ob_update_pending"
     private const val KEY_OB_PENDING_URL = "url"
     private const val KEY_OB_PENDING_VERSION = "version"
+    private const val KEY_OB_PENDING_VERSIONCODE = "version_code"
+    // The pending versionCode whose install has failed at least once. While
+    // this equals the pending versionCode, the launch gate stops hard-blocking
+    // so a failing update can't lock the user out of messaging.
+    private const val KEY_OB_FAILED_VERSIONCODE = "failed_version_code"
 
     fun ensureChannel(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -160,16 +165,69 @@ object UpdateNotificationManager {
             // blocks individual swipe-away.
             .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
 
-        if (isForced) {
-            // Persist so we can re-post on the next launcher start (≈ boot).
-            context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString(KEY_OB_PENDING_URL, downloadUrl)
-                .putString(KEY_OB_PENDING_VERSION, versionName)
-                .apply()
-        }
-
         nm.notify(notificationId, notification)
+    }
+
+    /**
+     * Record that a Smart Txt (OpenBubbles) update to [versionCode] is pending,
+     * so the sticky tile can be re-posted across reboots and the launch gate can
+     * keep blocking until it's installed. Stored with the download URL + name so
+     * a reboot re-post can rebuild the tile without a network round-trip.
+     */
+    fun markOpenBubblesUpdatePending(
+        context: Context,
+        downloadUrl: String,
+        versionName: String,
+        versionCode: Int,
+    ) {
+        context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_OB_PENDING_URL, downloadUrl)
+            .putString(KEY_OB_PENDING_VERSION, versionName)
+            .putInt(KEY_OB_PENDING_VERSIONCODE, versionCode)
+            .apply()
+    }
+
+    /**
+     * True when a recorded Smart Txt update is still pending — i.e. we noted a
+     * pending versionCode and the installed OpenBubbles build is still below it.
+     * This is the single source of truth for both the launch gate (show the
+     * "must update" modal) and the reboot re-post, so it survives restarts and
+     * doesn't depend on the live notification being currently posted. Becomes
+     * false the moment OpenBubbles reaches the pending version (e.g. after the
+     * install), regardless of how it got there.
+     */
+    fun isOpenBubblesUpdatePending(context: Context): Boolean {
+        val pendingCode = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_OB_PENDING_VERSIONCODE, -1)
+        if (pendingCode <= 0) return false
+        val installed = OpenBubblesOps.installedVersionCode(context) ?: return false
+        return installed < pendingCode
+    }
+
+    /**
+     * Whether the launch gate should HARD-BLOCK opening Smart Txt: an update is
+     * pending AND that pending version hasn't failed to install. Once an install
+     * of the pending version fails ([markOpenBubblesUpdateFailed]), this returns
+     * false so the user can still open Smart Txt — they aren't locked out of
+     * messaging by a failing update. The retry notification still nags them, and
+     * a NEWER pending version re-blocks (its code won't match the failed one).
+     */
+    fun isOpenBubblesUpdateBlocking(context: Context): Boolean {
+        if (!isOpenBubblesUpdatePending(context)) return false
+        val prefs = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+        val pendingCode = prefs.getInt(KEY_OB_PENDING_VERSIONCODE, -1)
+        val failedCode = prefs.getInt(KEY_OB_FAILED_VERSIONCODE, -1)
+        return failedCode != pendingCode
+    }
+
+    /** Mark the current pending Smart Txt update as having failed to install. */
+    fun markOpenBubblesUpdateFailed(context: Context) {
+        val prefs = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+        val pendingCode = prefs.getInt(KEY_OB_PENDING_VERSIONCODE, -1)
+        if (pendingCode > 0) {
+            prefs.edit().putInt(KEY_OB_FAILED_VERSIONCODE, pendingCode).apply()
+        }
     }
 
     /**
@@ -185,17 +243,18 @@ object UpdateNotificationManager {
         val url = prefs.getString(KEY_OB_PENDING_URL, null) ?: return
         val versionName = prefs.getString(KEY_OB_PENDING_VERSION, "") ?: ""
 
-        // Only relevant when the user is on the iOS (OpenBubbles) smart-txt
-        // path. If they've switched to Android/none, clear the forced prompt.
+        // Only relevant on the iOS (OpenBubbles) smart-txt path. If they've
+        // switched to Android/none, clear the forced prompt.
         if (com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences.getChoice(context) != "ios") {
             prefs.edit().clear().apply()
             cancel(context, NOTIFICATION_ID_OPENBUBBLES)
             return
         }
 
-        val installed = OpenBubblesOps.installedVersionCode(context)
-        if (installed == null || installed >= OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE) {
-            // Updated (or uninstalled) — clear the forced prompt.
+        // Clear the prompt only once the pending update is actually installed
+        // (installed >= the pending versionCode) — NOT at a fixed version floor.
+        // Otherwise re-post so the tile survives the reboot.
+        if (!isOpenBubblesUpdatePending(context)) {
             prefs.edit().clear().apply()
             cancel(context, NOTIFICATION_ID_OPENBUBBLES)
             return
@@ -282,15 +341,48 @@ object UpdateNotificationManager {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notificationId = notificationIdFor(appKey)
         val appDisplayName = displayNameFor(appKey)
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+
+        // Retry on tap: re-fire ACTION_DOWNLOAD_APK (re-download + re-install).
+        // For OpenBubbles the download URL is in the persisted pending state;
+        // other apps don't persist it, so they get a plain (non-retry) tile.
+        val retryUrl = if (appKey == "openbubbles-messaging") {
+            // Record the failure so the launch gate stops hard-blocking — the
+            // user can open Smart Txt despite the failed update, and still retry
+            // from this notification.
+            markOpenBubblesUpdateFailed(context)
+            context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_OB_PENDING_URL, null)
+        } else {
+            null
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle("Update failed")
-            .setContentText("$appDisplayName could not be installed")
+            .setContentText(
+                if (retryUrl != null) "$appDisplayName couldn't install — tap to retry"
+                else "$appDisplayName could not be installed"
+            )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(false)
             .setAutoCancel(true)
-            .build()
-        nm.notify(notificationId, notification)
+
+        if (retryUrl != null) {
+            val retryIntent = Intent(ACTION_DOWNLOAD_APK).apply {
+                setPackage(context.packageName)
+                putExtra(EXTRA_DOWNLOAD_URL, retryUrl)
+                putExtra(EXTRA_APP_KEY, appKey)
+            }
+            val pending = PendingIntent.getBroadcast(
+                context,
+                notificationId,
+                retryIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.setContentIntent(pending)
+        }
+
+        nm.notify(notificationId, builder.build())
     }
 
     /**

@@ -1,6 +1,5 @@
 package com.offlineinc.dumbdownlauncher.openbubbles
 
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.util.Log
@@ -26,42 +25,45 @@ object OpenBubblesGate {
     private const val TAG = "OpenBubblesGate"
 
     /**
-     * True when OpenBubbles is in iOS messaging mode, older than
-     * [OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE], AND an update notification is
-     * currently posted — i.e. the user should be routed to install the update
-     * before using the app. If no update is waiting we let them in (can't force
-     * an update they can't get yet).
+     * True when the user should be routed to install a pending Smart Txt
+     * (OpenBubbles) update before using the app: iOS messaging mode, OpenBubbles
+     * installed, AND an update notification currently posted.
+     *
+     * The modal is gated on the update tile being live — NOT on a fixed version
+     * floor. The update worker only posts that tile when GitHub's `version_code`
+     * is higher than what's installed, so this fires for ANY newer build. (The
+     * old fixed-threshold check meant the modal stopped once the device passed
+     * 20002231, even when newer updates were available — that's the bug this
+     * fixes.) [OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE] still governs the
+     * one-time retention toggle, just not this gate.
+     *
+     * If no update is waiting we let them in (can't force an update they can't
+     * get yet).
      */
     fun isUpdateRequired(context: Context): Boolean {
         if (PlatformPreferences.getChoice(context) != "ios") return false
-        val vc = OpenBubblesOps.installedVersionCode(context) ?: return false
-        if (vc >= OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE) return false
-        return isUpdateNotificationActive(context)
-    }
-
-    /**
-     * Whether the launcher currently has the OpenBubbles update notification
-     * posted — the same "update available" tile the notifications page shows.
-     * The launcher posts it itself, so it appears in getActiveNotifications()
-     * with no extra permission.
-     */
-    private fun isUpdateNotificationActive(context: Context): Boolean {
-        val nm = context.getSystemService(NotificationManager::class.java) ?: return false
-        return try {
-            nm.activeNotifications.any {
-                it.id == UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES
-            }
-        } catch (_: Exception) {
-            false
-        }
+        // Block on the persisted pending state — but NOT once that update has
+        // failed to install ([isOpenBubblesUpdateBlocking] handles the failed
+        // carve-out), so a failing update can't lock the user out of messaging.
+        // Shows on EVERY open until installed (or until it fails), survives
+        // reboots, and doesn't depend on the live notification being posted.
+        return UpdateNotificationManager.isOpenBubblesUpdateBlocking(context)
     }
 
     /** Show the hard-block update modal over the current screen. */
     fun showUpdateRequired(context: Context) {
-        context.startActivity(
-            Intent(context, OpenBubblesUpdateRequiredActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-        )
+        val intent = Intent(context, OpenBubblesUpdateRequiredActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        // FLAG_ACTIVITY_NEW_TASK is required only from a non-Activity context
+        // (the accessibility service). From an Activity (grid / All Apps /
+        // notifications) we deliberately omit it so the modal stacks on top of
+        // the caller and reliably shows EVERY time. With NEW_TASK, repeat opens
+        // re-surfaced the existing launcher task — which had the notifications
+        // page on top — instead of the modal (the "modal only shows once" bug).
+        if (context !is android.app.Activity) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
     }
 
     /** Whether the one-time "delete after 3 days" retention toggle has run. */
