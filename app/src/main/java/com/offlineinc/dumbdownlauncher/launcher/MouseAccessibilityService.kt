@@ -1,5 +1,4 @@
 package com.offlineinc.dumbdownlauncher
-
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
@@ -1103,10 +1102,18 @@ class MouseAccessibilityService : AccessibilityService() {
         if (!webViewActivityActive) {
             if (pkg == "com.whatsapp") {
                 handleWhatsAppDensity()
+            } else if (pkg == "com.apple.android.music") {
+                handleAppleMusicDensity()
             } else if (currentDensity != 120) {
                 setDensity(120)
             }
         }
+    }
+
+    private fun handleAppleMusicDensity() {
+        // Reduce density when Apple Music is in foreground so the sign-in
+        // screen fits without scrolling. Resets to 120 when leaving the app.
+        setDensity(80)
     }
 
     private fun handleWhatsAppDensity() {
