@@ -364,22 +364,40 @@ function showSearchResults(list){
   mode = M.SEARCH;
   refreshChrome();
 }
-function nominatimSearch(q, c){
+function nominatimSearch(q, c, fallback){
   var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=9'
     + '&addressdetails=1&extratags=1'
     + '&q=' + encodeURIComponent(q)
     + '&viewbox=' + (c.lng-1.5) + ',' + (c.lat+1.5) + ',' + (c.lng+1.5) + ',' + (c.lat-1.5)
     + '&bounded=0';
   fetch(url).then(function(r){ return r.json(); }).then(function(js){
-    showSearchResults(js.map(function(p){
+    var list = js.map(function(p){
       var parts = p.display_name.split(', ');
       return { lat:+p.lat, lng:+p.lon,
                name:parts.slice(0,2).join(', '), sub:parts.slice(2).join(', '),
                full:p.display_name, type:(p.type||'').replace(/_/g,' '),
                cls:(p.category || p.class || ''), extratags:p.extratags || {} };
-    }));
+    });
+    if (list.length) showSearchResults(list);
+    else if (fallback) fallback();
+    else showSearchResults([]);
   }).catch(function(){
-    $('results').innerHTML = '<div class="row">network error</div>';
+    if (fallback) fallback();
+    else $('results').innerHTML = '<div class="row">network error</div>';
+  });
+}
+function photonSearch(q, c, fallback){
+  var url = 'https://photon.komoot.io/api/?limit=9'
+    + '&q=' + encodeURIComponent(q)
+    + '&lat=' + c.lat + '&lon=' + c.lng;
+  fetch(url).then(function(r){ return r.json(); }).then(function(js){
+    var list = (js.features || []).map(photonToPlace);
+    if (list.length) showSearchResults(list);
+    else if (fallback) fallback();
+    else showSearchResults([]);
+  }).catch(function(){
+    if (fallback) fallback();
+    else $('results').innerHTML = '<div class="row">network error</div>';
   });
 }
 function runSearch(){
@@ -391,16 +409,14 @@ function runSearch(){
   $('results').innerHTML = '<div class="spinwrap"><div class="spinner"></div></div>';
   // bias toward where you are (GPS fix if we have one, else map center)
   var c = loc ? { lat:loc.lat, lng:loc.lng } : map.getCenter();
-  var url = 'https://photon.komoot.io/api/?limit=9'
-    + '&q=' + encodeURIComponent(q)
-    + '&lat=' + c.lat + '&lon=' + c.lng;
-  fetch(url).then(function(r){ return r.json(); }).then(function(js){
-    var list = (js.features || []).map(photonToPlace);
-    if (list.length) showSearchResults(list);
-    else nominatimSearch(q, c);          // photon empty -> try exact geocoder
-  }).catch(function(){
-    nominatimSearch(q, c);               // photon down -> fall back
-  });
+  // queries starting with a house number ("1425 17th st nw") are addresses:
+  // nominatim nails those, photon returns nearby intersections instead.
+  // fuzzy name queries ("haydees") go to photon, which tolerates typos.
+  if (/^\d+\s+\S/.test(q)){
+    nominatimSearch(q, c, function(){ photonSearch(q, c, null); });
+  } else {
+    photonSearch(q, c, function(){ nominatimSearch(q, c, null); });
+  }
 }
 function renderResults(){
   var html = '';
