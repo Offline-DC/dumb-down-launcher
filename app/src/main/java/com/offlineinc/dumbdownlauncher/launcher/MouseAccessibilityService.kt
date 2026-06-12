@@ -36,6 +36,7 @@ class MouseAccessibilityService : AccessibilityService() {
     private var currentPackage = ""
     private var currentDensity = -1
 
+
     // True while the star-key special-char picker is open.
     // The mouse is disabled for this duration.
     private var specialCharPickerOpen = false
@@ -955,7 +956,7 @@ class MouseAccessibilityService : AccessibilityService() {
                 handlePackage(pkg, className)
                 return
             }
-            if (!className.contains("Activity")) {
+            if (!className.contains("Activity") && pkg != "com.apple.android.music") {
                 Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: skipped (no 'Activity' in className)")
                 return
             }
@@ -1103,6 +1104,8 @@ class MouseAccessibilityService : AccessibilityService() {
         if (!webViewActivityActive) {
             if (pkg == "com.whatsapp") {
                 handleWhatsAppDensity()
+            } else if (pkg == "com.apple.android.music") {
+                handleAppleMusicDensity()
             } else if (currentDensity != 120) {
                 setDensity(120)
             }
@@ -1121,6 +1124,22 @@ class MouseAccessibilityService : AccessibilityService() {
                 setDensity(if (loggedIn) 120 else 90)
             } catch (t: Throwable) {
                 Log.e("MOUSE_SVC", "handleWhatsAppDensity failed: ${t.message}")
+            }
+        }
+    }
+
+    private fun handleAppleMusicDensity() {
+        shellExecutor.execute {
+            try {
+                val proc = ProcessBuilder("su", "-mm", "-c", "test -f /data/user/0/com.apple.android.music/files/IC-Info.sids && echo yes || echo no")
+                    .redirectErrorStream(true)
+                    .start()
+                val output = proc.inputStream.bufferedReader().readText().trim()
+                proc.waitFor()
+                val loggedIn = output.lines().any { it.trim() == "yes" }
+                setDensity(if (loggedIn) 120 else 80)
+            } catch (t: Throwable) {
+                Log.e("MOUSE_SVC", "handleAppleMusicDensity failed: ${t.message}")
             }
         }
     }
