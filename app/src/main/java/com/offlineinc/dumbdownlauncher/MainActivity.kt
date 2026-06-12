@@ -558,6 +558,7 @@ class MainActivity : AppCompatActivity() {
         }
         // User returned from smart txt — clear the launching overlay
         if (onboardingStep.value == "launching_smarttxt") {
+            Log.d("ONBOARDING", "onResume: clearing launching_smarttxt overlay -> home grid")
             onboardingStep.value = null
         }
         // User returned from ContactSyncActivity — show intent screen to pick
@@ -684,7 +685,22 @@ class MainActivity : AppCompatActivity() {
         launchSmartTxtForPlatform(platform)
     }
 
+    // Guards against the flip phone delivering a single OK/center press as two
+    // events, which fired the launch twice — the duplicate could double-start
+    // the target app and bounce the user back to the home grid. Applies to BOTH
+    // platforms (the android announcement path debounces too; this also covers
+    // ios -> OpenBubbles). 1200ms is comfortably longer than a key bounce but
+    // short enough not to block a deliberate re-open.
+    private var lastSmartTxtLaunchMs = 0L
+
     private fun launchSmartTxtForPlatform(platform: String) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val sinceLast = now - lastSmartTxtLaunchMs
+        if (sinceLast in 0 until 1200L) {
+            Log.w("ONBOARDING", "launchSmartTxtForPlatform($platform) ignored — duplicate (${sinceLast}ms since last)")
+            return
+        }
+        lastSmartTxtLaunchMs = now
         Log.d("ONBOARDING", "launchSmartTxtForPlatform($platform) called; step=${onboardingStep.value}")
         when (platform) {
             "android" -> {
@@ -698,17 +714,11 @@ class MainActivity : AppCompatActivity() {
                 // via DPAD, so we don't need the mouse-cursor accessibility
                 // service the web-based path required.
                 //
-                // First open also shows the one-time "Google Messages is built
-                // in now — update the app + re-run Configuration" announcement.
-                com.offlineinc.dumbdownlauncher.messenger.maybeShowGoogleMessagesAnnouncement(this) {
-                    Log.d("ONBOARDING", "Launching in-app Google Messages messenger")
-                    val intent = Intent(
-                        this,
-                        com.offlineinc.dumbdownlauncher.messenger.MessengerActivity::class.java,
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
-                    overridePendingTransition(0, 0)
-                }
+                // First open shows the one-time "Google Messages is built in
+                // now — update the app + re-run Configuration" announcement
+                // (its own Activity), then opens the messenger; later opens go
+                // straight in.
+                com.offlineinc.dumbdownlauncher.messenger.launchAndroidSmartTxt(this)
             }
             "ios" -> {
                 Log.d("ONBOARDING", "Launching OpenBubbles for iOS")
@@ -718,6 +728,7 @@ class MainActivity : AppCompatActivity() {
                 val intent = packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
                 if (intent != null) {
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    Log.d("ONBOARDING", "ios: starting OpenBubbles")
                     startActivity(intent)
                     overridePendingTransition(0, 0)
                 } else {

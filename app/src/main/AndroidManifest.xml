@@ -140,6 +140,15 @@
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.DumbDownLauncher" />
 
+        <!-- One-time "Google Messages is built in now" announcement, shown the
+             first time android smart txt is opened. singleTop so a double launch
+             (flip-phone keys can fire twice) doesn't stack two copies. -->
+        <activity
+            android:name=".messenger.GoogleMessagesAnnouncementActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
         <!-- Receives Google-account cookies from the companion phone over the
              Type Sync relay (Messages-for-web sign-in). -->
         <activity
