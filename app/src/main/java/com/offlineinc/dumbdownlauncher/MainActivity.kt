@@ -465,7 +465,7 @@ class MainActivity : AppCompatActivity() {
                                 AllAppsActivity.invalidateCache()
                                 MainAppsGridActivity.invalidateAndRebuildAsync(applicationContext)
                                 if (choice == "ios" || choice == "android") {
-                                    Log.d("ONBOARDING", "Platform choice saved (for smart txt): $choice")
+                                    Log.d("ONBOARDING", "IntentChoiceScreen.onChoose -> $choice (step=${onboardingStep.value})")
                                     onboardingStep.value = "launching_smarttxt"
                                     launchSmartTxtForPlatform(choice)
                                 } else {
@@ -685,6 +685,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchSmartTxtForPlatform(platform: String) {
+        Log.d("ONBOARDING", "launchSmartTxtForPlatform($platform) called; step=${onboardingStep.value}")
         when (platform) {
             "android" -> {
                 // Replaces the legacy "open messages.google.com/web in Chrome
