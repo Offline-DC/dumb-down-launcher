@@ -25,6 +25,10 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Lets update downloads hide the system DownloadManager notification
+         (which only shows "time left") in favor of the launcher's own
+         progress notification (bar + MB/%). See DownloadAndInstallReceiver. -->
+    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION"/>
     <!-- Diagnostic logging (runtime opt-in via long-press on "weather" in
          All Apps). RebootLoggingService runs as a foreground service so
          the rolling 24-hour logcat tail survives doze/idle — a service
@@ -44,6 +48,15 @@
     <uses-permission android:name="android.permission.CALL_PHONE"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+
+    <!-- Battery diagnostics (gated by BuildConfig.DIAGNOSTICS_ENABLED).
+         DiagnosticsService runs as a foreground service so the per-minute
+         battery sampling loop and broadcast receivers survive doze/idle. The
+         privileged dumpsys/logcat snapshots are executed via `su -c` (root
+         via Magisk) rather than directly, so READ_LOGS / BATTERY_STATS /
+         DUMP / PACKAGE_USAGE_STATS aren't required on the app itself. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Read pairing data from contact-sync app (legacy migration) -->
     <uses-permission android:name="com.offlineinc.dumbcontactsync.DEVICE_LINK_READ"/>
@@ -136,6 +149,15 @@
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <activity
+            android:name=".update.WifiThenUpdateActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
             android:name=".contactsync.ContactSyncActivity"
             android:exported="false"
             android:launchMode="singleTop"
@@ -147,6 +169,14 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:noHistory="true"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- dumb map (beta): no noHistory so the route/selection survives
+             leaving and returning via the navigation notification -->
+        <activity
+            android:name=".MapsActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <activity
@@ -168,6 +198,28 @@
             android:launchMode="singleTop"
             android:noHistory="true"
             android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- Diagnostics hidden screen. Opened by long-pressing the "quack"
+             row in All Apps. Battery-analysis toggle + session controls,
+             rolling-ADB-logs toggle (RebootLoggingService), and submit-logs
+             upload. Gated by BuildConfig.DIAGNOSTICS_ENABLED at runtime —
+             the diag beta build sets it true. See
+             battery-diagnostics-plan.md for the full investigation plan. -->
+        <activity
+            android:name=".diagnostics.DiagnosticsActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- Battery diagnostics foreground service. Per-minute battery
+             sampling, broadcast receivers for screen/power/doze, and an
+             hourly privileged dumpsys snapshot scheduler. Runs only when
+             the user has opted in via DiagnosticsActivity. -->
+        <service
+            android:name=".diagnostics.DiagnosticsService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Headless trampoline for the "add wifi 2 save on data" nudge.
              Tapping the notification (from the shade or the in-app

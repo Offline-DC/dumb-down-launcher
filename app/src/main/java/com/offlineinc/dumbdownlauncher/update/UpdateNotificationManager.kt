@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesOps
 
 object UpdateNotificationManager {
 
@@ -20,6 +21,7 @@ object UpdateNotificationManager {
     private const val BETA_CHANNEL_ID = "beta_reminders"
     const val NOTIFICATION_ID_LAUNCHER = 1001
     const val NOTIFICATION_ID_SNAKE = 1003
+    const val NOTIFICATION_ID_OPENBUBBLES = 1004
     /**
      * Daily reminder posted by
      * [com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker].
@@ -30,8 +32,43 @@ object UpdateNotificationManager {
     const val NOTIFICATION_ID_BETA_REMINDER = 1010
 
     const val ACTION_DOWNLOAD_APK = "com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK"
+    // Result broadcast from a PackageInstaller split-APK session (OpenBubbles).
+    const val ACTION_INSTALL_RESULT = "com.offlineinc.dumbdownlauncher.action.INSTALL_RESULT"
     const val EXTRA_DOWNLOAD_URL = "extra_download_url"
     const val EXTRA_APP_KEY = "extra_app_key"
+
+    // Persisted state for the sticky OpenBubbles forced-update tile, so it can
+    // be re-posted after a reboot (which clears all notifications).
+    private const val OB_PENDING_PREFS = "ob_update_pending"
+    private const val KEY_OB_PENDING_URL = "url"
+    private const val KEY_OB_PENDING_VERSION = "version"
+    private const val KEY_OB_PENDING_VERSIONCODE = "version_code"
+
+    // "Update in progress" guard so tapping the update tile repeatedly doesn't
+    // enqueue the download/install multiple times. Stamped with a start time;
+    // self-expires after a TTL so a killed mid-install can't wedge it forever.
+    private const val IN_PROGRESS_PREFS = "update_in_progress"
+    private const val IN_PROGRESS_TTL_MS = 30 * 60_000L
+    private fun inProgressKey(appKey: String) = "started_at_$appKey"
+
+    /** True if a download/install for [appKey] is already running (and fresh). */
+    fun isUpdateInProgress(context: Context, appKey: String): Boolean {
+        val started = context.getSharedPreferences(IN_PROGRESS_PREFS, Context.MODE_PRIVATE)
+            .getLong(inProgressKey(appKey), 0L)
+        return started != 0L && System.currentTimeMillis() - started < IN_PROGRESS_TTL_MS
+    }
+
+    /** Mark a download/install as started for [appKey]. */
+    fun markUpdateInProgress(context: Context, appKey: String) {
+        context.getSharedPreferences(IN_PROGRESS_PREFS, Context.MODE_PRIVATE)
+            .edit().putLong(inProgressKey(appKey), System.currentTimeMillis()).apply()
+    }
+
+    /** Clear the in-progress guard for [appKey] (terminal outcome reached). */
+    fun clearUpdateInProgress(context: Context, appKey: String) {
+        context.getSharedPreferences(IN_PROGRESS_PREFS, Context.MODE_PRIVATE)
+            .edit().remove(inProgressKey(appKey)).apply()
+    }
 
     fun ensureChannel(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -130,20 +167,104 @@ object UpdateNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        // FLAG_NO_CLEAR exempts this from the shade's "Clear all" button
-        // so a casual sweep doesn't lose the update prompt — but the user
-        // can still swipe it away individually if they want.
+        // OpenBubbles is a forced update — its tile is fully sticky: ongoing
+        // (can't be swiped away) AND persisted so it can be re-posted after a
+        // reboot (the OS clears all notifications on boot). Other apps' update
+        // tiles stay dismissable-by-swipe but exempt from "Clear all".
+        val isForced = appKey == "openbubbles-messaging"
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("Update available")
             .setContentText("$appDisplayName v$versionName is ready to install")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(false)
+            .setOngoing(isForced)
             .setContentIntent(pendingIntent)
             .build()
+            // FLAG_NO_CLEAR exempts from the shade's "Clear all" button; for the
+            // forced OpenBubbles tile FLAG_ONGOING_EVENT (via setOngoing) also
+            // blocks individual swipe-away.
             .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
 
         nm.notify(notificationId, notification)
+    }
+
+    /**
+     * Record that a Smart Txt (OpenBubbles) update to [versionCode] is pending,
+     * so the sticky tile can be re-posted across reboots and the launch gate can
+     * keep blocking until it's installed. Stored with the download URL + name so
+     * a reboot re-post can rebuild the tile without a network round-trip.
+     */
+    fun markOpenBubblesUpdatePending(
+        context: Context,
+        downloadUrl: String,
+        versionName: String,
+        versionCode: Int,
+    ) {
+        context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_OB_PENDING_URL, downloadUrl)
+            .putString(KEY_OB_PENDING_VERSION, versionName)
+            .putInt(KEY_OB_PENDING_VERSIONCODE, versionCode)
+            .apply()
+    }
+
+    /**
+     * True when a recorded Smart Txt update is still pending — i.e. we noted a
+     * pending versionCode and the installed OpenBubbles build is still below it.
+     * This is the single source of truth for both the launch gate (show the
+     * "must update" modal) and the reboot re-post, so it survives restarts and
+     * doesn't depend on the live notification being currently posted. Becomes
+     * false the moment OpenBubbles reaches the pending version (e.g. after the
+     * install), regardless of how it got there.
+     */
+    fun isOpenBubblesUpdatePending(context: Context): Boolean {
+        val pendingCode = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_OB_PENDING_VERSIONCODE, -1)
+        if (pendingCode <= 0) return false
+        val installed = OpenBubblesOps.installedVersionCode(context) ?: return false
+        return installed < pendingCode
+    }
+
+    /**
+     * Re-posts the sticky OpenBubbles "update available" tile from persisted
+     * state if an update is still pending. Called on launcher start (which on a
+     * home launcher is effectively boot) so the forced-update prompt survives
+     * reboots — Android clears all posted notifications on boot. If OpenBubbles
+     * has since been updated to [OpenBubblesOps.MIN_SUPPORTED_VERSION_CODE] or
+     * newer, the persisted state is cleared and the tile cancelled instead.
+     */
+    fun repostOpenBubblesUpdateIfPending(context: Context) {
+        val prefs = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+        val url = prefs.getString(KEY_OB_PENDING_URL, null) ?: return
+        val versionName = prefs.getString(KEY_OB_PENDING_VERSION, "") ?: ""
+
+        // Only relevant on the iOS (OpenBubbles) smart-txt path. If they've
+        // switched to Android/none, clear the forced prompt.
+        if (com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences.getChoice(context) != "ios") {
+            prefs.edit().clear().apply()
+            cancel(context, NOTIFICATION_ID_OPENBUBBLES)
+            return
+        }
+
+        // Clear the prompt only once the pending update is actually installed
+        // (installed >= the pending versionCode) — NOT at a fixed version floor.
+        // Otherwise re-post so the tile survives the reboot.
+        if (!isOpenBubblesUpdatePending(context)) {
+            prefs.edit().clear().apply()
+            cancel(context, NOTIFICATION_ID_OPENBUBBLES)
+            return
+        }
+
+        notify(
+            context = context,
+            notificationId = NOTIFICATION_ID_OPENBUBBLES,
+            appKey = "openbubbles-messaging",
+            appDisplayName = displayNameFor("openbubbles-messaging"),
+            versionName = versionName,
+            downloadUrl = url,
+        )
     }
 
     fun notifyDownloading(context: Context, appKey: String) {
@@ -158,36 +279,244 @@ object UpdateNotificationManager {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setAutoCancel(false)
+            // Indeterminate bar until the first progress poll reports real
+            // byte counts (see notifyDownloadProgress).
+            .setProgress(100, 0, true)
+            .setOnlyAlertOnce(true)
             .build()
         nm.notify(notificationId, notification)
     }
 
-    fun notifyFailed(context: Context, appKey: String) {
+    /**
+     * Re-post the "Downloading update" notification for [appKey] with live
+     * progress — a determinate bar plus "X / Y MB (Z%)" text, WhatsApp-style.
+     * Posted to the same notification ID as [notifyDownloading] so it updates
+     * the existing tile in place. [setOnlyAlertOnce] keeps the ~1s re-posts
+     * from re-sounding/vibrating each tick. While [totalBytes] is unknown
+     * (DownloadManager reports -1 until it has response headers) the bar stays
+     * indeterminate and the text shows bytes-so-far only.
+     */
+    fun notifyDownloadProgress(
+        context: Context,
+        appKey: String,
+        downloadedBytes: Long,
+        totalBytes: Long,
+    ) {
         ensureChannel(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notificationId = notificationIdFor(appKey)
         val appDisplayName = displayNameFor(appKey)
+
+        val knownTotal = totalBytes > 0
+        val pct = if (knownTotal) {
+            ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
+        } else 0
+        val text = if (knownTotal) {
+            "$appDisplayName: ${formatMb(downloadedBytes)} / ${formatMb(totalBytes)} MB ($pct%)"
+        } else {
+            "$appDisplayName: ${formatMb(downloadedBytes)} MB so far…"
+        }
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Downloading update")
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setProgress(100, pct, !knownTotal)
+            .setOnlyAlertOnce(true)
+            .build()
+        nm.notify(notificationId, notification)
+    }
+
+    private fun formatMb(bytes: Long): String =
+        String.format("%.1f", bytes / (1024.0 * 1024.0))
+
+    fun notifyFailed(context: Context, appKey: String) {
+        ensureChannel(context)
+        // Terminal outcome — release the in-progress guard so a retry tap works.
+        clearUpdateInProgress(context, appKey)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationId = notificationIdFor(appKey)
+        val appDisplayName = displayNameFor(appKey)
+
+        // Retry on tap: re-fire ACTION_DOWNLOAD_APK (re-download + re-install).
+        // For OpenBubbles the download URL is in the persisted pending state;
+        // other apps don't persist it, so they get a plain (non-retry) tile.
+        val retryUrl = if (appKey == "openbubbles-messaging") {
+            context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_OB_PENDING_URL, null)
+        } else {
+            null
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle("Update failed")
-            .setContentText("$appDisplayName could not be installed")
+            .setContentText(
+                if (retryUrl != null) "$appDisplayName couldn't install — tap to retry"
+                else "$appDisplayName could not be installed"
+            )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(false)
             .setAutoCancel(true)
+
+        if (retryUrl != null) {
+            val retryIntent = Intent(ACTION_DOWNLOAD_APK).apply {
+                setPackage(context.packageName)
+                putExtra(EXTRA_DOWNLOAD_URL, retryUrl)
+                putExtra(EXTRA_APP_KEY, appKey)
+            }
+            val pending = PendingIntent.getBroadcast(
+                context,
+                notificationId,
+                retryIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.setContentIntent(pending)
+        }
+
+        nm.notify(notificationId, builder.build())
+    }
+
+    /**
+     * Replace the (now-finished) download tile with an "Installing…" state —
+     * ongoing + indeterminate bar — for the stretch between download-complete
+     * and the install result. Without this the frozen download progress bar
+     * lingers at whatever % it last polled (e.g. 94%) through the whole
+     * multi-minute split install, which looks stuck.
+     */
+    fun notifyInstalling(context: Context, appKey: String) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val appDisplayName = displayNameFor(appKey)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Installing update")
+            .setContentText("$appDisplayName is installing…")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setProgress(0, 0, true) // indeterminate
+            .setOnlyAlertOnce(true)
             .build()
-        nm.notify(notificationId, notification)
+        nm.notify(notificationIdFor(appKey), notification)
+    }
+
+    /**
+     * Success confirmation, replacing the "Installing…" tile. Clearable and
+     * self-dismisses after a few seconds so it doesn't linger. For OpenBubbles
+     * it also clears the persisted forced-update state so the sticky prompt
+     * never comes back for this version.
+     */
+    fun notifyInstalled(context: Context, appKey: String) {
+        ensureChannel(context)
+        // Terminal outcome — release the in-progress guard.
+        clearUpdateInProgress(context, appKey)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val displayName = displayNameFor(appKey)
+
+        if (appKey == "openbubbles-messaging") {
+            context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        }
+
+        // Tapping the success tile opens the freshly-updated app and clears the
+        // notification (setAutoCancel). Only wired for OpenBubbles ("smart txt").
+        val launchIntent = if (appKey == "openbubbles-messaging") {
+            context.packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
+                ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        } else {
+            null
+        }
+        val contentIntent = launchIntent?.let {
+            PendingIntent.getActivity(
+                context,
+                notificationIdFor(appKey),
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Update installed")
+            .setContentText("$displayName is up to date")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setTimeoutAfter(8_000L) // auto-dismiss after 8s if not tapped
+        if (contentIntent != null) builder.setContentIntent(contentIntent)
+        nm.notify(notificationIdFor(appKey), builder.build())
     }
 
     private fun notificationIdFor(appKey: String) = when (appKey) {
         "dumb-down-launcher" -> NOTIFICATION_ID_LAUNCHER
         "snake" -> NOTIFICATION_ID_SNAKE
+        "openbubbles-messaging" -> NOTIFICATION_ID_OPENBUBBLES
         else -> NOTIFICATION_ID_LAUNCHER
     }
 
     private fun displayNameFor(appKey: String) = when (appKey) {
         "dumb-down-launcher" -> "Dumb Launcher"
         "snake" -> "Snake"
+        // User-facing brand on this device is "Smart Txt", not "OpenBubbles".
+        "openbubbles-messaging" -> "Smart Txt"
         else -> appKey
+    }
+
+    /**
+     * Replace the "Update available" notification for [appKey] with a "needs
+     * Wi-Fi" prompt. Posted to the same notification ID so it overwrites the
+     * tappable update tile in the shade — the user sees one consistent slot
+     * for that app's update state. Auto-cancels so it disappears once tapped;
+     * the next periodic update check will re-post the regular tile if the
+     * update is still pending.
+     *
+     * Tapping it routes through [WifiThenUpdateActivity], which decides at tap
+     * time: if the phone is already on Wi-Fi it fires the download; otherwise
+     * it opens the system Wi-Fi settings so the user can connect, then tap
+     * again. An activity-typed PendingIntent is used deliberately: notification
+     * taps are exempt from the Android 10+/12+ background-activity-start and
+     * notification-trampoline restrictions only when the PendingIntent targets
+     * an activity directly — see
+     * [com.offlineinc.dumbdownlauncher.wifinudge.WifiNudgeTapActivity] for the
+     * full rationale. [downloadUrl] is carried through so the tap-time download
+     * can be re-fired.
+     */
+    fun notifyWifiRequired(context: Context, appKey: String, downloadUrl: String) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationId = notificationIdFor(appKey)
+
+        val tapIntent = Intent(context, WifiThenUpdateActivity::class.java).apply {
+            putExtra(EXTRA_DOWNLOAD_URL, downloadUrl)
+            putExtra(EXTRA_APP_KEY, appKey)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId,
+            tapIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        // FLAG_NO_CLEAR exempts this from the shade's "Clear all" button AND
+        // the in-launcher Clear All (which calls cancelAllNotifications(),
+        // which likewise skips no-clear notifications) — so a sweep can't lose
+        // the "you must get on Wi-Fi to update" prompt. autoCancel still
+        // removes it on tap, and the user can still swipe it away individually.
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle("connect to wifi to update")
+            .setContentText("then click to update Smart Txt")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+            .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
+        nm.notify(notificationId, notification)
     }
 
     fun cancel(context: Context, notificationId: Int) {

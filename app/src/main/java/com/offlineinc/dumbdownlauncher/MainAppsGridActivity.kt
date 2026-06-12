@@ -452,20 +452,29 @@ class MainAppsGridActivity : AppCompatActivity() {
             }
             else -> {
                 val component = item.launchComponent ?: return
-                if ((item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this)) ||
-                    item.packageName == "com.ubercab.uberlite" ||
-                    item.packageName == "com.google.android.apps.mapslite") {
-                    MouseAccessibilityService.setMouseEnabled(this, true)
-                }
-                val intent = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                    setComponent(component)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
-                overridePendingTransition(0, 0)
+                startComponentApp(item, component)
             }
         }
+    }
+
+    /**
+     * Mouse-enable (where needed) + launch an app by its launcher component.
+     * Shared by the normal grid-launch path and the OpenBubbles first-run
+     * retention path so the two can't drift.
+     */
+    private fun startComponentApp(item: AppItem, component: android.content.ComponentName) {
+        if ((item.packageName == "com.openbubbles.messaging" && MouseAccessibilityService.isOpenBubblesMouseNeeded(this)) ||
+            item.packageName == "com.ubercab.uberlite" ||
+            item.packageName == "com.google.android.apps.mapslite") {
+            MouseAccessibilityService.setMouseEnabled(this, true)
+        }
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            setComponent(component)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        overridePendingTransition(0, 0)
     }
 
     // ── Chrome Custom Tabs for smart txt ──────────────────────────────────

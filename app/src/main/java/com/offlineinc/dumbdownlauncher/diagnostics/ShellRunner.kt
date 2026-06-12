@@ -8,22 +8,21 @@ import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 
 /**
- * Runs a privileged shell command via `su -c` and writes the stdout
- * into a destination file. The launcher already uses this pattern in
+ * Runs a privileged shell command via `su -c` and writes the stdout into
+ * a destination file. The launcher already uses this pattern in
  * PhoneNumberReader / CallLogCleanupWorker to self-grant runtime perms,
- * so we know the diag beta device has root via Magisk.
+ * so we know the diag beta devices have root via Magisk.
  *
- * Returns true on a clean exit and non-empty output, false otherwise.
- * Failures are swallowed deliberately — a single missing snapshot must
- * not bring down the rest of the diagnostics loop (e.g. a brief root
- * outage from a Magisk policy reload).
+ * Returns true on a clean exit + non-empty output, false otherwise. Failures
+ * are swallowed deliberately — the service must keep running even if a single
+ * snapshot fails (e.g. on a device that briefly lost root).
  */
 internal object ShellRunner {
 
-    private const val TAG = "RebootDiagShell"
+    private const val TAG = "DiagShell"
 
     /**
-     * Executes `su -c <command>` and writes stdout to [dest]. Stderr is
+     * Executes `su -c <command>` and writes stdout to `dest`. Stderr is
      * captured and appended as a trailing comment block so post-processing
      * can flag truncated snapshots.
      */
@@ -43,6 +42,7 @@ internal object ShellRunner {
                         writer.write(buf, 0, n)
                     }
                 }
+                // Capture any stderr at the bottom so the post-processor can see it.
                 val stderr = BufferedReader(InputStreamReader(process.errorStream)).readText()
                 if (stderr.isNotBlank()) {
                     writer.write("\n# --- stderr ---\n")
@@ -63,7 +63,10 @@ internal object ShellRunner {
         }
     }
 
-    /** Short stdout-capture for one-liners like `getprop`. Null on error. */
+    /**
+     * One-shot capture of a command's stdout as a String. Used for short
+     * outputs like `getprop ro.build.fingerprint`. Returns null on any error.
+     */
     fun captureString(command: String, timeoutMs: Long): String? {
         return try {
             val process = ProcessBuilder("su", "-c", command)

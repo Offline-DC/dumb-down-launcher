@@ -14,9 +14,16 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 173
-        versionName = "v4.82.0-beta.14"
+        versionCode = 181
+        versionName = "v5.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Battery diagnostics — compile-time gate for the DiagnosticsService,
+        // DiagnosticsActivity, and the long-press-on-quack hook in AllAppsActivity.
+        // Production builds set this false so the privileged dumpsys / logcat
+        // collection code is excluded entirely; the diag beta build (see
+        // battery-diagnostics-plan.md) flips it to true.
+        buildConfigField("boolean", "DIAGNOSTICS_ENABLED", "true")
     }
 
     signingConfigs {

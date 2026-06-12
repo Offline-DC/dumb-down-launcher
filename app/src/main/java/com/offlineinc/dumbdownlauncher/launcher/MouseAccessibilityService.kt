@@ -21,6 +21,7 @@ import com.offline.dpadmessenger.backend.gmessages.GoogleMessagesAccountStore
 import com.offlineinc.dumbdownlauncher.launcher.ResetWarningOverlay
 import com.offlineinc.dumbdownlauncher.launcher.qrenlarge.QrEnlargeController
 import com.offlineinc.dumbdownlauncher.messenger.GmessagesCookieCallbacks
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
@@ -37,6 +38,12 @@ class MouseAccessibilityService : AccessibilityService() {
 
     private var mouseEnabled = false
     private var currentPackage = ""
+
+    // Tracks whether OpenBubbles is the current foreground app, so we can apply
+    // the one-time retention toggle the moment the user leaves it (when it's
+    // backgrounded and safe to edit). See the OpenBubbles block in
+    // onAccessibilityEvent.
+    private var openBubblesForeground = false
     private var currentDensity = -1
 
     // True while the star-key special-char picker is open.
@@ -1063,6 +1070,18 @@ class MouseAccessibilityService : AccessibilityService() {
 
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: pkg=$pkg className=$className")
+
+            // ── OpenBubbles one-time retention toggle ──────────────────────
+            // Track OpenBubbles foreground so we can apply the "delete after 3
+            // days" toggle the first time the user leaves it (backgrounded ⇒
+            // safe to edit its prefs).
+            if (pkg == OpenBubblesGate.PKG && className.contains("Activity")) {
+                openBubblesForeground = true
+            } else if (openBubblesForeground && pkg != OpenBubblesGate.PKG && className.contains("Activity")) {
+                openBubblesForeground = false
+                OpenBubblesGate.applyRetentionOnceAsync(this)
+            }
+            // ── end OpenBubbles retention ──────────────────────────────────
 
             // ── Factory-reset warning overlay ──────────────────────────────
             // We only show the warning on the specific Reset options page that

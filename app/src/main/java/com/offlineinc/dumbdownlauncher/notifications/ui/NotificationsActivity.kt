@@ -79,6 +79,10 @@ class NotificationsActivity : AppCompatActivity() {
                 onScrollConsumed = { scrollToKey = null },
                 onOpen = { item ->
                     try {
+                        android.util.Log.i(
+                            "NotificationsActivity",
+                            "onOpen: pkg=${item.packageName} title='${item.title}' hasIntent=${item.contentIntent != null}"
+                        )
                         val pi = item.contentIntent
                         if (pi != null) {
                             val needsMouse = item.packageName in MouseAccessibilityService.AUDIO_APP_PACKAGES
@@ -96,8 +100,11 @@ class NotificationsActivity : AppCompatActivity() {
                                 scrollToKey = item.key
                             }
                         }
-                    } catch (_: Exception) {
-                        // no toast here to keep minimal; add if you want
+                    } catch (e: Exception) {
+                        android.util.Log.e(
+                            "NotificationsActivity",
+                            "onOpen failed for pkg=${item.packageName}: ${e.message}", e
+                        )
                     }
                 },
                 onDismiss = { item ->

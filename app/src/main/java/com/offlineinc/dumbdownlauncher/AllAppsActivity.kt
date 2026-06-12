@@ -160,6 +160,14 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
+            // map (beta) — built-in D-pad maps app
+            appItems.add(AppItem(
+                packageName = DUMB_MAP,
+                label = "map (beta)",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+
             // Weather — always available as a built-in app
             appItems.add(AppItem(
                 packageName = WEATHER,
@@ -312,39 +320,19 @@ class AllAppsActivity : AppCompatActivity() {
                                 Toast.LENGTH_SHORT,
                             ).show()
                         }
-                    } else if (item.packageName == WEATHER) {
-                        // Diagnostic logging opt-in/out toggle. Mirrors the
-                        // long-press-on-updates beta-tester toggle below.
-                        // Flips the runtime store flag, then starts or
-                        // stops the foreground service — which owns the
-                        // rolling 24-hour logcat tail and posts the
-                        // "Diagnostic logs being collected" notification
-                        // for as long as collection is on. See
-                        // diagnostics/RebootLoggingService.kt for the
-                        // service contract, and DumbDownApp.onCreate for
-                        // the boot re-arm path.
-                        val store = com.offlineinc.dumbdownlauncher.diagnostics
-                            .RebootLoggingStore(this@AllAppsActivity)
-                        val nowEnabled = !store.enabled
-                        store.enabled = nowEnabled
-                        if (nowEnabled) {
-                            store.enabledSinceMs = System.currentTimeMillis()
-                            com.offlineinc.dumbdownlauncher.diagnostics
-                                .RebootLoggingService.startIfEnabled(applicationContext)
-                            Toast.makeText(
+                    } else if (item.packageName == QUACK && BuildConfig.DIAGNOSTICS_ENABLED) {
+                        // Long-press on the "quack" row opens the hidden
+                        // battery-diagnostics screen. Mirrors the existing
+                        // DEVICE_SETUP / settings / CHECK_UPDATES long-press
+                        // pattern above — gated by BuildConfig.DIAGNOSTICS_ENABLED
+                        // so production builds compile the branch out.
+                        startActivity(
+                            Intent(
                                 this@AllAppsActivity,
-                                "diagnostic logging on — rolling 24h logcat being collected",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        } else {
-                            com.offlineinc.dumbdownlauncher.diagnostics
-                                .RebootLoggingService.stop(applicationContext)
-                            Toast.makeText(
-                                this@AllAppsActivity,
-                                "diagnostic logging off",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        }
+                                com.offlineinc.dumbdownlauncher.diagnostics.DiagnosticsActivity::class.java,
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
                     } else if (item.packageName == "com.spotify.music") {
                         // Long-press hard-reset for Spotify. Runs
                         // `pm clear com.spotify.music` via root. Result
@@ -497,6 +485,13 @@ class AllAppsActivity : AppCompatActivity() {
                     QUACK -> {
                         startActivity(
                             Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.quack.QuackActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
+                    DUMB_MAP -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, MapsActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         )
                         overridePendingTransition(0, 0)

@@ -27,6 +27,7 @@ import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.storage.SpotifyOfflineCleanupWorker
 import com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
+import com.offlineinc.dumbdownlauncher.update.UpdateNotificationManager
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -88,13 +89,20 @@ class DumbDownApp : Application() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
 
+        // Battery-drain diagnostics. Re-start the foreground sampling service
+        // on every process start if the user has opted in via the hidden
+        // long-press-on-quack screen. No-op when BuildConfig.DIAGNOSTICS_ENABLED
+        // is false (production builds compile the path out) or when the
+        // opt-in flag is unset. See battery-diagnostics-plan.md for the full
+        // investigation plan.
+        com.offlineinc.dumbdownlauncher.diagnostics.DiagnosticsService.startIfEnabled(this)
+
         // Rolling 24-hour diagnostic logcat. Off by default; user opts
-        // in by long-pressing "weather" in All Apps (mirrors the
-        // long-press-on-updates beta-tester toggle). The flag lives in
-        // shared_prefs/reboot_logging_prefs.xml so it survives reboots —
-        // re-arm the foreground service here so the rolling buffer
-        // continues to capture across restarts. No-op when opt-in is
-        // off. See diagnostics/RebootLoggingService.kt.
+        // in via the long-press-on-quack diagnostics screen in All Apps.
+        // The flag lives in shared_prefs/reboot_logging_prefs.xml so it
+        // survives reboots — re-arm the foreground service here so the
+        // rolling buffer continues to capture across restarts. No-op when
+        // opt-in is off. See diagnostics/RebootLoggingService.kt.
         com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
 
         // Tell the (now-shared) Google Messages backend which Activity its
@@ -118,6 +126,13 @@ class DumbDownApp : Application() {
         }.start()
 
         UpdateCheckWorker.schedule(this)
+
+        // Re-post the sticky OpenBubbles forced-update tile if an update is
+        // still pending. The OS clears all notifications on reboot; this runs
+        // on launcher start (≈ boot, since we're the home app) so the prompt —
+        // and therefore the usage block — survives restarts. No-ops / clears
+        // itself once OpenBubbles has been updated.
+        UpdateNotificationManager.repostOpenBubblesUpdateIfPending(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.
         // The flag is persisted in PairingStore — a long-press on "updates"
@@ -1164,6 +1179,15 @@ class DumbDownApp : Application() {
             "openbubbles_setup_v1" to {
                 applyOpenBubblesPerfSettings(tag)
             },
+            // NOTE: the OpenBubbles "delete after 3 days" retention toggle is
+            // intentionally NOT a boot migration. It runs the first time the
+            // user opens smart txt instead — see
+            // [com.offlineinc.dumbdownlauncher.MainAppsGridActivity]
+            // .applyOpenBubblesRetentionThenLaunch. Doing it at launch time
+            // guarantees [OpenBubblesOps.applyDeleteOldMessages] (which kills
+            // OB before editing its prefs) only fires while OB is backgrounded
+            // and about to be relaunched, never racing a live OB session the
+            // way a boot-time pass could.
             // One-time WhatsApp media-settings pass. Flips three values
             // in com.whatsapp_preferences_light.xml:
             //
