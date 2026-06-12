@@ -92,8 +92,6 @@
   #helpbody div { margin:4px 0; }
 
   .leaflet-control-attribution { font-size:9px; opacity:0.8; }
-  .locdot { background:#1e7bff; border:2px solid #fff; border-radius:50%;
-    box-shadow:0 0 6px rgba(0,0,0,0.5); }
 </style>
 </head>
 <body>
@@ -546,8 +544,12 @@ function onLocation(lat, lng, acc){
   var first = !loc;
   loc = { lat:lat, lng:lng, acc:acc };
   if (!locMarker){
-    locMarker = L.marker([lat,lng], { icon:L.divIcon({className:'locdot', iconSize:[14,14]}) }).addTo(map);
-    locCircle = L.circle([lat,lng], { radius:acc||30, weight:1, color:'#1e7bff', fillOpacity:0.1 }).addTo(map);
+    // you are the duck
+    locMarker = L.marker([lat,lng], { icon:L.icon({
+      iconUrl:'duck.png', iconRetinaUrl:'duck-2x.png',
+      iconSize:[41,30], iconAnchor:[20,15]
+    }), zIndexOffset:1000 }).addTo(map);
+    locCircle = L.circle([lat,lng], { radius:acc||30, weight:1, color:'#000', opacity:0.4, fillColor:'#FAF594', fillOpacity:0.15 }).addTo(map);
   } else {
     locMarker.setLatLng([lat,lng]);
     locCircle.setLatLng([lat,lng]).setRadius(acc||30);
