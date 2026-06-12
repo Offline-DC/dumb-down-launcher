@@ -26,13 +26,10 @@ class GoogleMessagesAnnouncementActivity : AppCompatActivity() {
         Log.i(GM_ANNOUNCE_TAG, "announcement activity created")
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("google messages is built in now")
+            .setTitle("new and improved google messages")
             .setMessage(
-                "smart txt now uses google messages right on your dumb phone.\n\n" +
-                    "to set it up:\n" +
-                    "1. update the dumb down app on your smartphone\n" +
-                    "2. open it and go through configuration again\n\n" +
-                    "then follow the steps to sign in."
+                "1. update Dumb Down app on smartphone\n" +
+                    "2. click Configuration and go through setup again"
             )
             .setPositiveButton("got it") { d, _ -> d.dismiss() }
             // Only the button advances — back / tap-outside can't blow past it.
