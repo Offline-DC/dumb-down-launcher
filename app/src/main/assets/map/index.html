@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Maps</title>
+<link rel="stylesheet" href="leaflet/leaflet.css">
+<style>
+  /* Dumb theme: black bg, #FAF594 yellow, Helvetica Now Black everywhere */
+  @font-face { font-family:'HelvNow'; src:url('helvetica_now_text_black.ttf'); }
+  :root { --yellow:#FAF594; --dim:rgba(250,245,148,0.65); --gray:#AAAAAA; --red:#E53935; }
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden;
+    background:#000; font-family:'HelvNow', sans-serif; }
+  #map { position:absolute; top:0; left:0; right:0; bottom:26px; background:#ddd; }
+
+  #toast { position:absolute; top:6px; left:8px; right:8px; z-index:3500;
+    background:rgba(0,0,0,0.88); color:var(--yellow); font-size:13px;
+    padding:4px 6px; text-align:center; display:none; border:1px solid var(--dim); }
+
+  /* softkey bar — exact match of dumb-down-launcher's SoftKeyBar:
+     12sp Body font, yellow @ 65%, 10dp/4dp padding, black bg (mdpi: 1dp=1px) */
+  #softbar { position:absolute; bottom:0; left:0; right:0; height:26px; z-index:3000;
+    background:#000; display:flex; align-items:center; padding:4px 10px 0; box-sizing:border-box; }
+  #softbar span { flex:1; font-size:14px; font-family:'HelvNow', sans-serif;
+    color:var(--dim); overflow:hidden; white-space:nowrap; }
+  #sk-l { text-align:left; } #sk-c { text-align:center; } #sk-r { text-align:right; }
+
+  /* bottom cards over the map */
+  .card { position:absolute; left:0; right:0; bottom:26px; z-index:1500;
+    background:#000; border-top:2px solid var(--yellow); padding:5px 8px 6px;
+    display:none; }
+  .card .title { font-size:18px; color:#fff; line-height:1.15; word-wrap:break-word; }
+  .card .sub { font-size:12px; color:var(--gray); margin-top:2px; line-height:1.25; }
+  #navcard .navrow { display:flex; align-items:center; }
+  #navcard .glyph { font-size:32px; color:var(--yellow); width:44px; flex-shrink:0;
+    text-align:center; font-family:sans-serif; line-height:1; }
+  #navcard .navmain { flex:1; min-width:0; }
+  #navcard .navtext { font-size:15px; color:#fff; line-height:1.2; word-wrap:break-word; }
+  #navcard .navdist { font-size:12px; color:var(--yellow); margin-top:1px; }
+
+  /* zoom hint badge */
+  #zoomhint { position:absolute; right:6px; bottom:34px; z-index:1400;
+    background:rgba(0,0,0,0.85); color:var(--yellow); font-size:12px;
+    padding:2px 6px; border:1px solid var(--dim); display:none; }
+
+  /* full-screen overlays */
+  .overlay { position:absolute; top:0; left:0; right:0; bottom:26px; z-index:2000;
+    background:#000; color:#fff; display:none; flex-direction:column; overflow:hidden; }
+  .overlay h1 { font-size:16px; color:var(--yellow); margin:0;
+    padding:6px 8px 5px; border-bottom:1px solid #333; flex-shrink:0;
+    word-wrap:break-word; }
+  .ovsub { font-size:14px; color:var(--gray); padding:3px 8px 4px; border-bottom:1px solid #222;
+    word-wrap:break-word; }
+  .ovbody { flex:1; overflow-y:auto; }
+
+  #searchform { display:flex; margin:8px; }
+  #searchinput { flex:1; min-width:0; padding:6px;
+    font-size:16px; background:#111; color:#fff; border:2px solid var(--dim);
+    box-sizing:border-box; font-family:'HelvNow', sans-serif; }
+  #searchinput:focus { border-color:var(--yellow); outline:none; }
+  /* no clear (x) button */
+  #searchinput::-webkit-search-cancel-button { -webkit-appearance:none; display:none; }
+  #searchhint { font-size:12px; color:var(--gray); padding:0 10px; }
+  .listlabel { font-size:15px; color:var(--yellow); padding:8px 10px 2px; }
+
+  /* roving-focus rows */
+  .row { padding:7px 8px; font-size:17px; line-height:1.25; border:2px solid transparent;
+    color:#ddd; display:flex; align-items:center; }
+  .row .rmain { flex:1; min-width:0; }
+  .row .sub { font-size:12px; color:var(--gray); display:block; }
+  .row.sel { border-color:var(--yellow); background:rgba(250,245,148,0.12); color:#fff; }
+  .row .num { color:var(--yellow); margin-right:5px; }
+  .row .glyph { font-size:21px; color:var(--yellow); width:32px; flex-shrink:0;
+    text-align:center; font-family:sans-serif; }
+  .row .time { color:var(--yellow); font-size:15px; margin-left:6px; flex-shrink:0; }
+  .row .chev { color:var(--gray); margin-left:4px; flex-shrink:0; }
+
+  /* details overlay rows wrap fully */
+  .drow { padding:6px 10px; font-size:14px; color:#ddd; line-height:1.3;
+    border-bottom:1px solid #1a1a1a; word-wrap:break-word; }
+  .drow .dlabel { color:var(--yellow); font-size:12px; display:block; }
+
+  /* loading spinner */
+  .spinwrap { display:flex; justify-content:center; padding:18px; }
+  .spinner { width:22px; height:22px; border:3px solid rgba(250,245,148,0.25);
+    border-top-color:var(--yellow); border-radius:50%;
+    animation:spin 0.8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  #helpbody { font-size:14px; color:#ddd; padding:6px 10px; }
+  #helpbody b { color:var(--yellow); font-weight:normal; display:inline-block; width:64px; }
+  #helpbody div { margin:4px 0; }
+
+  .leaflet-control-attribution { font-size:9px; opacity:0.8; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="toast"></div>
+<div id="zoomhint">1 &#8854; &nbsp;3 &#8853;</div>
+
+<!-- place selected card -->
+<div id="placecard" class="card">
+  <div class="title" id="placename"></div>
+  <div class="sub" id="placesub"></div>
+</div>
+
+<!-- route overview card -->
+<div id="routecard" class="card">
+  <div class="title" id="routesummary"></div>
+  <div class="sub" id="routevia"></div>
+</div>
+
+<!-- step-through navigation card -->
+<div id="navcard" class="card">
+  <div class="navrow">
+    <div class="glyph" id="navglyph"></div>
+    <div class="navmain">
+      <div class="navtext" id="navtext"></div>
+      <div class="navdist" id="navdist"></div>
+    </div>
+  </div>
+</div>
+
+<!-- search -->
+<div id="search" class="overlay">
+  <h1 id="searchtitle">search</h1>
+  <form id="searchform" action="#">
+    <input id="searchinput" type="search" autocomplete="off" enterkeyhint="search">
+  </form>
+  <div id="searchhint">type a place, then press search</div>
+  <div id="results" class="ovbody"></div>
+</div>
+
+<!-- place details -->
+<div id="details" class="overlay">
+  <h1 id="detailstitle">details</h1>
+  <div id="detailsbody" class="ovbody"></div>
+</div>
+
+<!-- directions mode chooser -->
+<div id="modes" class="overlay">
+  <h1>directions</h1>
+  <div class="ovsub" id="modesdest"></div>
+  <div id="modesbody" class="ovbody"></div>
+</div>
+
+<!-- step list -->
+<div id="steps" class="overlay">
+  <h1 id="stepstitle">directions</h1>
+  <div class="ovsub" id="stepssub"></div>
+  <div id="stepsbody" class="ovbody"></div>
+</div>
+
+<!-- info -->
+<div id="help" class="overlay">
+  <h1>info</h1>
+  <div id="helpbody" class="ovbody">
+    <div>map (beta) v1.0</div>
+    <div style="color:var(--gray)">&copy; OpenStreetMap contributors &middot; &copy; CARTO</div>
+  </div>
+</div>
+
+<div id="softbar"><span id="sk-l"></span><span id="sk-c"></span><span id="sk-r"></span></div>
+
+<script src="leaflet/leaflet.js"></script>
+<script>
+'use strict';
+
+/* ============ state ============ */
+var M = { MAP:0, SEARCH:1, RESULTS:2, MODES:3, STEPS:4, NAV:5, HELP:6, DETAILS:7 };
+var mode = M.MAP;
+var sel = null;            // {lat,lng,name,sub,full,type,extratags,marker}
+var route = null;
+var loc = null;
+var fromPlace = null;      // custom route start; null = my location
+var searchTarget = 'dest'; // what the search overlay is picking: 'dest' | 'start'
+var following = false;
+var locMarker = null, locCircle = null;
+var results = [], resIdx = 0, listKind = 'results';  // 'results' | 'recent'
+var stepIdx = 0, navIdx = 0, modeIdx = 0;
+var toastTimer = null, zoomHintTimer = null;
+var modeTimes = {};
+
+/* ============ recents (last 10 selected places, most recent first) ============ */
+function getRecents(){
+  try { return JSON.parse(localStorage.getItem('recentPlaces') || '[]'); }
+  catch(e){ return []; }
+}
+function addRecentPlace(p){
+  var r = getRecents().filter(function(x){
+    return !(x.lat === p.lat && x.lng === p.lng);
+  });
+  r.unshift({ lat:p.lat, lng:p.lng, name:p.name, sub:p.sub, full:p.full,
+              type:p.type, cls:p.cls, extratags:p.extratags || {},
+              osmType:p.osmType || '', osmId:p.osmId || null });
+  try { localStorage.setItem('recentPlaces', JSON.stringify(r.slice(0,10))); } catch(e){}
+}
+
+/* ============ map ============ */
+var map = L.map('map', {
+  zoomControl:false, keyboard:false, boxZoom:false, doubleClickZoom:false,
+  attributionControl:true, fadeAnimation:false, zoomAnimation:false, inertia:false
+}).setView([39.8283, -98.5795], 4);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', {
+  maxZoom:19, subdomains:'abcd', attribution:'&copy; OSM &copy; CARTO'
+}).addTo(map);
+map.on('dragstart', function(){ following = false; });
+
+/* ============ helpers ============ */
+function $(id){ return document.getElementById(id); }
+function toast(msg, ms){
+  var t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.style.display = 'none'; }, ms || 2500);
+}
+function zoomHint(){
+  var z = $('zoomhint'); z.style.display = 'block';
+  clearTimeout(zoomHintTimer);
+  zoomHintTimer = setTimeout(function(){ z.style.display = 'none'; }, 1800);
+}
+function setSoftkeys(l, c, r){
+  $('sk-l').textContent = l || ''; $('sk-c').textContent = c || ''; $('sk-r').textContent = r || '';
+}
+function fmtDist(m){
+  var mi = m / 1609.344;
+  if (mi >= 10) return Math.round(mi) + ' mi';
+  if (mi >= 0.19) return mi.toFixed(1) + ' mi';
+  return Math.round(m * 3.28084) + ' ft';
+}
+function fmtDur(s){
+  var min = Math.max(1, Math.round(s / 60));
+  if (min < 60) return min + ' min';
+  return Math.floor(min/60) + ' hr ' + (min%60) + ' min';
+}
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/* ============ chrome state machine ============ */
+function showCard(which){
+  $('placecard').style.display = which === 'place' ? 'block' : 'none';
+  $('routecard').style.display = which === 'route' ? 'block' : 'none';
+  $('navcard').style.display   = which === 'nav'   ? 'block' : 'none';
+}
+function refreshChrome(){
+  switch (mode){
+    case M.SEARCH:  setSoftkeys('search', '', 'back'); return;
+    case M.RESULTS: setSoftkeys('', 'select', 'back'); return;
+    case M.MODES:   setSoftkeys('', 'select', 'back'); return;
+    case M.STEPS:   setSoftkeys('map', '', 'back'); return;
+    case M.HELP:    setSoftkeys('', '', 'back'); return;
+    case M.DETAILS: setSoftkeys('', '', 'back'); return;
+    case M.NAV:
+      showCard('nav');
+      setSoftkeys('< back', 'me', 'next >');
+      return;
+  }
+  if (route){
+    $('routesummary').textContent = route.summaryText;
+    $('routevia').textContent = route.via || '';
+    showCard('route');
+    setSoftkeys('steps', 'go', 'back');
+  } else if (sel){
+    $('placename').textContent = sel.name;
+    $('placesub').textContent = sel.sub || '';
+    showCard('place');
+    setSoftkeys('details', 'directions', 'back');
+  } else {
+    showCard(null);
+    setSoftkeys('search', 'me', 'info');
+  }
+}
+
+/* ============ overlays ============ */
+function openOverlay(which){
+  ['search','modes','steps','help','details'].forEach(function(id){
+    $(id).style.display = id === which ? 'flex' : 'none';
+  });
+}
+function closeOverlays(){
+  openOverlay(null);
+  $('searchinput').blur();
+  mode = M.MAP;
+  refreshChrome();
+}
+function openHelp(){
+  mode = M.HELP; openOverlay('help'); refreshChrome();
+}
+
+/* ============ search (Nominatim) ============ */
+function focusSearchInput(){
+  var inp = $('searchinput');
+  var tries = 0;
+  (function tryFocus(){
+    inp.focus();
+    if (document.activeElement !== inp && ++tries < 8) requestAnimationFrame(tryFocus);
+  })();
+}
+function openSearch(target){
+  searchTarget = target === 'start' ? 'start' : 'dest';
+  $('searchtitle').textContent = searchTarget === 'start' ? 'choose start point' : 'search';
+  mode = M.SEARCH;
+  openOverlay('search');
+  $('searchinput').value = '';
+  renderRecents();
+  refreshChrome();
+  focusSearchInput();
+}
+/* leaving the search overlay: a start-point search returns to the chooser */
+function closeSearch(){
+  if (searchTarget === 'start'){ searchTarget = 'dest'; openModes(); }
+  else closeOverlays();
+}
+/* return focus to the input WITHOUT clearing anything */
+function backToTyping(){
+  mode = M.SEARCH;
+  renderResults();        // re-render so the list row drops its highlight
+  $('results').scrollTop = 0;   // show the top of the list ("recent" label)
+  refreshChrome();
+  focusSearchInput();
+}
+function renderRecents(){
+  var rec = getRecents();
+  if (!rec.length){ $('results').innerHTML = ''; results = []; return; }
+  results = rec;            // recents ARE results: same shape, same selection
+  listKind = 'recent';
+  resIdx = 0;
+  renderResults();
+}
+var lastSearchAt = 0;
+/* Photon (komoot) = fuzzy, typo-tolerant OSM search ("haydees" finds
+   "Haydee's"). Nominatim stays as fallback — it's better at exact
+   house-number addresses. */
+function photonToPlace(f){
+  var p = f.properties, c = f.geometry.coordinates;
+  var name = p.name ||
+    ((p.housenumber ? p.housenumber + ' ' : '') + (p.street || '')).trim() ||
+    p.city || p.state || 'unnamed';
+  var parts = [];
+  if (p.name && p.street)
+    parts.push(((p.housenumber ? p.housenumber + ' ' : '') + p.street).trim());
+  if (p.district) parts.push(p.district);
+  if (p.city) parts.push(p.city);
+  if (p.state) parts.push(p.state);
+  if (p.postcode) parts.push(p.postcode);
+  var sub = parts.join(', ');
+  return { lat:c[1], lng:c[0], name:name, sub:sub,
+           full: name + (sub ? ', ' + sub : ''),
+           type:(p.osm_value || '').replace(/_/g,' '),
+           cls:p.osm_key || '', extratags:{},
+           osmType:p.osm_type || '', osmId:p.osm_id || null };
+}
+function showSearchResults(list){
+  results = list;
+  resIdx = 0;
+  listKind = 'results';
+  if (!results.length){
+    $('results').innerHTML = '<div class="row">no results</div>';
+  } else {
+    renderResults();   // stay in SEARCH: first ArrowDown lands on result #1
+  }
+  mode = M.SEARCH;
+  refreshChrome();
+}
+function nominatimSearch(q, c){
+  var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=9'
+    + '&addressdetails=1&extratags=1'
+    + '&q=' + encodeURIComponent(q)
+    + '&viewbox=' + (c.lng-1.5) + ',' + (c.lat+1.5) + ',' + (c.lng+1.5) + ',' + (c.lat-1.5)
+    + '&bounded=0';
+  fetch(url).then(function(r){ return r.json(); }).then(function(js){
+    showSearchResults(js.map(function(p){
+      var parts = p.display_name.split(', ');
+      return { lat:+p.lat, lng:+p.lon,
+               name:parts.slice(0,2).join(', '), sub:parts.slice(2).join(', '),
+               full:p.display_name, type:(p.type||'').replace(/_/g,' '),
+               cls:(p.category || p.class || ''), extratags:p.extratags || {} };
+    }));
+  }).catch(function(){
+    $('results').innerHTML = '<div class="row">network error</div>';
+  });
+}
+function runSearch(){
+  if (Date.now() - lastSearchAt < 500) return;
+  lastSearchAt = Date.now();
+  var q = $('searchinput').value.trim();
+  if (!q) return;
+  $('searchinput').blur();
+  $('results').innerHTML = '<div class="spinwrap"><div class="spinner"></div></div>';
+  // bias toward where you are (GPS fix if we have one, else map center)
+  var c = loc ? { lat:loc.lat, lng:loc.lng } : map.getCenter();
+  var url = 'https://photon.komoot.io/api/?limit=9'
+    + '&q=' + encodeURIComponent(q)
+    + '&lat=' + c.lat + '&lon=' + c.lng;
+  fetch(url).then(function(r){ return r.json(); }).then(function(js){
+    var list = (js.features || []).map(photonToPlace);
+    if (list.length) showSearchResults(list);
+    else nominatimSearch(q, c);          // photon empty -> try exact geocoder
+  }).catch(function(){
+    nominatimSearch(q, c);               // photon down -> fall back
+  });
+}
+function renderResults(){
+  var html = '';
+  var showSel = mode === M.RESULTS;   // no highlight while typing in the input
+  for (var i = 0; i < results.length; i++){
+    var r = results[i];
+    // recents show just the place name, no subtitle clutter
+    var showSub = listKind !== 'recent' && r.sub;
+    var main = esc(r.name) + (showSub ? '<span class="sub">' + esc(r.sub) + '</span>' : '');
+    html += '<div class="row' + (showSel && i===resIdx?' sel':'') + '" id="res'+i+'">'
+      + '<span class="rmain">' + main + '</span></div>';
+  }
+  if (listKind === 'recent') html = '<div class="listlabel">recent</div>' + html;
+  $('results').innerHTML = html;
+  var el = $('res'+resIdx);
+  if (el) el.scrollIntoView({block:'nearest'});
+}
+function moveResult(d){
+  if (!results.length) return;
+  resIdx = Math.max(0, Math.min(results.length-1, resIdx+d));
+  renderResults();
+}
+function chooseResult(i){
+  if (i < 0 || i >= results.length) return;
+  var r = results[i];
+  if (searchTarget === 'start'){         // picking a route start point
+    fromPlace = { lat:r.lat, lng:r.lng, name:r.name, sub:r.sub, full:r.full,
+                  type:r.type, cls:r.cls, extratags:r.extratags };
+    addRecentPlace(fromPlace);
+    searchTarget = 'dest';
+    openModes();                         // back to the chooser, times refetch
+    return;
+  }
+  clearRoute(true); clearSelection();
+  fromPlace = null;                      // new destination -> start from me
+  sel = { lat:r.lat, lng:r.lng, name:r.name, sub:r.sub, full:r.full,
+          type:r.type, cls:r.cls, extratags:r.extratags,
+          osmType:r.osmType || '', osmId:r.osmId || null };
+  addRecentPlace(sel);                   // bump to front of recents
+  sel.marker = L.marker([r.lat, r.lng]).addTo(map);
+  closeOverlays();
+  following = false;
+  map.setView([r.lat, r.lng], Math.max(map.getZoom(), 15));
+  refreshChrome();
+}
+function clearSelection(){
+  if (sel && sel.marker) map.removeLayer(sel.marker);
+  sel = null;
+}
+
+/* ============ place details ============ */
+/* OSM opening_hours -> friendly lines: "Th-Sa 00:00-01:30,12:00-24:00"
+   becomes "thu–sat 12am–1:30am, 12pm–12am" */
+function fmtTime(t){
+  var m = t.match(/^(\d{1,2}):(\d{2})$/); if (!m) return t;
+  var h = +m[1], min = m[2];
+  if (h >= 24) h -= 24;
+  var ap = h < 12 ? 'am' : 'pm';
+  var h12 = h % 12 || 12;
+  return h12 + (min !== '00' ? ':' + min : '') + ap;
+}
+var DAY_NAMES = { Mo:'mon', Tu:'tue', We:'wed', Th:'thu', Fr:'fri', Sa:'sat',
+                  Su:'sun', PH:'holidays', SH:'school holidays' };
+function fmtHours(s){
+  if (/^24\s*\/\s*7$/.test(s.trim())) return 'open 24 hours';
+  var out = [];
+  s.split(';').forEach(function(rule){
+    rule = rule.trim();
+    if (!rule) return;
+    var m = rule.match(/^((?:(?:Mo|Tu|We|Th|Fr|Sa|Su|PH|SH)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)(?:,(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)*)\s*(.*)$/);
+    if (!m){ out.push(esc(rule)); return; }
+    var days = m[1].replace(/Mo|Tu|We|Th|Fr|Sa|Su|PH|SH/g,
+        function(d){ return DAY_NAMES[d]; })
+      .replace(/-/g,'–').replace(/,/g,', ');
+    var rest = m[2].trim(), restOut;
+    if (rest === 'off' || rest === 'closed') restOut = 'closed';
+    else if (/^".*"$/.test(rest)) restOut = rest.replace(/"/g,'').toLowerCase();
+    else {
+      restOut = rest.split(',').map(function(span){
+        var t = span.trim().match(/^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/);
+        if (!t) return span.trim().replace(/"/g,'').toLowerCase();
+        return fmtTime(t[1]) + '–' + fmtTime(t[2]);
+      }).join(', ');
+    }
+    out.push(esc(days) + ' ' + esc(restOut));
+  });
+  return out.join('<br>') || esc(s);
+}
+
+function renderDetails(loadingMore){
+  var html = '';
+  html += '<div class="drow"><span class="dlabel">address</span>' + esc(sel.full || sel.name) + '</div>';
+  if (sel.type) html += '<div class="drow"><span class="dlabel">type</span>'
+    + esc((sel.cls ? sel.cls + ' · ' : '') + sel.type) + '</div>';
+  var tags = sel.extratags || {};
+  var nice = { website:'website', 'contact:website':'website', phone:'phone',
+    'contact:phone':'phone', opening_hours:'hours', cuisine:'cuisine',
+    wheelchair:'wheelchair', brand:'brand', operator:'operator' };
+  for (var k in nice){
+    if (tags[k]){
+      var val = (k === 'opening_hours') ? fmtHours(tags[k]) : esc(tags[k]);
+      html += '<div class="drow"><span class="dlabel">' + nice[k] + '</span>' + val + '</div>';
+    }
+  }
+  html += '<div class="drow"><span class="dlabel">coordinates</span>'
+    + sel.lat.toFixed(5) + ', ' + sel.lng.toFixed(5) + '</div>';
+  if (loadingMore) html += '<div class="drow" style="color:var(--gray)">loading more info&hellip;</div>';
+  $('detailsbody').innerHTML = html;
+}
+function hasTags(t){ for (var k in t) return true; return false; }
+function openDetails(){
+  if (!sel) return;
+  mode = M.DETAILS;
+  $('detailstitle').textContent = sel.name;
+  // photon results have no extratags — enrich from nominatim by exact OSM id
+  var enrich = !!(sel.osmId && sel.osmType && !sel.enriched && !hasTags(sel.extratags));
+  renderDetails(enrich);
+  $('detailsbody').scrollTop = 0;
+  openOverlay('details');
+  refreshChrome();
+  if (enrich){
+    var s = sel;   // capture: user may move on before the fetch returns
+    s.enriched = true;
+    fetch('https://nominatim.openstreetmap.org/lookup?format=jsonv2&extratags=1'
+        + '&osm_ids=' + s.osmType + s.osmId)
+      .then(function(r){ return r.json(); })
+      .then(function(js){
+        if (js && js.length){
+          s.extratags = js[0].extratags || {};
+          if (js[0].display_name) s.full = js[0].display_name;
+        }
+        if (mode === M.DETAILS && sel === s) renderDetails(false);
+      })
+      .catch(function(){ if (mode === M.DETAILS && sel === s) renderDetails(false); });
+  }
+}
+
+/* ============ location ============ */
+var pendingModes = false;
+function onLocation(lat, lng, acc){
+  var first = !loc;
+  loc = { lat:lat, lng:lng, acc:acc };
+  if (!locMarker){
+    // you are the duck
+    locMarker = L.marker([lat,lng], { icon:L.icon({
+      iconUrl:'duck.png', iconRetinaUrl:'duck-2x.png',
+      iconSize:[41,30], iconAnchor:[20,15]
+    }), zIndexOffset:1000 }).addTo(map);
+    locCircle = L.circle([lat,lng], { radius:acc||30, weight:1, color:'#000', opacity:0.4, fillColor:'#FAF594', fillOpacity:0.15 }).addTo(map);
+  } else {
+    locMarker.setLatLng([lat,lng]);
+    locCircle.setLatLng([lat,lng]).setRadius(acc||30);
+  }
+  if (following && mode === M.MAP) map.setView([lat,lng], Math.max(map.getZoom(), 16));
+  if (first && pendingModes && mode === M.MODES){ pendingModes = false; fetchModeTimes(); }
+}
+window.__onLocation = onLocation;
+window.__onLocationOff = function(){
+  toast('location is turned off — enable it in phone settings', 5000);
+};
+
+var browserWatch = null;
+function locate(){
+  following = true;
+  if (loc){ map.setView([loc.lat, loc.lng], Math.max(map.getZoom(), 16)); }
+  else toast('waiting for GPS… works best outside', 3500);
+  if (window.Bridge && Bridge.startLocation){ Bridge.startLocation(); }
+  else if (navigator.geolocation && browserWatch === null){
+    browserWatch = navigator.geolocation.watchPosition(function(p){
+      onLocation(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
+    }, function(){ toast('location unavailable'); }, { enableHighAccuracy:true });
+  }
+}
+
+/* ============ directions mode chooser ============ */
+var PROFILES = [
+  { id:'routed-car',  label:'drive' },
+  { id:'routed-foot', label:'walk'  },
+  { id:'routed-bike', label:'bike'  }
+];
+/* route origin: custom start point if picked, otherwise GPS */
+function origin(){ return fromPlace || loc; }
+function openModes(){
+  if (!sel) return;
+  mode = M.MODES; modeIdx = 0; modeTimes = {};
+  $('modesdest').textContent = 'to ' + sel.name;
+  renderModes();
+  openOverlay('modes');
+  refreshChrome();
+  if (!origin()){ pendingModes = true; locate(); toast('waiting for GPS fix…', 3500); }
+  else fetchModeTimes();
+}
+function renderModes(){
+  var fromLabel = fromPlace ? fromPlace.name : 'my location';
+  var html = '<div class="row' + (modeIdx===0?' sel':'') + '">'
+    + '<span class="rmain">from: ' + esc(fromLabel) + '</span>'
+    + '<span class="chev">&#8250;</span></div>';
+  for (var i = 0; i < PROFILES.length; i++){
+    var p = PROFILES[i];
+    html += '<div class="row' + (i+1===modeIdx?' sel':'') + '">'
+      + '<span class="rmain">' + p.label + '</span>'
+      + '<span class="time">' + (modeTimes[p.id] || '…') + '</span>'
+      + '<span class="chev">&#8250;</span></div>';
+  }
+  $('modesbody').innerHTML = html;
+}
+function fetchModeTimes(){
+  var o = origin();
+  if (!o || !sel) return;
+  PROFILES.forEach(function(p){
+    var url = 'https://routing.openstreetmap.de/' + p.id + '/route/v1/driving/'
+      + o.lng + ',' + o.lat + ';' + sel.lng + ',' + sel.lat + '?overview=false';
+    fetch(url).then(function(r){ return r.json(); }).then(function(js){
+      if (js.routes && js.routes.length)
+        modeTimes[p.id] = fmtDur(js.routes[0].duration);
+      else modeTimes[p.id] = '—';
+      if (mode === M.MODES) renderModes();
+    }).catch(function(){ modeTimes[p.id] = '—'; if (mode === M.MODES) renderModes(); });
+  });
+}
+
+/* ============ routing (OSRM) ============ */
+var routeBusy = false;
+function doRoute(profile){
+  var o = origin();
+  if (!sel || !o || routeBusy) return;
+  routeBusy = true;
+  // spinner under the drive/walk/bike rows while the route loads
+  if (mode === M.MODES)
+    $('modesbody').innerHTML += '<div class="spinwrap"><div class="spinner"></div></div>';
+  var url = 'https://routing.openstreetmap.de/' + profile.id + '/route/v1/driving/'
+    + o.lng + ',' + o.lat + ';' + sel.lng + ',' + sel.lat
+    + '?overview=full&geometries=geojson&steps=true';
+  fetch(url).then(function(r){ return r.json(); }).then(function(js){
+    routeBusy = false;
+    if (!js.routes || !js.routes.length){
+      toast('no route found');
+      if (mode === M.MODES) renderModes();   // drop the spinner
+      return;
+    }
+    var r0 = js.routes[0];
+    clearTimeout(toastTimer); $('toast').style.display = 'none';
+    clearRoute(true);
+    var latlngs = r0.geometry.coordinates.map(function(c){ return [c[1], c[0]]; });
+    var casing = L.polyline(latlngs, { color:'#000', weight:7, opacity:0.5 }).addTo(map);
+    var line = L.polyline(latlngs, { color:'#FAF594', weight:4 }).addTo(map);
+    var steps = [];
+    (r0.legs[0].steps || []).forEach(function(s){
+      steps.push({ text: stepText(s), dist: s.distance, glyph: stepGlyph(s),
+        latlng: [s.maneuver.location[1], s.maneuver.location[0]] });
+    });
+    var via = r0.legs[0].summary ? 'via ' + r0.legs[0].summary : '';
+    if (fromPlace) via = 'from ' + fromPlace.name + (via ? ' · ' + via : '');
+    route = {
+      line:line, casing:casing, steps:steps, profile:profile,
+      summaryText: fmtDur(r0.duration) + ' (' + fmtDist(r0.distance) + ') ' + profile.label,
+      via: via
+    };
+    closeOverlays();
+    map.fitBounds(line.getBounds(), { padding:[20,20] });
+    following = false;
+    refreshChrome();
+  }).catch(function(){
+    routeBusy = false;
+    toast('routing failed (network?)');
+    if (mode === M.MODES) renderModes();   // drop the spinner
+  });
+}
+function stepGlyph(s){
+  var t = s.maneuver.type, m = s.maneuver.modifier || '';
+  if (t === 'arrive') return '◉';
+  if (t === 'roundabout' || t === 'rotary') return '⟳';
+  if (m.indexOf('uturn') >= 0) return '↩';
+  if (m === 'left') return '←';
+  if (m === 'right') return '→';
+  if (m === 'slight left') return '↖';
+  if (m === 'slight right') return '↗';
+  if (m === 'sharp left') return '↙';
+  if (m === 'sharp right') return '↘';
+  return '↑';
+}
+function stepText(s){
+  var m = s.maneuver, road = s.name ? ' onto ' + s.name : '';
+  var dir = m.modifier || '';
+  var t = m.type;
+  if (t === 'depart') return 'Head' + (road ? ' toward' + road.slice(5) : ' out');
+  if (t === 'arrive') return 'Arrive at destination';
+  if (t === 'turn' || t === 'end of road' || t === 'fork') return 'Turn ' + dir + road;
+  if (t === 'continue' || t === 'new name') return 'Continue' + road;
+  if (t === 'merge') return 'Merge ' + dir + road;
+  if (t === 'on ramp') return 'Take ramp ' + dir + road;
+  if (t === 'off ramp') return 'Take exit ' + dir + road;
+  if (t === 'roundabout' || t === 'rotary')
+    return 'Roundabout, exit ' + (m.exit || '') + road;
+  return (t.charAt(0).toUpperCase()+t.slice(1)) + ' ' + dir + road;
+}
+function clearRoute(keepSel){
+  if (route){
+    map.removeLayer(route.line); map.removeLayer(route.casing); route = null;
+    setNavNotification(false);
+    fromPlace = null;          // ended route -> next one starts from me
+  }
+  if (!keepSel) clearSelection();
+  refreshChrome();
+}
+
+/* ============ step list ============ */
+function openSteps(){
+  if (!route) return;
+  mode = M.STEPS;
+  stepIdx = 0;
+  $('stepstitle').textContent = route.summaryText;
+  $('stepssub').textContent = route.via || '';
+  renderSteps();
+  openOverlay('steps');
+  refreshChrome();
+}
+function renderSteps(){
+  var html = '<div class="row"><span class="glyph">◎</span><span class="rmain">Your location</span></div>';
+  for (var i = 0; i < route.steps.length; i++){
+    var s = route.steps[i];
+    html += '<div class="row' + (i===stepIdx?' sel':'') + '" id="st'+i+'">'
+      + '<span class="glyph">' + s.glyph + '</span>'
+      + '<span class="rmain">' + esc(s.text)
+      + (s.dist > 1 ? '<span class="sub">' + fmtDist(s.dist) + '</span>' : '')
+      + '</span></div>';
+  }
+  $('stepsbody').innerHTML = html;
+  var el = $('st'+stepIdx);
+  if (el) el.scrollIntoView({block:'nearest'});
+}
+
+/* ============ step-through navigation ============ */
+function setNavNotification(on){
+  if (window.Bridge && Bridge.setNavigating) Bridge.setNavigating(!!on);
+}
+function startNav(){
+  if (!route) return;
+  mode = M.NAV;
+  navIdx = 0;
+  openOverlay(null);
+  setNavNotification(true);
+  showNavStep();
+}
+function showNavStep(){
+  var s = route.steps[navIdx];
+  $('navglyph').textContent = s.glyph;
+  $('navtext').textContent = s.text;
+  $('navdist').textContent = (s.dist > 1 ? fmtDist(s.dist) : '')
+    + '  ·  ' + (navIdx+1) + '/' + route.steps.length;
+  map.setView(s.latlng, Math.max(map.getZoom(), 16));
+  refreshChrome();
+}
+function navStep(d){
+  var n = navIdx + d;
+  if (n < 0){ exitNav(); return; }
+  if (n >= route.steps.length) return;
+  navIdx = n;
+  showNavStep();
+}
+function exitNav(){
+  mode = M.MAP;
+  setNavNotification(false);
+  map.fitBounds(route.line.getBounds(), { padding:[20,20] });
+  refreshChrome();
+}
+
+/* ============ key handling ============ */
+/* DOM-sourced keys (arrows/digits/Enter) use a fire gate so a held key
+   can't chain-fire across screens. Softkeys come from the Android side
+   exactly once per press, so they only need the isRepeat guard. */
+var held = {};
+function gate(code){
+  var now = Date.now();
+  if (held[code] && now - held[code] < 2000) return false;
+  held[code] = now;
+  return true;
+}
+document.addEventListener('keyup', function(e){
+  var n = keyName(e);
+  delete held[n];
+  if (n === 'Enter') delete held['ok'];
+});
+
+function keyName(e){
+  var k = e.key;
+  if (k === 'SoftLeft' || k === 'F1') return 'SoftLeft';
+  if (k === 'SoftRight' || k === 'F2') return 'SoftRight';
+  if (k === 'Escape' || k === 'GoBack' || k === 'BrowserBack') return 'Back';
+  return k;
+}
+
+var PAN = 56;
+function handleKey(name, isRepeat){
+  if (mode === M.HELP || mode === M.DETAILS){
+    var body = mode === M.HELP ? $('helpbody') : $('detailsbody');
+    if (name==='ArrowDown'){ body.scrollTop += 40; return true; }
+    if (name==='ArrowUp'){ body.scrollTop -= 40; return true; }
+    if (name==='Back' || name==='SoftRight' || name==='Enter'){
+      if (!isRepeat) closeOverlays();
+      return true;
+    }
+    return true;
+  }
+  if (mode === M.MODES){
+    if (name==='ArrowDown'){ modeIdx = Math.min(PROFILES.length, modeIdx+1); renderModes(); return true; }
+    if (name==='ArrowUp'){ modeIdx = Math.max(0, modeIdx-1); renderModes(); return true; }
+    if (name==='Enter'){ if(!isRepeat && gate('ok')){
+        if (modeIdx === 0) openSearch('start');                  // pick start point
+        else if (!origin()){ toast('still waiting for GPS…'); }
+        else doRoute(PROFILES[modeIdx-1]);
+      } return true; }
+    if (name==='Back' || name==='SoftRight'){ if(!isRepeat) closeOverlays(); return true; }
+    return true;
+  }
+  if (mode === M.STEPS){
+    if (name==='ArrowDown'){ stepIdx = Math.min(route.steps.length-1, stepIdx+1); renderSteps(); return true; }
+    if (name==='ArrowUp'){ stepIdx = Math.max(0, stepIdx-1); renderSteps(); return true; }
+    if (name==='SoftLeft' || name==='Enter'){ if(!isRepeat) closeOverlays(); return true; }
+    if (name==='Back' || name==='SoftRight'){ if(!isRepeat) closeOverlays(); return true; }
+    return true;
+  }
+  if (mode === M.SEARCH || mode === M.RESULTS){
+    if (name==='Back' || name==='SoftRight'){
+      if (isRepeat) return true;
+      if (mode===M.RESULTS){ backToTyping(); return true; }   // keep text + list
+      closeSearch(); return true;                             // start-picks return to chooser
+    }
+    if (mode === M.SEARCH){
+      // soft-left = search; arrives via Android dispatchKeyEvent so it
+      // works mid-typing, bypassing the IME entirely
+      if (name==='Enter' || name==='SoftLeft'){ if(!isRepeat && gate('ok')) runSearch(); return true; }
+      if (name==='ArrowDown' && results.length){
+        mode = M.RESULTS; $('searchinput').blur(); renderResults(); refreshChrome(); return true;
+      }
+      return false;          // let keys type into the input
+    }
+    if (name==='ArrowDown'){ moveResult(1); return true; }
+    if (name==='ArrowUp'){
+      if (resIdx===0){ backToTyping(); return true; }          // keep text + list
+      moveResult(-1); return true;
+    }
+    if (name==='Enter'){ if(!isRepeat && gate('ok')) chooseResult(resIdx); return true; }
+    return true;
+  }
+  if (mode === M.NAV){
+    switch (name){
+      case 'ArrowUp':    map.panBy([0,-PAN]); return true;
+      case 'ArrowDown':  map.panBy([0, PAN]); return true;
+      case 'ArrowLeft':  map.panBy([-PAN,0]); return true;
+      case 'ArrowRight': map.panBy([ PAN,0]); return true;
+      case '1': case '*': map.zoomOut(); zoomHint(); return true;
+      case '3': case '#': map.zoomIn(); zoomHint(); return true;
+      case '5': if (!isRepeat) locate(); return true;
+      case 'SoftLeft':  if (!isRepeat) navStep(-1); return true;
+      case 'SoftRight': if (!isRepeat) navStep(1); return true;
+      case 'Enter': if (!isRepeat && gate('ok')) locate(); return true;
+      case 'Back': if (!isRepeat) exitNav(); return true;
+    }
+    return false;
+  }
+
+  /* ---- map mode ---- */
+  switch (name){
+    case 'ArrowUp':    map.panBy([0,-PAN]); return true;
+    case 'ArrowDown':  map.panBy([0, PAN]); return true;
+    case 'ArrowLeft':  map.panBy([-PAN,0]); return true;
+    case 'ArrowRight': map.panBy([ PAN,0]); return true;
+    case '1': case '*': map.zoomOut(); zoomHint(); return true;
+    case '3': case '#': map.zoomIn(); zoomHint(); return true;
+    case '5': if (!isRepeat) locate(); return true;
+    case 'SoftLeft':
+      if (isRepeat) return true;
+      if (route) openSteps();
+      else if (sel) openDetails();
+      else openSearch();
+      return true;
+    case 'Enter':
+      if (isRepeat || !gate('ok')) return true;
+      if (route) startNav();
+      else if (sel) openModes();
+      else locate();
+      return true;
+    case 'SoftRight':
+      if (isRepeat) return true;
+      if (route) clearRoute(true);
+      else if (sel){ clearSelection(); refreshChrome(); }
+      else openHelp();
+      return true;
+    case 'Back':
+      if (isRepeat) return true;
+      if (route){ clearRoute(true); return true; }
+      if (sel){ clearSelection(); refreshChrome(); return true; }
+      if (window.Bridge && Bridge.exitApp){ Bridge.exitApp(); return true; }
+      return false;
+  }
+  return false;
+}
+
+document.addEventListener('keydown', function(e){
+  var name = keyName(e);
+  var typing = document.activeElement === $('searchinput');
+  if (typing && mode === M.SEARCH){
+    if (name!=='Enter' && name!=='ArrowDown' && name!=='Back'
+        && name!=='SoftLeft' && name!=='SoftRight') return;
+  }
+  if (handleKey(name, e.repeat)) e.preventDefault();
+});
+
+window.__key = function(name){ handleKey(name, false); };
+window.__keyRepeat = function(name){ handleKey(name, true); };
+window.__keyUp = function(name){
+  delete held[name];
+  if (name === 'Enter') delete held['ok'];
+};
+
+/* ============ boot ============ */
+$('searchform').addEventListener('submit', function(ev){
+  ev.preventDefault();
+  runSearch();
+});
+refreshChrome();
+locate();
+zoomHint();
+</script>
+</body>
+</html>
