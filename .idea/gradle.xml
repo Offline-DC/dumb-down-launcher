@@ -22,6 +22,7 @@
                   <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/core" />
                   <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/gmessages" />
                   <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/matrix" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/signal" />
                 </projects>
               </build>
             </builds>
@@ -41,6 +42,7 @@
             <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/core" />
             <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/gmessages" />
             <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/matrix" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/signal" />
             <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger/demo" />
             <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger/library" />
           </set>
