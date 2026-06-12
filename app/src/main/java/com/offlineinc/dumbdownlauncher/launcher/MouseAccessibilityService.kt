@@ -1111,12 +1111,6 @@ class MouseAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun handleAppleMusicDensity() {
-        // Reduce density when Apple Music is in foreground so the sign-in
-        // screen fits without scrolling. Resets to 120 when leaving the app.
-        setDensity(80)
-    }
-
     private fun handleWhatsAppDensity() {
         shellExecutor.execute {
             try {
