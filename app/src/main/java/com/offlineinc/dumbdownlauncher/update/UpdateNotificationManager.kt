@@ -43,10 +43,32 @@ object UpdateNotificationManager {
     private const val KEY_OB_PENDING_URL = "url"
     private const val KEY_OB_PENDING_VERSION = "version"
     private const val KEY_OB_PENDING_VERSIONCODE = "version_code"
-    // The pending versionCode whose install has failed at least once. While
-    // this equals the pending versionCode, the launch gate stops hard-blocking
-    // so a failing update can't lock the user out of messaging.
-    private const val KEY_OB_FAILED_VERSIONCODE = "failed_version_code"
+
+    // "Update in progress" guard so tapping the update tile repeatedly doesn't
+    // enqueue the download/install multiple times. Stamped with a start time;
+    // self-expires after a TTL so a killed mid-install can't wedge it forever.
+    private const val IN_PROGRESS_PREFS = "update_in_progress"
+    private const val IN_PROGRESS_TTL_MS = 30 * 60_000L
+    private fun inProgressKey(appKey: String) = "started_at_$appKey"
+
+    /** True if a download/install for [appKey] is already running (and fresh). */
+    fun isUpdateInProgress(context: Context, appKey: String): Boolean {
+        val started = context.getSharedPreferences(IN_PROGRESS_PREFS, Context.MODE_PRIVATE)
+            .getLong(inProgressKey(appKey), 0L)
+        return started != 0L && System.currentTimeMillis() - started < IN_PROGRESS_TTL_MS
+    }
+
+    /** Mark a download/install as started for [appKey]. */
+    fun markUpdateInProgress(context: Context, appKey: String) {
+        context.getSharedPreferences(IN_PROGRESS_PREFS, Context.MODE_PRIVATE)
+            .edit().putLong(inProgressKey(appKey), System.currentTimeMillis()).apply()
+    }
+
+    /** Clear the in-progress guard for [appKey] (terminal outcome reached). */
+    fun clearUpdateInProgress(context: Context, appKey: String) {
+        context.getSharedPreferences(IN_PROGRESS_PREFS, Context.MODE_PRIVATE)
+            .edit().remove(inProgressKey(appKey)).apply()
+    }
 
     fun ensureChannel(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -206,31 +228,6 @@ object UpdateNotificationManager {
     }
 
     /**
-     * Whether the launch gate should HARD-BLOCK opening Smart Txt: an update is
-     * pending AND that pending version hasn't failed to install. Once an install
-     * of the pending version fails ([markOpenBubblesUpdateFailed]), this returns
-     * false so the user can still open Smart Txt — they aren't locked out of
-     * messaging by a failing update. The retry notification still nags them, and
-     * a NEWER pending version re-blocks (its code won't match the failed one).
-     */
-    fun isOpenBubblesUpdateBlocking(context: Context): Boolean {
-        if (!isOpenBubblesUpdatePending(context)) return false
-        val prefs = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
-        val pendingCode = prefs.getInt(KEY_OB_PENDING_VERSIONCODE, -1)
-        val failedCode = prefs.getInt(KEY_OB_FAILED_VERSIONCODE, -1)
-        return failedCode != pendingCode
-    }
-
-    /** Mark the current pending Smart Txt update as having failed to install. */
-    fun markOpenBubblesUpdateFailed(context: Context) {
-        val prefs = context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
-        val pendingCode = prefs.getInt(KEY_OB_PENDING_VERSIONCODE, -1)
-        if (pendingCode > 0) {
-            prefs.edit().putInt(KEY_OB_FAILED_VERSIONCODE, pendingCode).apply()
-        }
-    }
-
-    /**
      * Re-posts the sticky OpenBubbles "update available" tile from persisted
      * state if an update is still pending. Called on launcher start (which on a
      * home launcher is effectively boot) so the forced-update prompt survives
@@ -338,6 +335,8 @@ object UpdateNotificationManager {
 
     fun notifyFailed(context: Context, appKey: String) {
         ensureChannel(context)
+        // Terminal outcome — release the in-progress guard so a retry tap works.
+        clearUpdateInProgress(context, appKey)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notificationId = notificationIdFor(appKey)
         val appDisplayName = displayNameFor(appKey)
@@ -346,10 +345,6 @@ object UpdateNotificationManager {
         // For OpenBubbles the download URL is in the persisted pending state;
         // other apps don't persist it, so they get a plain (non-retry) tile.
         val retryUrl = if (appKey == "openbubbles-messaging") {
-            // Record the failure so the launch gate stops hard-blocking — the
-            // user can open Smart Txt despite the failed update, and still retry
-            // from this notification.
-            markOpenBubblesUpdateFailed(context)
             context.getSharedPreferences(OB_PENDING_PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_OB_PENDING_URL, null)
         } else {
@@ -417,6 +412,8 @@ object UpdateNotificationManager {
      */
     fun notifyInstalled(context: Context, appKey: String) {
         ensureChannel(context)
+        // Terminal outcome — release the in-progress guard.
+        clearUpdateInProgress(context, appKey)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val displayName = displayNameFor(appKey)
 

@@ -865,28 +865,17 @@ class MouseAccessibilityService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: pkg=$pkg className=$className")
 
-            // ── OpenBubbles update gate + one-time retention toggle ────────
-            // Central chokepoint: this fires no matter how OpenBubbles was
-            // launched — home grid, All Apps, a notification tap, or recents.
+            // ── OpenBubbles one-time retention toggle ──────────────────────
+            // Track OpenBubbles foreground so we can apply the "delete after 3
+            // days" toggle the first time the user leaves it (backgrounded ⇒
+            // safe to edit its prefs).
             if (pkg == OpenBubblesGate.PKG && className.contains("Activity")) {
-                if (OpenBubblesGate.isUpdateRequired(this)) {
-                    // Outdated build with an update waiting: bounce to home and
-                    // slam the update modal over it (HOME first so backing out
-                    // of the modal lands on the launcher, not back in OB).
-                    Log.i("MOUSE_SVC", "OpenBubbles foreground but update required — redirecting to update")
-                    openBubblesForeground = false
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                    OpenBubblesGate.showUpdateRequired(this)
-                    return
-                }
                 openBubblesForeground = true
             } else if (openBubblesForeground && pkg != OpenBubblesGate.PKG && className.contains("Activity")) {
-                // User left OpenBubbles → it's backgrounded now, so it's safe to
-                // apply the one-time retention toggle (the edit kills OB first).
                 openBubblesForeground = false
                 OpenBubblesGate.applyRetentionOnceAsync(this)
             }
-            // ── end OpenBubbles gate ───────────────────────────────────────
+            // ── end OpenBubbles retention ──────────────────────────────────
 
             // ── Factory-reset warning overlay ──────────────────────────────
             // We only show the warning on the specific Reset options page that

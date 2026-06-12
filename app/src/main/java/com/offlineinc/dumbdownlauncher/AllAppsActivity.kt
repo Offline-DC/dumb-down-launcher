@@ -462,27 +462,16 @@ class AllAppsActivity : AppCompatActivity() {
                         MainAppsGridActivity.openMessagesInChrome(this@AllAppsActivity)
                     }
                     "com.openbubbles.messaging" -> {
-                        // Same deterministic fast-path gate as the home grid:
-                        // if an update is required, show the modal instead of
-                        // launching (no flash, no reliance on the accessibility
-                        // catch-all firing in time).
-                        if (com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate
-                                .isUpdateRequired(this@AllAppsActivity)) {
-                            com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate
-                                .showUpdateRequired(this@AllAppsActivity)
+                        if (MouseAccessibilityService.isOpenBubblesMouseNeeded(this@AllAppsActivity)) {
+                            MouseAccessibilityService.setMouseEnabled(this@AllAppsActivity, true)
+                        }
+                        val launchIntent = packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(launchIntent)
                             overridePendingTransition(0, 0)
                         } else {
-                            if (MouseAccessibilityService.isOpenBubblesMouseNeeded(this@AllAppsActivity)) {
-                                MouseAccessibilityService.setMouseEnabled(this@AllAppsActivity, true)
-                            }
-                            val launchIntent = packageManager.getLaunchIntentForPackage("com.openbubbles.messaging")
-                            if (launchIntent != null) {
-                                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                startActivity(launchIntent)
-                                overridePendingTransition(0, 0)
-                            } else {
-                                Toast.makeText(this@AllAppsActivity, "OpenBubbles not installed", Toast.LENGTH_SHORT).show()
-                            }
+                            Toast.makeText(this@AllAppsActivity, "OpenBubbles not installed", Toast.LENGTH_SHORT).show()
                         }
                     }
                     QUACK -> {

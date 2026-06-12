@@ -446,17 +446,6 @@ class MainAppsGridActivity : AppCompatActivity() {
                 overridePendingTransition(0, 0)
             }
             else -> {
-                // Fast-path update gate for the common home-grid tap (no flash).
-                // Every other launch source (All Apps, a notification, recents)
-                // is caught by MouseAccessibilityService, which shares this same
-                // OpenBubblesGate logic. The one-time retention toggle is also
-                // applied centrally there (when OpenBubbles next backgrounds).
-                if (item.packageName == "com.openbubbles.messaging" &&
-                    com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate.isUpdateRequired(this)) {
-                    com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate.showUpdateRequired(this)
-                    overridePendingTransition(0, 0)
-                    return
-                }
                 val component = item.launchComponent ?: return
                 startComponentApp(item, component)
             }

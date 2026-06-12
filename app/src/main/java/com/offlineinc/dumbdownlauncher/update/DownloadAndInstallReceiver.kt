@@ -43,6 +43,16 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
                         }
                     }
 
+                    // De-dupe: if a download/install for this app is already
+                    // running, ignore the repeat tap instead of enqueuing again.
+                    // Checked synchronously here so rapid taps can't race past it;
+                    // cleared on terminal outcome (notifyFailed / notifyInstalled).
+                    if (UpdateNotificationManager.isUpdateInProgress(context, appKey)) {
+                        Log.i(TAG, "update already in progress for $appKey — ignoring repeat tap")
+                        return
+                    }
+                    UpdateNotificationManager.markUpdateInProgress(context, appKey)
+
                     // startDownload() talks to DownloadManager, which can block
                     // or throw. Hand off to a background thread via goAsync()
                     // and funnel any failure into an "update failed"
@@ -269,6 +279,9 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             context.startActivity(installIntent)
             Log.i(TAG, "triggerInstall: launched installer for $appKey")
             UpdateNotificationManager.cancel(context, notificationIdForKey(appKey))
+            // Handed off to the system installer (no result callback to us) —
+            // release the in-progress guard so future updates aren't blocked.
+            UpdateNotificationManager.clearUpdateInProgress(context, appKey)
         } catch (e: Exception) {
             Log.e(TAG, "triggerInstall: startActivity(installer) failed for $appKey", e)
             UpdateNotificationManager.notifyFailed(context, appKey)

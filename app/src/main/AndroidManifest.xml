@@ -116,14 +116,6 @@
             android:exported="false" />
 
         <activity
-            android:name=".openbubbles.OpenBubblesUpdateRequiredActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:noHistory="true"
-            android:excludeFromRecents="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
-
-        <activity
             android:name=".update.WifiThenUpdateActivity"
             android:exported="false"
             android:launchMode="singleInstance"
