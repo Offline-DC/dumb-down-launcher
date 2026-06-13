@@ -9,7 +9,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import com.offlineinc.dumbdownlauncher.diagnostics.DiagBreadcrumbs
 
 /**
  * Gets a single location fix, with a layered fallback strategy designed for
@@ -61,6 +63,34 @@ class QuackLocationHelper(
     private val handler = Handler(Looper.getMainLooper())
     private var delivered = false
 
+    // ── Diagnostics breadcrumb state ─────────────────────────────────────
+    // Lets a battery capture see how this request resolved — in particular
+    // whether it fell through to the expensive GPS path. No-op unless
+    // diagnostics is actively collecting.
+    private var startMs: Long = SystemClock.elapsedRealtime()
+    @Volatile private var fellBackToGps = false
+    @Volatile private var resultRecorded = false
+
+    /**
+     * Emit the terminal `quack_location_result` breadcrumb exactly once per
+     * request. [source] is where the delivered fix came from (provider name,
+     * or a cache tag); "none" on error.
+     */
+    private fun recordResult(outcome: String, source: String) {
+        if (resultRecorded) return
+        resultRecorded = true
+        DiagBreadcrumbs.record(
+            "quack_location_result",
+            mapOf(
+                "outcome" to outcome,            // delivered | error
+                "source" to source,              // beacondb | gps | network | passive | persisted_cache | system_cache | none
+                "fell_back_to_gps" to fellBackToGps,
+                "elapsed_ms" to (SystemClock.elapsedRealtime() - startMs),
+                "timeout_ms" to hardTimeoutMs,
+            ),
+        )
+    }
+
     private fun makeListener(label: String) = object : LocationListener {
         override fun onLocationChanged(loc: Location) {
             Log.d(TAG, "$label fix: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
@@ -78,6 +108,7 @@ class QuackLocationHelper(
     @SuppressLint("MissingPermission")
     fun request() {
         Log.d(TAG, "request() called")
+        startMs = SystemClock.elapsedRealtime()
 
         // ── 1. Our own persisted location (< 2 hours) ─────────────────────────
         // On MediaTek flip phones getLastKnownLocation() is often null because
@@ -89,6 +120,7 @@ class QuackLocationHelper(
             if (persisted.ageMs < QuackLocationStore.FRESH_MAX_AGE_MS) {
                 Log.d(TAG, "Persisted location is fresh (< 2h) — delivering immediately")
                 delivered = true
+                recordResult("delivered", "persisted_cache")
                 handler.post { callback.onLocation(persisted.lat, persisted.lng) }
                 return
             }
@@ -190,10 +222,12 @@ class QuackLocationHelper(
                     staleFallback != null && staleFallback.ageMs < QuackLocationStore.STALE_MAX_AGE_MS -> {
                         Log.d(TAG, "Hard timeout: using persisted location age=${staleFallback.ageMinutes}min")
                         delivered = true
+                        recordResult("delivered", "persisted_cache_stale")
                         handler.post { callback.onLocation(staleFallback.lat, staleFallback.lng) }
                     }
                     else -> {
                         Log.e(TAG, "No location available at all — giving up")
+                        recordResult("error", "none")
                         callback.onError("Location timed out — please enable location services and try again")
                     }
                 }
@@ -209,6 +243,7 @@ class QuackLocationHelper(
     @SuppressLint("MissingPermission")
     private fun startGpsFallback(netAvail: Boolean, gpsAvail: Boolean) {
         if (delivered) return
+        fellBackToGps = true
         Log.d(TAG, "startGpsFallback: netAvail=$netAvail gpsAvail=$gpsAvail")
 
         // Ensure location permission is granted before touching LocationManager.
@@ -259,9 +294,11 @@ class QuackLocationHelper(
             persisted != null && persisted.ageMs < QuackLocationStore.STALE_MAX_AGE_MS -> {
                 Log.d(TAG, "Fallback ($reason): using persisted age=${persisted.ageMinutes}min")
                 delivered = true
+                recordResult("delivered", "persisted_cache_stale")
                 handler.post { callback.onLocation(persisted.lat, persisted.lng) }
             }
             else -> {
+                recordResult("error", "none")
                 callback.onError("Location unavailable — please enable location services")
             }
         }
@@ -297,6 +334,7 @@ class QuackLocationHelper(
         }
         delivered = true
         Log.d(TAG, "deliver() lat=${loc.latitude} lng=${loc.longitude} acc=${loc.accuracy}m provider=${loc.provider}")
+        recordResult("delivered", loc.provider ?: "unknown")
         cleanup()
         handler.post { callback.onLocation(loc.latitude, loc.longitude) }
     }

@@ -1,6 +1,7 @@
 package com.offlineinc.dumbdownlauncher.quack
 
 import android.util.Log
+import com.offlineinc.dumbdownlauncher.diagnostics.DiagBreadcrumbs
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -57,6 +58,7 @@ object BeaconDbClient {
     fun geolocate(wifi: List<WifiAp>, cells: List<CellTower>): Fix? {
         if (wifi.size < 2 && cells.isEmpty()) {
             Log.w(TAG, "geolocate: need ≥2 wifi APs or ≥1 cell — got wifi=${wifi.size} cells=${cells.size}")
+            recordBreadcrumb(wifi.size, cells.size, httpCode = null, outcome = "insufficient_signals")
             return null
         }
         val body = buildRequestBody(wifi, cells)
@@ -79,21 +81,50 @@ object BeaconDbClient {
             val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
             if (code !in 200..299) {
                 Log.w(TAG, "geolocate: HTTP $code body=${text.take(200)}")
+                recordBreadcrumb(wifi.size, cells.size, httpCode = code, outcome = "http_error")
                 return null
             }
             parseFix(text).also { fix ->
                 if (fix != null) {
                     Log.i(TAG, "geolocate: got lat=${fix.lat} lng=${fix.lng} acc=${fix.accuracyMeters}m")
+                    recordBreadcrumb(wifi.size, cells.size, httpCode = code, outcome = "fix")
                 } else {
                     Log.w(TAG, "geolocate: response had no usable location: ${text.take(200)}")
+                    recordBreadcrumb(wifi.size, cells.size, httpCode = code, outcome = "no_location")
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "geolocate: failed — ${e.message}")
+            recordBreadcrumb(wifi.size, cells.size, httpCode = null, outcome = "exception", error = e.message)
             null
         } finally {
             try { conn?.disconnect() } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * Emit a structured breadcrumb describing this BeaconDB attempt so future
+     * battery captures show *why* network location did or didn't produce a fix
+     * (and therefore whether quack fell back to the expensive GPS path). No-op
+     * unless diagnostics is actively collecting.
+     */
+    private fun recordBreadcrumb(
+        wifiCount: Int,
+        cellCount: Int,
+        httpCode: Int?,
+        outcome: String,
+        error: String? = null,
+    ) {
+        DiagBreadcrumbs.record(
+            "quack_beacondb",
+            mapOf(
+                "outcome" to outcome,        // fix | no_location | http_error | insufficient_signals | exception
+                "http_code" to httpCode,
+                "wifi_ap_count" to wifiCount,
+                "cell_count" to cellCount,
+                "error" to error,
+            ),
+        )
     }
 
     private fun buildRequestBody(wifi: List<WifiAp>, cells: List<CellTower>): String {

@@ -57,6 +57,16 @@ class DiagnosticsService : Service() {
     @Volatile private var lastScreenState: String = "unknown"
     @Volatile private var lastLidState: String = "unknown"
 
+    /**
+     * Sink that lets other parts of the app (e.g. the quack location stack)
+     * drop structured breadcrumbs into events.jsonl. Held as a field so we can
+     * unregister exactly this instance in [onDestroy]. Routes through the same
+     * [appendEvent] path as system events, tagged source="launcher".
+     */
+    private val breadcrumbSink = DiagBreadcrumbs.Sink { type, payload ->
+        appendEvent(type = type, source = "launcher", payload = payload)
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -92,6 +102,11 @@ class DiagnosticsService : Service() {
             store = store,
             eventsWriter = eventsWriter,
         )
+
+        // Make the breadcrumb sink live now that the events writer + session
+        // are ready, so app-level events (e.g. quack_location_result) land in
+        // events.jsonl even with the rolling-logcat toggle off.
+        DiagBreadcrumbs.register(breadcrumbSink)
 
         startForeground(DiagnosticsConfig.NOTIFICATION_ID, buildNotification())
 
@@ -155,6 +170,8 @@ class DiagnosticsService : Service() {
     }
 
     override fun onDestroy() {
+        // Stop accepting breadcrumbs before we tear the writer down.
+        DiagBreadcrumbs.unregister(breadcrumbSink)
         try { samplingHandle?.cancel(false) } catch (_: Throwable) {}
         try { unregisterReceiver(broadcastReceiver) } catch (_: Throwable) {}
         try { lidSensorReader?.stop() } catch (_: Throwable) {}
