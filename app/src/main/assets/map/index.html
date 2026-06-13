@@ -24,6 +24,9 @@
   #softbar span { flex:1; font-size:14px; font-family:'HelvNow', sans-serif;
     color:var(--dim); overflow:hidden; white-space:nowrap; }
   #sk-l { text-align:left; } #sk-c { text-align:center; } #sk-r { text-align:right; }
+  /* during turn-by-turn the softkeys (back / me / next) are the main controls,
+     so show them at full brightness instead of the dim 65% yellow */
+  #softbar.bright span { color:rgba(250,245,148,0.85); }
 
   /* bottom cards over the map */
   .card { position:absolute; left:0; right:0; bottom:26px; z-index:1500;
@@ -32,8 +35,9 @@
   .card .title { font-size:18px; color:#fff; line-height:1.15; word-wrap:break-word; }
   .card .sub { font-size:12px; color:var(--gray); margin-top:2px; line-height:1.25; }
   #navcard .navrow { display:flex; align-items:center; }
-  #navcard .glyph { font-size:32px; color:var(--yellow); width:44px; flex-shrink:0;
-    text-align:center; font-family:sans-serif; line-height:1; }
+  #navcard .glyph { font-size:30px; color:var(--yellow); width:52px; flex-shrink:0;
+    padding-right:6px; box-sizing:border-box; text-align:center;
+    font-family:sans-serif; line-height:1; }
   #navcard .navmain { flex:1; min-width:0; }
   #navcard .navtext { font-size:15px; color:#fff; line-height:1.2; word-wrap:break-word; }
   #navcard .navdist { font-size:12px; color:var(--yellow); margin-top:1px; }
@@ -42,6 +46,11 @@
   #zoomhint { position:absolute; right:6px; bottom:34px; z-index:1400;
     background:rgba(0,0,0,0.85); color:var(--yellow); font-size:12px;
     padding:2px 6px; border:1px solid var(--dim); display:none; }
+
+  /* subtle "waiting for a GPS fix" indicator, bottom-right of the map */
+  #gpsspin { position:absolute; right:7px; bottom:58px; z-index:1450; display:none; }
+  #gpsspin .spinner { width:15px; height:15px; border-width:2px;
+    border-color:rgba(250,245,148,0.3); border-top-color:var(--yellow); }
 
   /* full-screen overlays */
   .overlay { position:absolute; top:0; left:0; right:0; bottom:26px; z-index:2000;
@@ -69,9 +78,12 @@
   .row .rmain { flex:1; min-width:0; }
   .row .sub { font-size:12px; color:var(--gray); display:block; }
   .row.sel { border-color:var(--yellow); background:rgba(250,245,148,0.12); color:#fff; }
+  /* travel modes before a start point is set — shown greyed until you pick one */
+  .row.dim .rmain { color:var(--gray); }
   .row .num { color:var(--yellow); margin-right:5px; }
-  .row .glyph { font-size:21px; color:var(--yellow); width:32px; flex-shrink:0;
-    text-align:center; font-family:sans-serif; }
+  .row .glyph { font-size:20px; color:var(--yellow); width:40px; flex-shrink:0;
+    padding-right:6px; box-sizing:border-box; text-align:center;
+    font-family:sans-serif; line-height:1.2; }
   .row .time { color:var(--yellow); font-size:15px; margin-left:6px; flex-shrink:0; }
   .row .chev { color:var(--gray); margin-left:4px; flex-shrink:0; }
 
@@ -98,6 +110,7 @@
 <div id="map"></div>
 <div id="toast"></div>
 <div id="zoomhint">1 &#8854; &nbsp;3 &#8853;</div>
+<div id="gpsspin"><div class="spinner"></div></div>
 
 <!-- place selected card -->
 <div id="placecard" class="card">
@@ -158,6 +171,7 @@
   <div id="helpbody" class="ovbody">
     <div>map (beta) v1.0</div>
     <div style="color:var(--gray)">&copy; OpenStreetMap contributors &middot; &copy; CARTO</div>
+    <div style="color:var(--gray)">transit by transitous.org &middot; data: transitous.org/sources</div>
   </div>
 </div>
 
@@ -172,14 +186,18 @@ var M = { MAP:0, SEARCH:1, RESULTS:2, MODES:3, STEPS:4, NAV:5, HELP:6, DETAILS:7
 var mode = M.MAP;
 var sel = null;            // {lat,lng,name,sub,full,type,extratags,marker}
 var route = null;
-var loc = null;
+var loc = null;            // last *fresh* fix — drives the dot + search bias
+var approx = null;         // cached general-area centre (no dot); search fallback
+var userMovedMap = false;  // user panned/zoomed → stop auto-centring on approx
 var fromPlace = null;      // custom route start; null = my location
 var searchTarget = 'dest'; // what the search overlay is picking: 'dest' | 'start'
 var following = false;
-var locMarker = null, locCircle = null;
+var selFromSearch = false; // current selection came from the search list
+var lastSearch = null;     // {results,resIdx,listKind,query} restored on Back
+var locMarker = null;
 var results = [], resIdx = 0, listKind = 'results';  // 'results' | 'recent'
 var stepIdx = 0, navIdx = 0, modeIdx = 0;
-var toastTimer = null, zoomHintTimer = null;
+var toastTimer = null, zoomHintTimer = null, gpsSpinTimer = null;
 var modeTimes = {};
 
 /* ============ recents (last 10 selected places, most recent first) ============ */
@@ -206,7 +224,7 @@ var map = L.map('map', {
 L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', {
   maxZoom:19, subdomains:'abcd', attribution:'&copy; OSM &copy; CARTO'
 }).addTo(map);
-map.on('dragstart', function(){ following = false; });
+map.on('dragstart', function(){ following = false; userMovedMap = true; });
 
 /* ============ helpers ============ */
 function $(id){ return document.getElementById(id); }
@@ -219,6 +237,17 @@ function zoomHint(){
   var z = $('zoomhint'); z.style.display = 'block';
   clearTimeout(zoomHintTimer);
   zoomHintTimer = setTimeout(function(){ z.style.display = 'none'; }, 1800);
+}
+/* a quiet spinner in the corner while we wait for a fresh GPS/beacon fix —
+   replaces the old "waiting for GPS…" banner across the top of the map */
+function showGpsSpinner(){
+  $('gpsspin').style.display = 'block';
+  clearTimeout(gpsSpinTimer);
+  gpsSpinTimer = setTimeout(hideGpsSpinner, 30000);   // give up quietly after 30s
+}
+function hideGpsSpinner(){
+  $('gpsspin').style.display = 'none';
+  clearTimeout(gpsSpinTimer);
 }
 function setSoftkeys(l, c, r){
   $('sk-l').textContent = l || ''; $('sk-c').textContent = c || ''; $('sk-r').textContent = r || '';
@@ -245,6 +274,7 @@ function showCard(which){
   $('navcard').style.display   = which === 'nav'   ? 'block' : 'none';
 }
 function refreshChrome(){
+  $('softbar').classList.toggle('bright', mode === M.NAV);   // full-brightness softkeys while navigating
   switch (mode){
     case M.SEARCH:  setSoftkeys('search', '', 'back'); return;
     case M.RESULTS: setSoftkeys('', 'select', 'back'); return;
@@ -254,7 +284,9 @@ function refreshChrome(){
     case M.DETAILS: setSoftkeys('', '', 'back'); return;
     case M.NAV:
       showCard('nav');
-      setSoftkeys('< back', 'me', 'next >');
+      // on the final "arrive" step the right softkey ends navigation
+      var atEnd = route && navIdx >= route.steps.length - 1;
+      setSoftkeys('< back', 'me', atEnd ? 'end' : 'next >');
       return;
   }
   if (route){
@@ -407,8 +439,9 @@ function runSearch(){
   if (!q) return;
   $('searchinput').blur();
   $('results').innerHTML = '<div class="spinwrap"><div class="spinner"></div></div>';
-  // bias toward where you are (GPS fix if we have one, else map center)
-  var c = loc ? { lat:loc.lat, lng:loc.lng } : map.getCenter();
+  // bias toward where you are: fresh GPS fix if we have one, else the cached
+  // general-area location (same one quack/weather use), else the map center
+  var c = loc ? { lat:loc.lat, lng:loc.lng } : (approx || map.getCenter());
   // queries starting with a house number ("1425 17th st nw") are addresses:
   // nominatim nails those, photon returns nearby intersections instead.
   // fuzzy name queries ("haydees") go to photon, which tolerates typos.
@@ -451,10 +484,14 @@ function chooseResult(i){
     return;
   }
   clearRoute(true); clearSelection();
+  // remember the list we came from so Back returns here instead of the bare map
+  lastSearch = { results: results.slice(), resIdx: i, listKind: listKind,
+                 query: $('searchinput').value };
   fromPlace = null;                      // new destination -> start from me
   sel = { lat:r.lat, lng:r.lng, name:r.name, sub:r.sub, full:r.full,
           type:r.type, cls:r.cls, extratags:r.extratags,
           osmType:r.osmType || '', osmId:r.osmId || null };
+  selFromSearch = true;
   addRecentPlace(sel);                   // bump to front of recents
   sel.marker = L.marker([r.lat, r.lng]).addTo(map);
   closeOverlays();
@@ -465,6 +502,25 @@ function chooseResult(i){
 function clearSelection(){
   if (sel && sel.marker) map.removeLayer(sel.marker);
   sel = null;
+  selFromSearch = false;
+}
+/* re-open the search overlay on the list we last chose from, so Back from a
+   selected place lands on the results again rather than the empty map */
+function reopenSearch(){
+  searchTarget = 'dest';
+  $('searchtitle').textContent = 'search';
+  if (lastSearch){
+    results = lastSearch.results;
+    listKind = lastSearch.listKind;
+    resIdx = lastSearch.resIdx || 0;
+    $('searchinput').value = lastSearch.query || '';
+    mode = M.RESULTS;            // focus the list with the previous row highlighted
+    openOverlay('search');
+    renderResults();
+    refreshChrome();
+  } else {
+    openSearch('dest');
+  }
 }
 
 /* ============ place details ============ */
@@ -556,24 +612,56 @@ function openDetails(){
 
 /* ============ location ============ */
 var pendingModes = false;
+/* A *fresh* fix (live GPS, or a current BeaconDB fix from the Android side).
+   Only fresh fixes get a dot — a stale last-known is delivered via
+   __onApproxLocation instead, so re-opening the app never shows a stale dot. */
 function onLocation(lat, lng, acc){
+  hideGpsSpinner();
   var first = !loc;
-  loc = { lat:lat, lng:lng, acc:acc };
+  loc = { lat:lat, lng:lng, acc:acc, t:Date.now() };
   if (!locMarker){
-    // you are the duck
+    // you are the duck — the marker itself is the location estimate, no
+    // accuracy circle (it added clutter and implied false precision)
     locMarker = L.marker([lat,lng], { icon:L.icon({
       iconUrl:'duck.png', iconRetinaUrl:'duck-2x.png',
       iconSize:[41,30], iconAnchor:[20,15]
     }), zIndexOffset:1000 }).addTo(map);
-    locCircle = L.circle([lat,lng], { radius:acc||30, weight:1, color:'#000', opacity:0.4, fillColor:'#FAF594', fillOpacity:0.15 }).addTo(map);
   } else {
     locMarker.setLatLng([lat,lng]);
-    locCircle.setLatLng([lat,lng]).setRadius(acc||30);
   }
   if (following && mode === M.MAP) map.setView([lat,lng], Math.max(map.getZoom(), 16));
-  if (first && pendingModes && mode === M.MODES){ pendingModes = false; fetchModeTimes(); }
+  // a fix arrived while the chooser is open → flip "select start" to "my
+  // location", enable the travel modes, and load their ETAs
+  if (pendingModes && mode === M.MODES){ pendingModes = false; renderModes(); fetchModeTimes(); }
+  else if (mode === M.MODES) renderModes();
 }
 window.__onLocation = onLocation;
+
+/* Cached general-area location from the shared store quack + weather use.
+   Centres the map and biases search so we open on roughly the right place
+   before a precise fix lands — but it is NOT shown as a dot (it may be hours
+   old). Ignored once we have a fresh fix or the user has moved the map. */
+function onApproxLocation(lat, lng){
+  approx = { lat:lat, lng:lng };
+  if (!loc && !userMovedMap){
+    map.setView([lat, lng], Math.max(map.getZoom(), 12));
+  }
+}
+window.__onApproxLocation = onApproxLocation;
+
+/* Coming back to the app: if the dot's last fix is old, drop it (keeping the
+   spot only as a general-area centre) so we never display a stale position.
+   The dot reappears as soon as a fresh GPS/beacon fix arrives. */
+function onResume(){
+  if (loc && Date.now() - (loc.t || 0) > 120000){
+    if (locMarker){ map.removeLayer(locMarker); locMarker = null; }
+    approx = { lat:loc.lat, lng:loc.lng };
+    loc = null;
+    if (following) showGpsSpinner();
+  }
+}
+window.__onResume = onResume;
+
 window.__onLocationOff = function(){
   toast('location is turned off — enable it in phone settings', 5000);
 };
@@ -582,7 +670,7 @@ var browserWatch = null;
 function locate(){
   following = true;
   if (loc){ map.setView([loc.lat, loc.lng], Math.max(map.getZoom(), 16)); }
-  else toast('waiting for GPS… works best outside', 3500);
+  else showGpsSpinner();   // quiet corner spinner instead of a banner up top
   if (window.Bridge && Bridge.startLocation){ Bridge.startLocation(); }
   else if (navigator.geolocation && browserWatch === null){
     browserWatch = navigator.geolocation.watchPosition(function(p){
@@ -593,10 +681,16 @@ function locate(){
 
 /* ============ directions mode chooser ============ */
 var PROFILES = [
-  { id:'routed-car',  label:'drive' },
-  { id:'routed-foot', label:'walk'  },
-  { id:'routed-bike', label:'bike'  }
+  // id = OSRM profile (quick ETA in the chooser); costing = Valhalla costing
+  // (the full route + named turn-by-turn steps)
+  { id:'routed-car',  label:'drive', costing:'auto'       },
+  { id:'routed-foot', label:'walk',  costing:'pedestrian' },
+  { id:'routed-bike', label:'bike',  costing:'bicycle'    }
 ];
+/* transit (bus/metro/train) via Transitous MOTIS — handled separately from the
+   OSRM street profiles above. Listed last in the chooser, under bike. */
+var TRANSIT = { id:'transit', label:'transit', transit:true };
+function modeRows(){ return PROFILES.concat([TRANSIT]); }
 /* route origin: custom start point if picked, otherwise GPS */
 function origin(){ return fromPlace || loc; }
 function openModes(){
@@ -606,19 +700,27 @@ function openModes(){
   renderModes();
   openOverlay('modes');
   refreshChrome();
-  if (!origin()){ pendingModes = true; locate(); toast('waiting for GPS fix…', 3500); }
+  if (!origin()){ pendingModes = true; locate(); }   // spinner shows while we wait
   else fetchModeTimes();
 }
 function renderModes(){
-  var fromLabel = fromPlace ? fromPlace.name : 'my location';
+  var hasOrigin = !!origin();
+  // Only claim "my location" when we actually have a fix. With no location
+  // (not shared, or not acquired yet) the row becomes an explicit "select
+  // start" prompt and the travel modes can't be chosen until a start is set.
+  var fromText = fromPlace ? ('from: ' + esc(fromPlace.name))
+               : (loc ? 'from: my location' : 'select start');
   var html = '<div class="row' + (modeIdx===0?' sel':'') + '">'
-    + '<span class="rmain">from: ' + esc(fromLabel) + '</span>'
+    + '<span class="rmain">' + fromText + '</span>'
     + '<span class="chev">&#8250;</span></div>';
-  for (var i = 0; i < PROFILES.length; i++){
-    var p = PROFILES[i];
-    html += '<div class="row' + (i+1===modeIdx?' sel':'') + '">'
+  var rows = modeRows();
+  for (var i = 0; i < rows.length; i++){
+    var p = rows[i];
+    // no origin → no ETA to show yet (would just be a perpetual spinner dot)
+    var t = hasOrigin ? (modeTimes[p.id] || '…') : '';
+    html += '<div class="row' + (i+1===modeIdx?' sel':'') + (hasOrigin?'':' dim') + '">'
       + '<span class="rmain">' + p.label + '</span>'
-      + '<span class="time">' + (modeTimes[p.id] || '…') + '</span>'
+      + '<span class="time">' + t + '</span>'
       + '<span class="chev">&#8250;</span></div>';
   }
   $('modesbody').innerHTML = html;
@@ -636,9 +738,63 @@ function fetchModeTimes(){
       if (mode === M.MODES) renderModes();
     }).catch(function(){ modeTimes[p.id] = '—'; if (mode === M.MODES) renderModes(); });
   });
+  // transit ETA (best itinerary) — shows "—" when there's no transit nearby
+  fetch(transitPlanUrl(o, sel)).then(function(r){ return r.json(); }).then(function(js){
+    var it = bestTransitItinerary(js);
+    modeTimes['transit'] = it ? fmtDur(it.duration) : '—';
+    if (mode === M.MODES) renderModes();
+  }).catch(function(){ modeTimes['transit'] = '—'; if (mode === M.MODES) renderModes(); });
 }
 
-/* ============ routing (OSRM) ============ */
+/* ============ routing (Valhalla) ============ */
+/* We route with FOSSGIS's Valhalla (same provider as the OSRM ETAs above).
+   Unlike OSRM's foot profile — which walks along unnamed sidewalk ways and so
+   returns blank step names — Valhalla emits ready-made instructions WITH the
+   street name ("Turn right onto 9th Street Northwest"). */
+
+/* Google-encoded polyline decoder. Valhalla uses precision 6 (1e6). */
+function decodePolyline(str, precision){
+  if (!str) return [];
+  var factor = Math.pow(10, precision || 6);
+  var index = 0, lat = 0, lng = 0, coords = [], shift, result, b;
+  while (index < str.length){
+    shift = 0; result = 0;
+    do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    coords.push([lat / factor, lng / factor]);
+  }
+  return coords;
+}
+/* Valhalla maneuver.type → turn arrow */
+function valhallaGlyph(t){
+  switch (t){
+    case 4: case 5: case 6: return '◉';            // destination
+    case 9: case 18: case 20: case 23: return '↗'; // slight/ramp/exit/stay right
+    case 10: return '→';                            // right
+    case 11: return '↘';                            // sharp right
+    case 12: case 13: return '↩';                   // u-turn
+    case 14: return '↙';                            // sharp left
+    case 15: return '←';                            // left
+    case 16: case 19: case 21: case 24: return '↖'; // slight/ramp/exit/stay left
+    case 25: return '⤚';                            // merge
+    case 26: case 27: return '⟳';                   // roundabout
+    default: return '↑';                            // start/continue/straight/etc.
+  }
+}
+/* Valhalla instructions come as full sentences ending in a period
+   ("Turn left onto 7th Street NW."). Tidy them for our small-screen rows:
+   drop the trailing period, and strip the connector to an unnamed sidewalk
+   ("Turn right onto the walkway" → "Turn right") since "the walkway" is just
+   noise. Real street names (which Valhalla includes when it has them) stay. */
+function cleanInstruction(s){
+  s = (s || '').replace(/\s*\.\s*$/, '');
+  s = s.replace(/(?:\s+to stay)?\s+(?:on|onto|along)\s+the\s+(?:walkway|sidewalk|footpath|foot path)\b/i, '');
+  return s.trim();
+}
+
 var routeBusy = false;
 function doRoute(profile){
   var o = origin();
@@ -647,32 +803,46 @@ function doRoute(profile){
   // spinner under the drive/walk/bike rows while the route loads
   if (mode === M.MODES)
     $('modesbody').innerHTML += '<div class="spinwrap"><div class="spinner"></div></div>';
-  var url = 'https://routing.openstreetmap.de/' + profile.id + '/route/v1/driving/'
-    + o.lng + ',' + o.lat + ';' + sel.lng + ',' + sel.lat
-    + '?overview=full&geometries=geojson&steps=true';
+  var body = { locations: [ { lat:o.lat, lon:o.lng }, { lat:sel.lat, lon:sel.lng } ],
+               costing: profile.costing };   // units default to kilometres
+  var url = 'https://valhalla1.openstreetmap.de/route?json=' + encodeURIComponent(JSON.stringify(body));
   fetch(url).then(function(r){ return r.json(); }).then(function(js){
     routeBusy = false;
-    if (!js.routes || !js.routes.length){
+    var trip = js && js.trip;
+    var leg = trip && trip.legs && trip.legs[0];
+    if (!leg || !leg.maneuvers || !leg.maneuvers.length){
       toast('no route found');
       if (mode === M.MODES) renderModes();   // drop the spinner
       return;
     }
-    var r0 = js.routes[0];
     clearTimeout(toastTimer); $('toast').style.display = 'none';
     clearRoute(true);
-    var latlngs = r0.geometry.coordinates.map(function(c){ return [c[1], c[0]]; });
+    var latlngs = decodePolyline(leg.shape, 6);
     var casing = L.polyline(latlngs, { color:'#000', weight:7, opacity:0.5 }).addTo(map);
     var line = L.polyline(latlngs, { color:'#FAF594', weight:4 }).addTo(map);
     var steps = [];
-    (r0.legs[0].steps || []).forEach(function(s){
-      steps.push({ text: stepText(s), dist: s.distance, glyph: stepGlyph(s),
-        latlng: [s.maneuver.location[1], s.maneuver.location[0]] });
+    var domName = '', domLen = -1;   // the road we spend the most distance on → "via …"
+    leg.maneuvers.forEach(function(m){
+      steps.push({
+        text: cleanInstruction(m.instruction),
+        dist: (m.length || 0) * 1000,                 // km → metres
+        glyph: valhallaGlyph(m.type),
+        latlng: latlngs[m.begin_shape_index] || latlngs[0]
+      });
+      if (m.street_names && m.street_names.length && m.length > domLen){
+        domLen = m.length; domName = m.street_names[0];
+      }
     });
-    var via = r0.legs[0].summary ? 'via ' + r0.legs[0].summary : '';
+    // spell out the destination on the final "you have arrived" step
+    if (sel && steps.length){
+      steps[steps.length - 1].sub = sel.name + (sel.sub ? ' · ' + sel.sub : '');
+    }
+    var summary = trip.summary || leg.summary || { time:0, length:0 };
+    var via = domName ? 'via ' + domName : '';
     if (fromPlace) via = 'from ' + fromPlace.name + (via ? ' · ' + via : '');
     route = {
       line:line, casing:casing, steps:steps, profile:profile,
-      summaryText: fmtDur(r0.duration) + ' (' + fmtDist(r0.distance) + ') ' + profile.label,
+      summaryText: fmtDur(summary.time) + ' (' + fmtDist((summary.length || 0) * 1000) + ') ' + profile.label,
       via: via
     };
     closeOverlays();
@@ -685,42 +855,176 @@ function doRoute(profile){
     if (mode === M.MODES) renderModes();   // drop the spinner
   });
 }
-function stepGlyph(s){
-  var t = s.maneuver.type, m = s.maneuver.modifier || '';
-  if (t === 'arrive') return '◉';
-  if (t === 'roundabout' || t === 'rotary') return '⟳';
-  if (m.indexOf('uturn') >= 0) return '↩';
-  if (m === 'left') return '←';
-  if (m === 'right') return '→';
-  if (m === 'slight left') return '↖';
-  if (m === 'slight right') return '↗';
-  if (m === 'sharp left') return '↙';
-  if (m === 'sharp right') return '↘';
-  return '↑';
-}
-function stepText(s){
-  var m = s.maneuver, road = s.name ? ' onto ' + s.name : '';
-  var dir = m.modifier || '';
-  var t = m.type;
-  if (t === 'depart') return 'Head' + (road ? ' toward' + road.slice(5) : ' out');
-  if (t === 'arrive') return 'Arrive at destination';
-  if (t === 'turn' || t === 'end of road' || t === 'fork') return 'Turn ' + dir + road;
-  if (t === 'continue' || t === 'new name') return 'Continue' + road;
-  if (t === 'merge') return 'Merge ' + dir + road;
-  if (t === 'on ramp') return 'Take ramp ' + dir + road;
-  if (t === 'off ramp') return 'Take exit ' + dir + road;
-  if (t === 'roundabout' || t === 'rotary')
-    return 'Roundabout, exit ' + (m.exit || '') + road;
-  return (t.charAt(0).toUpperCase()+t.slice(1)) + ' ' + dir + road;
-}
 function clearRoute(keepSel){
   if (route){
-    map.removeLayer(route.line); map.removeLayer(route.casing); route = null;
+    if (route.line)   map.removeLayer(route.line);
+    if (route.casing) map.removeLayer(route.casing);
+    route = null;
     setNavNotification(false);
     fromPlace = null;          // ended route -> next one starts from me
   }
   if (!keepSel) clearSelection();
   refreshChrome();
+}
+
+/* ============ transit (Transitous / MOTIS) ============ */
+/* api.transitous.org is a free, community-run multimodal transit router built
+   on open GTFS data + OpenStreetMap. We send the polite User-Agent set on the
+   WebView and attribute the data in the info screen, per their usage policy. */
+function transitPlanUrl(o, dest){
+  return 'https://api.transitous.org/api/v2/plan'
+    + '?fromPlace=' + o.lat + ',' + o.lng
+    + '&toPlace=' + dest.lat + ',' + dest.lng
+    + '&numItineraries=3';
+}
+function isTransitLeg(l){
+  var m = l.mode || '';
+  return m !== 'WALK' && m !== 'BIKE' && m !== 'CAR' && m !== 'ODM' && m !== 'BIKE_RENTAL';
+}
+/* pick the quickest itinerary that actually uses transit (MOTIS returns
+   walk-only options in a separate `direct` array, which we ignore here) */
+function bestTransitItinerary(js){
+  var list = (js && js.itineraries) || [];
+  var withTransit = list.filter(function(it){ return (it.legs||[]).some(isTransitLeg); });
+  if (!withTransit.length) return null;
+  withTransit.sort(function(a,b){ return a.duration - b.duration; });
+  return withTransit[0];
+}
+/* a small mode icon for the steps/nav glyph slot — clearer and far less
+   cramped than stuffing the route number ("D4X") in there. The route number
+   still appears in the step text ("Take D4X bus toward …"). */
+function transitGlyph(m){
+  switch (m){
+    case 'BUS': case 'COACH': return '🚌';
+    case 'SUBWAY': case 'METRO': case 'METRO_RAIL': return '🚇';
+    case 'TRAM': case 'CABLE_CAR': case 'FUNICULAR': return '🚋';
+    case 'FERRY': return '⛴';
+    case 'AIRPLANE': return '✈';
+    case 'RAIL': case 'REGIONAL_RAIL': case 'REGIONAL_FAST_RAIL':
+    case 'LONG_DISTANCE': case 'HIGHSPEED_RAIL': case 'NIGHT_RAIL': return '🚆';
+    default: return '🚍';
+  }
+}
+function modeWord(m){
+  switch (m){
+    case 'BUS': return 'bus';
+    case 'COACH': return 'coach';
+    case 'SUBWAY': case 'METRO': return 'metro';
+    case 'TRAM': case 'CABLE_CAR': case 'FUNICULAR': return 'tram';
+    case 'FERRY': return 'ferry';
+    case 'RAIL': case 'REGIONAL_RAIL': case 'REGIONAL_FAST_RAIL':
+    case 'LONG_DISTANCE': case 'HIGHSPEED_RAIL': case 'NIGHT_RAIL':
+    case 'METRO_RAIL': return 'train';
+    default: return (m || 'transit').toLowerCase().replace(/_/g,' ');
+  }
+}
+/* straight segments through each leg's stops — robust and good enough for the
+   overview (no need to decode/guess the encoded-polyline precision) */
+function legPoints(l){
+  var pts = [];
+  if (l.from && l.from.lat != null) pts.push([l.from.lat, l.from.lon]);
+  (l.intermediateStops || []).forEach(function(s){
+    if (s.lat != null) pts.push([s.lat, s.lon]);
+  });
+  if (l.to && l.to.lat != null) pts.push([l.to.lat, l.to.lon]);
+  return pts;
+}
+function buildTransitRoute(it, profile){
+  var group = L.featureGroup();        // yellow lines (transit) + dashed walks
+  var casing = L.featureGroup();       // black casing under transit lines
+  var steps = [];
+  var legs = it.legs || [];
+  legs.forEach(function(l){
+    var pts = legPoints(l);
+    if (pts.length > 1){
+      if (isTransitLeg(l)){
+        L.polyline(pts, { color:'#000', weight:7, opacity:0.5 }).addTo(casing);
+        L.polyline(pts, { color:'#FAF594', weight:4 }).addTo(group);
+      } else {
+        L.polyline(pts, { color:'#FAF594', weight:3, opacity:0.9, dashArray:'3,6' }).addTo(group);
+      }
+    }
+    var toName = (l.to && l.to.name) || 'destination';
+    if (isTransitLeg(l)){
+      var word = modeWord(l.mode);
+      var line = l.routeShortName || l.routeLongName || word;
+      var nStops = (l.intermediateStops ? l.intermediateStops.length : 0) + 1;
+      steps.push({
+        glyph: transitGlyph(l.mode),
+        text: 'Take ' + line + ' ' + word + (l.headsign ? ' toward ' + l.headsign : ''),
+        sub: 'from ' + ((l.from && l.from.name) || 'stop') + ' · '
+           + nStops + ' stop' + (nStops > 1 ? 's' : '') + ' · off at ' + toName,
+        latlng: (l.from && l.from.lat != null) ? [l.from.lat, l.from.lon] : null
+      });
+    } else {
+      steps.push({
+        glyph: '🚶',
+        text: 'Walk to ' + toName,
+        dist: l.distance || 0,
+        latlng: (l.to && l.to.lat != null) ? [l.to.lat, l.to.lon] : null
+      });
+    }
+  });
+  var last = legs[legs.length - 1];
+  var destLL = (last && last.to && last.to.lat != null) ? [last.to.lat, last.to.lon]
+             : (sel ? [sel.lat, sel.lng] : null);
+  steps.push({ glyph:'◉', text:'Arrive at ' + (sel ? sel.name : 'destination'),
+               sub: (sel && sel.sub) ? sel.sub : '', latlng: destLL });
+
+  group.addTo(map); casing.addTo(map);
+  var ridden = legs.filter(isTransitLeg).map(function(l){
+    return l.routeShortName || modeWord(l.mode);
+  });
+  var transfers = (it.transfers != null) ? it.transfers : Math.max(0, ridden.length - 1);
+  var via = ridden.length ? 'via ' + ridden.join(' → ') : 'walking';
+  if (fromPlace) via = 'from ' + fromPlace.name + ' · ' + via;
+  route = {
+    line: group, casing: casing, steps: steps, profile: profile, transit: true,
+    bounds: group.getBounds(),
+    summaryText: fmtDur(it.duration) + ' transit'
+      + (transfers ? ' · ' + transfers + ' transfer' + (transfers > 1 ? 's' : '') : ''),
+    via: via
+  };
+}
+function doTransitRoute(profile){
+  var o = origin();
+  if (!sel || !o || routeBusy) return;
+  routeBusy = true;
+  if (mode === M.MODES)
+    $('modesbody').innerHTML += '<div class="spinwrap"><div class="spinner"></div></div>';
+  fetch(transitPlanUrl(o, sel)).then(function(r){ return r.json(); }).then(function(js){
+    routeBusy = false;
+    var it = bestTransitItinerary(js);
+    if (!it){
+      toast('no transit route found');
+      if (mode === M.MODES) renderModes();   // drop the spinner
+      return;
+    }
+    clearTimeout(toastTimer); $('toast').style.display = 'none';
+    clearRoute(true);
+    buildTransitRoute(it, profile);
+    closeOverlays();
+    if (route.bounds && route.bounds.isValid()) map.fitBounds(route.bounds, { padding:[20,20] });
+    following = false;
+    refreshChrome();
+  }).catch(function(){
+    routeBusy = false;
+    toast('transit routing failed (network?)');
+    if (mode === M.MODES) renderModes();   // drop the spinner
+  });
+}
+
+/* Back from a computed route → return to the commute-type chooser (not the
+   place card). Removes the drawn route but keeps the destination and any
+   custom start point so the chooser comes back exactly as it was. */
+function backToModes(){
+  if (route){
+    if (route.line)   map.removeLayer(route.line);
+    if (route.casing) map.removeLayer(route.casing);
+    route = null;
+    setNavNotification(false);
+  }
+  openModes();
 }
 
 /* ============ step list ============ */
@@ -738,10 +1042,11 @@ function renderSteps(){
   var html = '<div class="row"><span class="glyph">◎</span><span class="rmain">Your location</span></div>';
   for (var i = 0; i < route.steps.length; i++){
     var s = route.steps[i];
+    var subText = s.sub ? s.sub : (s.dist > 1 ? fmtDist(s.dist) : '');
     html += '<div class="row' + (i===stepIdx?' sel':'') + '" id="st'+i+'">'
-      + '<span class="glyph">' + s.glyph + '</span>'
+      + '<span class="glyph">' + esc(s.glyph) + '</span>'
       + '<span class="rmain">' + esc(s.text)
-      + (s.dist > 1 ? '<span class="sub">' + fmtDist(s.dist) + '</span>' : '')
+      + (subText ? '<span class="sub">' + esc(subText) + '</span>' : '')
       + '</span></div>';
   }
   $('stepsbody').innerHTML = html;
@@ -765,9 +1070,10 @@ function showNavStep(){
   var s = route.steps[navIdx];
   $('navglyph').textContent = s.glyph;
   $('navtext').textContent = s.text;
-  $('navdist').textContent = (s.dist > 1 ? fmtDist(s.dist) : '')
-    + '  ·  ' + (navIdx+1) + '/' + route.steps.length;
-  map.setView(s.latlng, Math.max(map.getZoom(), 16));
+  var detail = s.sub ? s.sub : (s.dist > 1 ? fmtDist(s.dist) : '');
+  $('navdist').textContent = (detail ? detail + '  ·  ' : '')
+    + (navIdx+1) + '/' + route.steps.length;
+  if (s.latlng) map.setView(s.latlng, Math.max(map.getZoom(), 16));
   refreshChrome();
 }
 function navStep(d){
@@ -822,12 +1128,16 @@ function handleKey(name, isRepeat){
     return true;
   }
   if (mode === M.MODES){
-    if (name==='ArrowDown'){ modeIdx = Math.min(PROFILES.length, modeIdx+1); renderModes(); return true; }
+    if (name==='ArrowDown'){ modeIdx = Math.min(modeRows().length, modeIdx+1); renderModes(); return true; }
     if (name==='ArrowUp'){ modeIdx = Math.max(0, modeIdx-1); renderModes(); return true; }
     if (name==='Enter'){ if(!isRepeat && gate('ok')){
         if (modeIdx === 0) openSearch('start');                  // pick start point
-        else if (!origin()){ toast('still waiting for GPS…'); }
-        else doRoute(PROFILES[modeIdx-1]);
+        else if (!origin()){ openSearch('start'); }              // no location → must pick a start first
+        else {
+          var p = modeRows()[modeIdx-1];
+          if (p.transit) doTransitRoute(p);
+          else doRoute(p);
+        }
       } return true; }
     if (name==='Back' || name==='SoftRight'){ if(!isRepeat) closeOverlays(); return true; }
     return true;
@@ -872,7 +1182,13 @@ function handleKey(name, isRepeat){
       case '3': case '#': map.zoomIn(); zoomHint(); return true;
       case '5': if (!isRepeat) locate(); return true;
       case 'SoftLeft':  if (!isRepeat) navStep(-1); return true;
-      case 'SoftRight': if (!isRepeat) navStep(1); return true;
+      case 'SoftRight':
+        if (!isRepeat){
+          // "next" advances; on the last step it becomes "end" → leave nav
+          if (navIdx >= route.steps.length - 1) exitNav();
+          else navStep(1);
+        }
+        return true;
       case 'Enter': if (!isRepeat && gate('ok')) locate(); return true;
       case 'Back': if (!isRepeat) exitNav(); return true;
     }
@@ -881,12 +1197,12 @@ function handleKey(name, isRepeat){
 
   /* ---- map mode ---- */
   switch (name){
-    case 'ArrowUp':    map.panBy([0,-PAN]); return true;
-    case 'ArrowDown':  map.panBy([0, PAN]); return true;
-    case 'ArrowLeft':  map.panBy([-PAN,0]); return true;
-    case 'ArrowRight': map.panBy([ PAN,0]); return true;
-    case '1': case '*': map.zoomOut(); zoomHint(); return true;
-    case '3': case '#': map.zoomIn(); zoomHint(); return true;
+    case 'ArrowUp':    userMovedMap = true; map.panBy([0,-PAN]); return true;
+    case 'ArrowDown':  userMovedMap = true; map.panBy([0, PAN]); return true;
+    case 'ArrowLeft':  userMovedMap = true; map.panBy([-PAN,0]); return true;
+    case 'ArrowRight': userMovedMap = true; map.panBy([ PAN,0]); return true;
+    case '1': case '*': userMovedMap = true; map.zoomOut(); zoomHint(); return true;
+    case '3': case '#': userMovedMap = true; map.zoomIn(); zoomHint(); return true;
     case '5': if (!isRepeat) locate(); return true;
     case 'SoftLeft':
       if (isRepeat) return true;
@@ -902,14 +1218,23 @@ function handleKey(name, isRepeat){
       return true;
     case 'SoftRight':
       if (isRepeat) return true;
-      if (route) clearRoute(true);
-      else if (sel){ clearSelection(); refreshChrome(); }
+      if (route) backToModes();   // route → back to the commute-type chooser
+      else if (sel){
+        // match the hardware Back key: a place picked from search goes back to
+        // the results, not the bare map
+        if (selFromSearch){ clearSelection(); reopenSearch(); }
+        else { clearSelection(); refreshChrome(); }
+      }
       else openHelp();
       return true;
     case 'Back':
       if (isRepeat) return true;
-      if (route){ clearRoute(true); return true; }
-      if (sel){ clearSelection(); refreshChrome(); return true; }
+      if (route){ backToModes(); return true; }   // route → commute-type chooser
+      if (sel){
+        // a place picked from search → go back to the results, not the map
+        if (selFromSearch){ clearSelection(); reopenSearch(); return true; }
+        clearSelection(); refreshChrome(); return true;
+      }
       if (window.Bridge && Bridge.exitApp){ Bridge.exitApp(); return true; }
       return false;
   }
