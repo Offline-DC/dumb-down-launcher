@@ -242,7 +242,10 @@ the launcher picks them up through the `:gmessages` composite build.
 - **Surfaced in-app:** if refresh can't recover it, `SessionEvent.AuthExpired`
   sets `GoogleMessagesMessageRepository.authExpired`, and `GoogleMessagesApp`
   swaps the chat for `GoogleMessagesReconnectScreen` (a DPAD "Re-link phone"
-  button → teardown → QR). Failed sends now show a **red bold "!"**.
+  button → teardown → QR). Failed sends now show a **red bold "!"**. The
+  screen is now **reason-aware** (`AuthFailureReason`) and explains the cookie
+  case specifically — see "Cookie longevity — on-device `__Secure-1PSIDTS`
+  rotation" below.
 - Contacts already fall back to local device contacts; the GM contact RPC is
   enrichment that needs a live session.
 
@@ -315,6 +318,11 @@ A thorough security / performance / UI audit drove these changes:
   periodically; `token refresh: no token in response` / `long-poll fatal` means
   RegisterRefresh itself is failing (token too old, or a signing/endpoint issue)
   — that's the next thing to dig into.
+- **UPDATE (June 2026):** a field logcat pinned this down — `RegisterRefresh`
+  was returning `401 SESSION_COOKIE_INVALID` because the rotating
+  `__Secure-1PSIDTS` cookie went stale (the relay never refreshes it). Addressed
+  by on-device cookie rotation; see "Cookie longevity — on-device
+  `__Secure-1PSIDTS` rotation (June 2026)" below.
 
 ## Cookie sign-in reliability (June 2026)
 
@@ -336,6 +344,79 @@ The companion→flip-phone cookie transfer was reworked for reliability. Summary
   `WAIT_FOREVER` + `cancel()` changes are in the `matrix-app` `:gmessages` repo;
   the launcher doesn't call `cancel()` yet (cross-repo build skew) — re-add once
   the repos are in sync.
+
+## Cookie longevity — on-device `__Secure-1PSIDTS` rotation (June 2026)
+
+> **Status:** implemented in `matrix-app` `:gmessages`, **not yet built /
+> validated on device** (needs the reverse-engineered RotateCookies call
+> confirmed against a live session). This is the fix for the field reports of
+> being logged out after ~1–2h.
+
+**Root cause (from a field logcat).** A tester was kicked out at **2h04m**.
+The logs showed the tachyon token was healthy (~21h to expiry — the proactive
+refresh never even fired); the link died because `RegisterRefresh` returned
+`401 SESSION_COOKIE_INVALID`. The smoking gun: `__Secure-1PSIDTS` never appears
+anywhere in the logs. The Messaging relay endpoints only ever hand back
+`SIDCC` / `__Secure-1PSIDCC` / `__Secure-3PSIDCC` via `Set-Cookie` — **never**
+the rotating session cookie `__Secure-1PSIDTS`. Google rotates that cookie
+~every 30 min and **only one holder of the login may rotate it**, so once the
+user's browser (or a still-open incognito sign-in window) rotated it, the
+phone's saved copy went stale and Google invalidated the session at the next
+hard auth check (the long-poll's `RegisterRefresh`). Our prior assumption that
+"cookies self-refresh from `Set-Cookie` on responses" holds for `SIDCC` but
+**not** for `1PSIDTS`.
+
+**Fix — rotate the cookie on-device, like a browser does.** New
+`GMCookieRotator` (`:gmessages`) performs the two-step flow Google's web client
+uses: `GET …/RotateCookiesPage` → scrape the `init('<value>')` seed →
+`POST …/RotateCookies` body `[og_pid, "<value>"]` → read the fresh
+`__Secure-1PSIDTS` (+ `3PSIDTS`) back from `Set-Cookie`. Wired into
+`GoogleMessagesSessionClient`:
+
+- **Proactive:** `rotateLoop()` remints every ~20 min (comfortably under the
+  ~30 min rotation window), GAIA mode only, started in `connect()`.
+- **Reactive:** `refreshToken()` now detects `SESSION_COOKIE_INVALID`
+  specifically, rotates, and retries `RegisterRefresh` **once** before giving
+  up; `reauth()` (the in-app "Re-link") rotates first too.
+- Rotated values are merged into the live cookie map and persisted
+  (`store.saveCookies`) so the rotation survives process death.
+
+The endpoint is **reverse-engineered and undocumented** (shape from the
+Bard/Gemini web client's `1PSIDTS` refresh). It's heavily logged under tag
+**`GMRotate`** and marked NEEDS ON-DEVICE VALIDATION in the source. Two known
+caveats: (1) rotation needs a valid `__Secure-1PSID` / `1PSIDTS` to bootstrap —
+if the capture never transferred one, the fix is upstream in the harvest, not
+here; (2) rotation makes the phone a *competing* holder, so if the user stays
+signed into the **same** session in their everyday browser the two will fight —
+the link stays durable only when the phone is the **sole** holder (sign in via
+a throwaway incognito window and **close it**, the flow the re-link screen now
+steers users to). The ~2-week Google session ceiling is **not** bypassed by
+this (re-login needs the user + emoji match by design).
+
+**Reason-aware re-link screen.** `SessionEvent.AuthExpired` now carries an
+`AuthFailureReason` (`COOKIE_INVALID` vs `TOKEN_DEAD`), threaded through
+`GoogleMessagesMessageRepository` → `GoogleMessagesApp` →
+`GoogleMessagesReconnectScreen`. The cookie case now reads *"Signed out of
+Google — another browser took over the session… sign in with a private/
+incognito window and close it right after"* instead of the generic "link
+expired".
+
+**Pairing diagnostic.** `GoogleMessagesAccountStore.saveCookies()` logs the
+saved cookie **names only** (no values, tag **`GMCookies`**) on every save, so
+the next test definitively shows whether `__Secure-1PSIDTS` actually lands on
+the phone at pairing — e.g. `saved 15 cookies: […] (has __Secure-1PSIDTS=false)`.
+
+**Validate with:**
+```
+adb logcat -s GMCookies:I GMRotate:V GMSession:*
+# at sign-in: GMCookies "saved N cookies … (has __Secure-1PSIDTS=…)"
+# ~1 min after connect, then every ~20 min: GMRotate "rotate OK — refreshed __Secure-1PSIDTS, …"
+# success = session survives well past the old ~2h cliff (ideally overnight)
+```
+If `has __Secure-1PSIDTS=false` at pairing → fix the harvest/transfer first.
+If `GMRotate` logs `no init value in RotateCookiesPage` or `RotateCookies HTTP
+4xx` → the wire shape changed; re-capture a real Chrome RotateCookies request
+(most likely the `OG_PID`, `0` for a single-account jar, or the page regex).
 
 ## Test commands
 

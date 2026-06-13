@@ -83,8 +83,19 @@ Identical envelopes/encryption to the QR path, with 4 mode differences when
 ### Longevity (the actual fix)
 Same tachyon token type, but `RegisterRefresh` (clients6 host, ECDSA-signed with
 RefreshKey) is sent WITH cookies + SAPISIDHASH under `GDitto`, so Google keeps
-re-issuing tokens while the cookies are valid. Refresh ~1h before expiry; cookies
-self-refresh from `Set-Cookie` on responses.
+re-issuing tokens while the cookies are valid. Refresh ~1h before expiry.
+
+> **CORRECTION (June 2026, from a field logcat):** "cookies self-refresh from
+> `Set-Cookie` on responses" is only true for the short-lived `SIDCC` /
+> `__Secure-*PSIDCC` cookies. The Messaging relay endpoints **never** re-issue
+> the rotating session cookie `__Secure-1PSIDTS` via `Set-Cookie`, so it goes
+> stale ~30 min after another holder (the user's browser) rotates it, and
+> `RegisterRefresh` then 401s with `SESSION_COOKIE_INVALID` (observed at 2h04m).
+> The real durable fix is to rotate `__Secure-1PSIDTS` **on-device** via
+> `accounts.google.com/RotateCookies` (`GMCookieRotator` in `:gmessages`); see
+> `GMESSAGES_STATUS.md` → "Cookie longevity — on-device `__Secure-1PSIDTS`
+> rotation". Cookie durability still requires the phone to be the **sole** holder
+> of the login (incognito-and-close).
 
 ## Phased build plan
 
