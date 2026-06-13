@@ -55,9 +55,9 @@ class BetaUpdateReminderWorker(
         }
 
         return try {
-            // includePrereleases=true is the whole point of beta tester mode:
-            // surface prerelease builds the same way stable releases get surfaced.
-            val latest = UpdateChecker.fetchLatest(includePrereleases = true)
+            // betaChannel=true is the whole point of beta tester mode: surface
+            // prerelease builds only, sandboxed away from the stable channel.
+            val latest = UpdateChecker.fetchLatest(betaChannel = true)
             val launcherInfo = latest["dumb-down-launcher"]
 
             if (launcherInfo != null && launcherInfo.versionCode > BuildConfig.VERSION_CODE) {
