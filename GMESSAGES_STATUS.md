@@ -347,10 +347,13 @@ The companion→flip-phone cookie transfer was reworked for reliability. Summary
 
 ## Cookie longevity — on-device `__Secure-1PSIDTS` rotation (June 2026)
 
-> **Status:** implemented in `matrix-app` `:gmessages`, **not yet built /
-> validated on device** (needs the reverse-engineered RotateCookies call
-> confirmed against a live session). This is the fix for the field reports of
-> being logged out after ~1–2h.
+> **Status:** `GMCookieRotator` is now **implemented + committed** in
+> `matrix-app` `:gmessages` (`GMCookieRotator.kt`, wired into
+> `GoogleMessagesSessionClient`), with unit tests for the seed/payload/Set-Cookie
+> parsing. Still **not yet validated on a live device** — the RotateCookies wire
+> shape is reverse-engineered and undocumented, so the HTTP round-trip needs
+> confirming against a real session (watch tag `GMRotate`). This is the fix for
+> the field reports of being logged out after ~1–2h.
 
 **Root cause (from a field logcat).** A tester was kicked out at **2h04m**.
 The logs showed the tachyon token was healthy (~21h to expiry — the proactive
