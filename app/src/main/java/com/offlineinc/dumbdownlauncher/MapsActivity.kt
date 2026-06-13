@@ -17,6 +17,8 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import com.offlineinc.dumbdownlauncher.quack.NetworkLocationFetcher
+import com.offlineinc.dumbdownlauncher.quack.QuackLocationStore
 
 /**
  * dumb map (beta) — D-pad maps app (Leaflet + OSM/CARTO tiles, Nominatim
@@ -30,9 +32,12 @@ class MapsActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var lm: LocationManager
     private var locationStarted = false
+    private var pageReady = false
+    @Volatile private var beaconInFlight = false
 
     private val listener = object : LocationListener {
-        override fun onLocationChanged(l: Location) = pushLocation(l)
+        // live updates from the providers are always current → treat as fresh
+        override fun onLocationChanged(l: Location) = pushLocation(l, fresh = true)
         override fun onProviderEnabled(p: String) {}
         override fun onProviderDisabled(p: String) {}
         @Deprecated("Deprecated in Java")
@@ -52,7 +57,17 @@ class MapsActivity : AppCompatActivity() {
             // identify politely to the OSM-ecosystem servers
             userAgentString = "DumbMap/1.0 (TCL Flip 2; +jack@offline.community) $userAgentString"
         }
-        web.webViewClient = WebViewClient()
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                // The JS bridge functions don't exist until the page is loaded,
+                // so any fix pushed during onCreate is silently dropped. Once the
+                // page is ready, seed it with the cached general-area location
+                // (for centring + search bias, no dot) and re-push last-known.
+                pageReady = true
+                pushCachedApprox()
+                if (locationStarted) pushLastKnown()
+            }
+        }
         web.addJavascriptInterface(Bridge(), "Bridge")
         web.setBackgroundColor(0xFF000000.toInt())
         setContentView(web)
@@ -66,6 +81,11 @@ class MapsActivity : AppCompatActivity() {
         web.loadUrl("file:///android_asset/map/index.html")
 
         lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        // Mirror quack/weather: kick off the one-shot BeaconDB lookup on *every*
+        // launch (not only when the permission is first granted) so a returning
+        // user who already said yes gets a fresh general-area fix right away.
+        // Only needs coarse permission, so it fires even when GPS isn't granted.
+        startBeaconFix()
         if (hasLocationPermission()) startLocationUpdates()
         else requestPermissions(arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -76,8 +96,16 @@ class MapsActivity : AppCompatActivity() {
         checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** BeaconDB only needs coarse location (Wi-Fi/cell scan), like quack/weather. */
+    private fun hasAnyLocationPermission() =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+        checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, perms, grants)
+        // on "yes": fire the one-shot beacon (coarse is enough) and, if GPS was
+        // granted, start the live providers too
+        startBeaconFix()
         if (hasLocationPermission()) startLocationUpdates()
     }
 
@@ -101,14 +129,68 @@ class MapsActivity : AppCompatActivity() {
                     try { lm.requestLocationUpdates(p, 1000L, 0f, listener) } catch (_: Exception) {}
                 }
             }
-            for (p in lm.allProviders) {
-                try { lm.getLastKnownLocation(p)?.let { pushLocation(it) } } catch (_: Exception) {}
-            }
+            pushLastKnown()
         } catch (_: Exception) {}
     }
 
+    /** Push the best cached fix from the providers. A recent fix becomes the
+     *  blue-dot location; a stale one is only used to centre the map / bias
+     *  search (so we never show a stale dot when returning to the app). */
+    @Suppress("MissingPermission")
+    private fun pushLastKnown() {
+        var best: Location? = null
+        for (p in lm.allProviders) {
+            try {
+                val l = lm.getLastKnownLocation(p) ?: continue
+                if (best == null || l.time > best!!.time) best = l
+            } catch (_: Exception) {}
+        }
+        best?.let { pushLocation(it, fresh = isRecent(it)) }
+    }
+
+    /** A one-shot BeaconDB lookup, mirroring how quack/weather fetch on open.
+     *  Delivers a fresh coarse fix (so it's allowed to show the dot) and
+     *  persists it to the shared store so the next open can centre instantly.
+     *  Fired on every launch/open and on permission grant; the in-flight guard
+     *  just prevents overlapping scans. Needs only coarse permission. */
+    private fun startBeaconFix() {
+        if (beaconInFlight || !hasAnyLocationPermission()) return
+        beaconInFlight = true
+        Thread({
+            try {
+                val fix = NetworkLocationFetcher.fetch(this) ?: return@Thread
+                QuackLocationStore.save(this, fix.lat, fix.lng)
+                runOnUiThread {
+                    web.evaluateJavascript(
+                        "window.__onLocation && __onLocation(${fix.lat},${fix.lng},${fix.accuracyMeters})", null)
+                }
+            } catch (_: Exception) {
+            } finally {
+                beaconInFlight = false
+            }
+        }, "DumbMap-BeaconDB").start()
+    }
+
+    /** Seed the page with the shared persisted location (the same cache quack
+     *  and weather read) so the map opens on the user's general area before any
+     *  live fix arrives. Centres + biases search only — never shows the dot. */
+    private fun pushCachedApprox() {
+        if (!pageReady) return
+        val p = QuackLocationStore.loadIfUsable(this) ?: return
+        web.evaluateJavascript(
+            "window.__onApproxLocation && __onApproxLocation(${p.first},${p.second})", null)
+    }
+
+    private fun isRecent(l: Location) =
+        System.currentTimeMillis() - l.time <= RECENT_FIX_MAX_AGE_MS
+
     override fun onResume() {
         super.onResume()
+        // let the page drop a now-stale dot before we re-request fixes, so a
+        // returning user never sees an out-of-date location
+        if (pageReady) web.evaluateJavascript("window.__onResume && __onResume()", null)
+        // re-fetch a fresh BeaconDB fix on every open, the way quack/weather do
+        startBeaconFix()
         if (locationStarted) startLocationUpdates()
     }
 
@@ -117,9 +199,13 @@ class MapsActivity : AppCompatActivity() {
         try { lm.removeUpdates(listener) } catch (_: Exception) {}  // save battery while away
     }
 
-    private fun pushLocation(l: Location) = runOnUiThread {
-        web.evaluateJavascript(
-            "window.__onLocation && __onLocation(${l.latitude},${l.longitude},${l.accuracy})", null)
+    /** A fresh fix drives the location dot; a stale one only re-centres the map
+     *  and biases search (via __onApproxLocation), so the dot is never stale. */
+    private fun pushLocation(l: Location, fresh: Boolean) = runOnUiThread {
+        val fn = if (fresh) "__onLocation" else "__onApproxLocation"
+        val args = if (fresh) "${l.latitude},${l.longitude},${l.accuracy}"
+                   else "${l.latitude},${l.longitude}"
+        web.evaluateJavascript("window.$fn && $fn($args)", null)
     }
 
     private fun js(name: String, repeat: Boolean) {
@@ -196,5 +282,8 @@ class MapsActivity : AppCompatActivity() {
 
     companion object {
         private const val NAV_NOTIF_ID = 4242
+        /** A fix older than this isn't shown as the live dot (only used to
+         *  centre/bias search) so returning to the app never shows a stale dot. */
+        private const val RECENT_FIX_MAX_AGE_MS = 2 * 60 * 1000L  // 2 minutes
     }
 }
