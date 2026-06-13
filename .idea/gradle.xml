@@ -4,6 +4,30 @@
   <component name="GradleSettings">
     <option name="linkedExternalProjectsSettings">
       <GradleProjectSettings>
+        <compositeConfiguration>
+          <compositeBuild compositeDefinitionSource="SCRIPT">
+            <builds>
+              <build path="$PROJECT_DIR$/../matrix-app/dpad-messenger" name="dpad-messenger">
+                <projects>
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger/demo" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger/library" />
+                </projects>
+              </build>
+              <build path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend" name="dpad-messenger-backend">
+                <projects>
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/app" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/conduit" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/core" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/gmessages" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/matrix" />
+                  <project path="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/signal" />
+                </projects>
+              </build>
+            </builds>
+          </compositeBuild>
+        </compositeConfiguration>
         <option name="testRunner" value="CHOOSE_PER_TEST" />
         <option name="externalProjectPath" value="$PROJECT_DIR$" />
         <option name="gradleJvm" value="#GRADLE_LOCAL_JAVA_HOME" />
@@ -11,6 +35,16 @@
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/app" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/conduit" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/core" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/gmessages" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/matrix" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger-backend/signal" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger/demo" />
+            <option value="$PROJECT_DIR$/../matrix-app/dpad-messenger/library" />
           </set>
         </option>
       </GradleProjectSettings>
