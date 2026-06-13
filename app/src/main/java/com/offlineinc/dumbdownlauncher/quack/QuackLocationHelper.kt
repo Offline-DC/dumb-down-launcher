@@ -7,9 +7,13 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import androidx.annotation.RequiresApi
+import com.offlineinc.dumbdownlauncher.diagnostics.DiagBreadcrumbs
 
 /**
  * Gets a single location fix, with a layered fallback strategy designed for
@@ -44,8 +48,15 @@ class QuackLocationHelper(
 
     companion object {
         private const val TAG = "QuackLocation"
+        // Passive provider only: it piggybacks on other apps' fixes and never
+        // powers the GPS chip itself, so an unthrottled stream costs nothing.
         private const val MIN_TIME_MS = 0L
         private const val MIN_DIST_M  = 0f
+        // Legacy (API < 30) live-update fallback throttle. Never run GPS at its
+        // 1 Hz maximum (MIN_TIME_MS = 0) just to wait for a first fix — that's
+        // the worst-case power profile and what pinned GPS on for hours.
+        private const val GPS_FALLBACK_MIN_TIME_MS = 30_000L
+        private const val GPS_FALLBACK_MIN_DIST_M  = 0f
         // For a 25-mile feed radius, 30-min system cache is accurate enough
         private const val SYSTEM_CACHE_MAX_AGE_MS = 30 * 60 * 1000L
         /** Deliver a stale system cache early so the UI isn't stuck waiting. */
@@ -60,6 +71,44 @@ class QuackLocationHelper(
     private val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private val handler = Handler(Looper.getMainLooper())
     private var delivered = false
+
+    /**
+     * Cancels the in-flight single-shot [LocationManager.getCurrentLocation]
+     * request. A null signal (the old behaviour) left that request running —
+     * keeping the GPS engine warm until the platform's own, possibly long,
+     * MediaTek-internal timeout — even after [cleanup] thought it had torn
+     * everything down. We hold one and cancel it in [cleanup] so the hard
+     * timeout actually stops GPS. A single-use helper, so one signal is fine.
+     */
+    private val gpsCancellationSignal = CancellationSignal()
+
+    // ── Diagnostics breadcrumb state ─────────────────────────────────────
+    // Lets a battery capture see how this request resolved — in particular
+    // whether it fell through to the expensive GPS path. No-op unless
+    // diagnostics is actively collecting.
+    private var startMs: Long = SystemClock.elapsedRealtime()
+    @Volatile private var fellBackToGps = false
+    @Volatile private var resultRecorded = false
+
+    /**
+     * Emit the terminal `quack_location_result` breadcrumb exactly once per
+     * request. [source] is where the delivered fix came from (provider name,
+     * or a cache tag); "none" on error.
+     */
+    private fun recordResult(outcome: String, source: String) {
+        if (resultRecorded) return
+        resultRecorded = true
+        DiagBreadcrumbs.record(
+            "quack_location_result",
+            mapOf(
+                "outcome" to outcome,            // delivered | error
+                "source" to source,              // beacondb | gps | network | passive | persisted_cache | system_cache | none
+                "fell_back_to_gps" to fellBackToGps,
+                "elapsed_ms" to (SystemClock.elapsedRealtime() - startMs),
+                "timeout_ms" to hardTimeoutMs,
+            ),
+        )
+    }
 
     private fun makeListener(label: String) = object : LocationListener {
         override fun onLocationChanged(loc: Location) {
@@ -78,6 +127,7 @@ class QuackLocationHelper(
     @SuppressLint("MissingPermission")
     fun request() {
         Log.d(TAG, "request() called")
+        startMs = SystemClock.elapsedRealtime()
 
         // ── 1. Our own persisted location (< 2 hours) ─────────────────────────
         // On MediaTek flip phones getLastKnownLocation() is often null because
@@ -89,6 +139,7 @@ class QuackLocationHelper(
             if (persisted.ageMs < QuackLocationStore.FRESH_MAX_AGE_MS) {
                 Log.d(TAG, "Persisted location is fresh (< 2h) — delivering immediately")
                 delivered = true
+                recordResult("delivered", "persisted_cache")
                 handler.post { callback.onLocation(persisted.lat, persisted.lng) }
                 return
             }
@@ -190,10 +241,12 @@ class QuackLocationHelper(
                     staleFallback != null && staleFallback.ageMs < QuackLocationStore.STALE_MAX_AGE_MS -> {
                         Log.d(TAG, "Hard timeout: using persisted location age=${staleFallback.ageMinutes}min")
                         delivered = true
+                        recordResult("delivered", "persisted_cache_stale")
                         handler.post { callback.onLocation(staleFallback.lat, staleFallback.lng) }
                     }
                     else -> {
                         Log.e(TAG, "No location available at all — giving up")
+                        recordResult("error", "none")
                         callback.onError("Location timed out — please enable location services and try again")
                     }
                 }
@@ -209,6 +262,7 @@ class QuackLocationHelper(
     @SuppressLint("MissingPermission")
     private fun startGpsFallback(netAvail: Boolean, gpsAvail: Boolean) {
         if (delivered) return
+        fellBackToGps = true
         Log.d(TAG, "startGpsFallback: netAvail=$netAvail gpsAvail=$gpsAvail")
 
         // Ensure location permission is granted before touching LocationManager.
@@ -217,32 +271,60 @@ class QuackLocationHelper(
         // OTA resets, and dev reinstalls that wipe grants.
         LocationPermissionGranter.ensureGranted(appContext)
 
-        // Request network first — responds in <1s vs 5+ for GPS; both race, first wins
-        try {
-            if (netAvail) lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, netListener)
-            if (gpsAvail) lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,     MIN_TIME_MS, MIN_DIST_M, gpsListener)
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Location permission not granted despite ensureGranted — falling back", e)
-        }
-        // Passive provider piggybacks on other apps' requests at zero battery cost
+        // Passive provider piggybacks on other apps' requests at zero battery
+        // cost — it never powers the GPS chip itself, so it's safe to leave
+        // running unthrottled until cleanup() removes it.
         try { lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, MIN_TIME_MS, MIN_DIST_M, passiveListener) } catch (_: Exception) {}
 
-        // API 30+: optimised single-fix API. Only call if at least one of
-        // the underlying providers is enabled — passing a disabled provider
-        // throws IllegalArgumentException on some MediaTek builds.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && (netAvail || gpsAvail)) {
-            val best = if (netAvail) LocationManager.NETWORK_PROVIDER else LocationManager.GPS_PROVIDER
-            Log.d(TAG, "Using getCurrentLocation($best) on API ${Build.VERSION.SDK_INT}")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // ── Preferred path (all shipping hardware is API 30 / Android 11) ──
+            // Use the single-shot getCurrentLocation API instead of a continuous
+            // requestLocationUpdates(…, 0, 0, …) stream. The continuous request
+            // ran the GPS chip at its 1 Hz maximum the whole time it waited for a
+            // fix; on devices where BeaconDB fails and a fix never arrives indoors
+            // that pinned GPS on for hours (~7.8 h/day in Holly's capture). The
+            // single-shot API lets the OS own scheduling, delivers at most one
+            // fix per provider, and — via the retained CancellationSignal — is
+            // actually stopped by cleanup() at the hard timeout.
+            if (gpsAvail) requestCurrentLocation(LocationManager.GPS_PROVIDER)
+            if (netAvail) requestCurrentLocation(LocationManager.NETWORK_PROVIDER)
+        } else {
+            // ── Legacy fallback (API < 30, not expected on shipping units) ──
+            // Throttled to GPS_FALLBACK_MIN_TIME_MS rather than 0 so we never run
+            // the chip at full rate. deliver() removes updates on the first fix.
             try {
-                lm.getCurrentLocation(best, null, appContext.mainExecutor) { loc ->
-                    if (loc != null) {
-                        Log.d(TAG, "getCurrentLocation: acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
-                        deliver(loc)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "getCurrentLocation($best) threw: ${e.message}")
+                if (netAvail) lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, GPS_FALLBACK_MIN_TIME_MS, GPS_FALLBACK_MIN_DIST_M, netListener)
+                if (gpsAvail) lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,     GPS_FALLBACK_MIN_TIME_MS, GPS_FALLBACK_MIN_DIST_M, gpsListener)
+            } catch (e: SecurityException) {
+                Log.w(TAG, "Location permission not granted despite ensureGranted — falling back", e)
             }
+        }
+    }
+
+    /**
+     * Single-shot location request (API 30+). Delivers at most one fix and
+     * keeps the GPS engine warm only until the fix arrives or
+     * [gpsCancellationSignal] is cancelled by [cleanup]. Passing a real
+     * cancellation signal (not null) is what lets the hard-timeout teardown
+     * stop GPS instead of leaving it running to the platform's own timeout.
+     */
+    @SuppressLint("MissingPermission")
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun requestCurrentLocation(provider: String) {
+        Log.d(TAG, "getCurrentLocation($provider) on API ${Build.VERSION.SDK_INT}")
+        try {
+            lm.getCurrentLocation(provider, gpsCancellationSignal, appContext.mainExecutor) { loc ->
+                if (loc != null) {
+                    Log.d(TAG, "getCurrentLocation($provider): acc=${loc.accuracy}m age=${(System.currentTimeMillis() - loc.time) / 1000}s")
+                    deliver(loc)
+                } else {
+                    Log.d(TAG, "getCurrentLocation($provider) returned null")
+                }
+            }
+        } catch (e: Exception) {
+            // A disabled provider throws IllegalArgumentException on some
+            // MediaTek builds; the other provider / fallbacks still cover us.
+            Log.w(TAG, "getCurrentLocation($provider) threw: ${e.message}")
         }
     }
 
@@ -259,9 +341,11 @@ class QuackLocationHelper(
             persisted != null && persisted.ageMs < QuackLocationStore.STALE_MAX_AGE_MS -> {
                 Log.d(TAG, "Fallback ($reason): using persisted age=${persisted.ageMinutes}min")
                 delivered = true
+                recordResult("delivered", "persisted_cache_stale")
                 handler.post { callback.onLocation(persisted.lat, persisted.lng) }
             }
             else -> {
+                recordResult("error", "none")
                 callback.onError("Location unavailable — please enable location services")
             }
         }
@@ -297,11 +381,15 @@ class QuackLocationHelper(
         }
         delivered = true
         Log.d(TAG, "deliver() lat=${loc.latitude} lng=${loc.longitude} acc=${loc.accuracy}m provider=${loc.provider}")
+        recordResult("delivered", loc.provider ?: "unknown")
         cleanup()
         handler.post { callback.onLocation(loc.latitude, loc.longitude) }
     }
 
     private fun cleanup() {
+        // Cancel the in-flight single-shot request first — this is the path
+        // that previously outlived teardown and kept the GPS engine warm.
+        try { gpsCancellationSignal.cancel() } catch (_: Exception) {}
         try { lm.removeUpdates(gpsListener) }     catch (_: Exception) {}
         try { lm.removeUpdates(netListener) }     catch (_: Exception) {}
         try { lm.removeUpdates(passiveListener) } catch (_: Exception) {}
