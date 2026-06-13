@@ -115,6 +115,16 @@ class PairingStore(context: Context) {
         set(v) = prefs.edit().putBoolean("beta_tester_mode", v).apply()
 
     /**
+     * True once the one-time "Google Messages is now built in" announcement
+     * has been shown (on the first android smart-txt open). The modal tells
+     * users to update the Dumb Down app and re-run Configuration to finish
+     * setup. Shown once, then never again.
+     */
+    var gmessagesAnnouncementShown: Boolean
+        get() = prefs.getBoolean("gmessages_announcement_shown", false)
+        set(v) = prefs.edit().putBoolean("gmessages_announcement_shown", v).apply()
+
+    /**
      * Write all pairing credentials in a single atomic commit so downstream
      * readers never see a partial state (e.g. isPaired=true but secret empty).
      */
