@@ -257,6 +257,32 @@
             </intent-filter>
         </receiver>
 
+        <!-- Nightly 4 AM automatic update installer. When the device is on
+             Wi-Fi and battery >= 40%, downloads and SILENTLY installs (via
+             root pm install) any newer Dumb Down Launcher / Smart Txt release.
+             Re-armed on every boot from DumbDownApp.onCreate, same as the
+             quack / wifi-nudge alarms, so a reboot near 4 AM self-heals. -->
+        <receiver
+            android:name=".update.AutoUpdateAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.AUTO_UPDATE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Manual adb trigger for the nightly auto-updater. Fires the same
+             check-conditions → download → silent-install path immediately,
+             bypassing the 4 AM schedule (Wi-Fi + battery gate still applies).
+             Same exposure rationale as the other RUN_* triggers — worst case
+             is installing an update the user would get at 4 AM anyway. -->
+        <receiver
+            android:name=".update.AutoUpdateTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.offlineinc.dumbdownlauncher.RUN_AUTO_UPDATE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Receives star-key long-press broadcast from FlipMouse daemon -->
         <receiver
             android:name=".TypeSyncToggleReceiver"
