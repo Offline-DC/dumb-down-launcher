@@ -16,7 +16,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 189
-        versionName = "v5.5.0-beta.0"
+        versionName = "v5.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Battery diagnostics — compile-time gate for the DiagnosticsService,
