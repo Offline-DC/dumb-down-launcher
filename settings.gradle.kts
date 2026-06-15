@@ -21,3 +21,10 @@ dependencyResolutionManagement {
 
 rootProject.name = "DumbDownLauncher"
 include(":app")
+
+includeBuild("../matrix-app/dpad-messenger-backend") {
+    dependencySubstitution {
+        substitute(module("com.offline.dpadmessenger.backend:gmessages"))
+            .using(project(":gmessages"))
+    }
+}

@@ -10,6 +10,7 @@ import androidx.work.WorkerParameters
 import androidx.work.WorkManager
 import com.offlineinc.dumbdownlauncher.BuildConfig
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
+import com.offlineinc.dumbdownlauncher.launcher.PlatformPreferences
 import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import java.util.concurrent.TimeUnit
 
@@ -41,10 +42,11 @@ class UpdateCheckWorker(
 
     override fun doWork(): Result {
         return try {
-            // Beta testers (opted in via long-press on "updates") get
-            // prerelease builds in the same update flow as stable ones.
-            val includePrereleases = PairingStore(context).betaTesterMode
-            val latest = UpdateChecker.fetchLatest(includePrereleases)
+            // Beta testers (opted in via long-press on "updates") are sandboxed
+            // onto the beta channel: they see ONLY prerelease builds, never
+            // stable ones, so prod releases can't overwrite a beta install.
+            val betaChannel = PairingStore(context).betaTesterMode
+            val latest = UpdateChecker.fetchLatest(betaChannel)
 
             // Check launcher update
             val launcherInfo = latest["dumb-down-launcher"]
@@ -77,6 +79,32 @@ class UpdateCheckWorker(
                 }
             }
 
+            // Check OpenBubbles messaging update — only when the user picked
+            // iOS for smart txt (OpenBubbles is their linked-device path) AND
+            // it's actually installed. If they're on Android/none, don't bother.
+            val openBubblesInfo = latest["openbubbles-messaging"]
+            if (openBubblesInfo != null && PlatformPreferences.getChoice(context) == "ios") {
+                val installedCode = getInstalledVersionCode("com.openbubbles.messaging")
+                if (installedCode != null && openBubblesInfo.versionCode > installedCode) {
+                    // Record the pending update (with versionCode) BEFORE posting,
+                    // so the launch gate + reboot re-post key off it.
+                    UpdateNotificationManager.markOpenBubblesUpdatePending(
+                        context,
+                        openBubblesInfo.downloadUrl,
+                        openBubblesInfo.versionName,
+                        openBubblesInfo.versionCode,
+                    )
+                    UpdateNotificationManager.notify(
+                        context = context,
+                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
+                        appKey = "openbubbles-messaging",
+                        appDisplayName = "Smart Txt",
+                        versionName = openBubblesInfo.versionName,
+                        downloadUrl = openBubblesInfo.downloadUrl,
+                    )
+                }
+            }
+
             Result.success()
         } catch (_: Exception) {
             Result.retry()
@@ -96,11 +124,14 @@ class UpdateCheckWorker(
         private const val WORK_NAME = "update_check"
 
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(30, TimeUnit.DAYS)
+            // Weekly background check. UPDATE (not KEEP) so devices previously
+            // scheduled on the old 30-day interval pick up the weekly cadence
+            // without a reinstall.
+            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(7, TimeUnit.DAYS)
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request,
             )
         }
@@ -127,8 +158,8 @@ class UpdateCheckWorker(
                 return UpdateCheckResult.NETWORK_ERROR
             }
             return try {
-                val includePrereleases = PairingStore(context).betaTesterMode
-                val latest = UpdateChecker.fetchLatest(includePrereleases)
+                val betaChannel = PairingStore(context).betaTesterMode
+                val latest = UpdateChecker.fetchLatest(betaChannel)
 
                 var found = false
                 val launcherInfo = latest["dumb-down-launcher"]
@@ -160,6 +191,31 @@ class UpdateCheckWorker(
                             appDisplayName = "Snake",
                             versionName = snakeInfo.versionName,
                             downloadUrl = snakeInfo.downloadUrl,
+                        )
+                        found = true
+                    }
+                }
+
+                val openBubblesInfo = latest["openbubbles-messaging"]
+                if (openBubblesInfo != null && PlatformPreferences.getChoice(context) == "ios") {
+                    val installedCode = try {
+                        val info = context.packageManager.getPackageInfo("com.openbubbles.messaging", 0)
+                        PackageInfoCompat.getLongVersionCode(info).toInt()
+                    } catch (_: Exception) { null }
+                    if (installedCode != null && openBubblesInfo.versionCode > installedCode) {
+                        UpdateNotificationManager.markOpenBubblesUpdatePending(
+                            context,
+                            openBubblesInfo.downloadUrl,
+                            openBubblesInfo.versionName,
+                            openBubblesInfo.versionCode,
+                        )
+                        UpdateNotificationManager.notify(
+                            context = context,
+                            notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
+                            appKey = "openbubbles-messaging",
+                            appDisplayName = "Smart Txt",
+                            versionName = openBubblesInfo.versionName,
+                            downloadUrl = openBubblesInfo.downloadUrl,
                         )
                         found = true
                     }

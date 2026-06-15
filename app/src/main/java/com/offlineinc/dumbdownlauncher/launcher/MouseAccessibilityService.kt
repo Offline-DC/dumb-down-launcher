@@ -1,5 +1,4 @@
 package com.offlineinc.dumbdownlauncher
-
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.annotation.SuppressLint
@@ -18,6 +17,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.offlineinc.dumbdownlauncher.launcher.ResetWarningOverlay
 import com.offlineinc.dumbdownlauncher.launcher.qrenlarge.QrEnlargeController
+import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate
 import com.offlineinc.dumbdownlauncher.typesync.DeviceLinkReader
 import com.offlineinc.dumbdownlauncher.typesync.TypeSyncCrypto
 import okhttp3.OkHttpClient
@@ -34,6 +34,12 @@ class MouseAccessibilityService : AccessibilityService() {
 
     private var mouseEnabled = false
     private var currentPackage = ""
+
+    // Tracks whether OpenBubbles is the current foreground app, so we can apply
+    // the one-time retention toggle the moment the user leaves it (when it's
+    // backgrounded and safe to edit). See the OpenBubbles block in
+    // onAccessibilityEvent.
+    private var openBubblesForeground = false
     private var currentDensity = -1
 
 
@@ -859,6 +865,18 @@ class MouseAccessibilityService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: pkg=$pkg className=$className")
 
+            // ── OpenBubbles one-time retention toggle ──────────────────────
+            // Track OpenBubbles foreground so we can apply the "delete after 3
+            // days" toggle the first time the user leaves it (backgrounded ⇒
+            // safe to edit its prefs).
+            if (pkg == OpenBubblesGate.PKG && className.contains("Activity")) {
+                openBubblesForeground = true
+            } else if (openBubblesForeground && pkg != OpenBubblesGate.PKG && className.contains("Activity")) {
+                openBubblesForeground = false
+                OpenBubblesGate.applyRetentionOnceAsync(this)
+            }
+            // ── end OpenBubbles retention ──────────────────────────────────
+
             // ── Factory-reset warning overlay ──────────────────────────────
             // We only show the warning on the specific Reset options page that
             // lists BOTH "Factory data reset" and "Network settings reset" as
@@ -1129,19 +1147,16 @@ class MouseAccessibilityService : AccessibilityService() {
     }
 
     private fun handleAppleMusicDensity() {
-        shellExecutor.execute {
-            try {
-                val proc = ProcessBuilder("su", "-mm", "-c", "test -f /data/user/0/com.apple.android.music/files/IC-Info.sids && echo yes || echo no")
-                    .redirectErrorStream(true)
-                    .start()
-                val output = proc.inputStream.bufferedReader().readText().trim()
-                proc.waitFor()
-                val loggedIn = output.lines().any { it.trim() == "yes" }
-                setDensity(if (loggedIn) 120 else 80)
-            } catch (t: Throwable) {
-                Log.e("MOUSE_SVC", "handleAppleMusicDensity failed: ${t.message}")
-            }
+        val onSignInPage = try {
+            val root = rootInActiveWindow
+            val nodes = root?.findAccessibilityNodeInfosByViewId("com.apple.android.music:id/signin_title_tv")
+            root?.recycle()
+            !nodes.isNullOrEmpty()
+        } catch (t: Throwable) {
+            Log.e("MOUSE_SVC", "handleAppleMusicDensity: sign-in check failed: ${t.message}")
+            false
         }
+        setDensity(if (onSignInPage) 80 else 120)
     }
 
     private fun setDensity(density: Int) {

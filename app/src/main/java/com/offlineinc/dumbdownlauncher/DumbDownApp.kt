@@ -27,6 +27,7 @@ import com.offlineinc.dumbdownlauncher.pairing.PairingStore
 import com.offlineinc.dumbdownlauncher.storage.SpotifyOfflineCleanupWorker
 import com.offlineinc.dumbdownlauncher.update.BetaUpdateReminderWorker
 import com.offlineinc.dumbdownlauncher.update.UpdateCheckWorker
+import com.offlineinc.dumbdownlauncher.update.UpdateNotificationManager
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -105,6 +106,13 @@ class DumbDownApp : Application() {
         com.offlineinc.dumbdownlauncher.diagnostics.RebootLoggingService.startIfEnabled(this)
 
         UpdateCheckWorker.schedule(this)
+
+        // Re-post the sticky OpenBubbles forced-update tile if an update is
+        // still pending. The OS clears all notifications on reboot; this runs
+        // on launcher start (≈ boot, since we're the home app) so the prompt —
+        // and therefore the usage block — survives restarts. No-ops / clears
+        // itself once OpenBubbles has been updated.
+        UpdateNotificationManager.repostOpenBubblesUpdateIfPending(this)
 
         // Re-arm the beta tester daily reminder if the user has opted in.
         // The flag is persisted in PairingStore — a long-press on "updates"
@@ -1151,6 +1159,15 @@ class DumbDownApp : Application() {
             "openbubbles_setup_v1" to {
                 applyOpenBubblesPerfSettings(tag)
             },
+            // NOTE: the OpenBubbles "delete after 3 days" retention toggle is
+            // intentionally NOT a boot migration. It runs the first time the
+            // user opens smart txt instead — see
+            // [com.offlineinc.dumbdownlauncher.MainAppsGridActivity]
+            // .applyOpenBubblesRetentionThenLaunch. Doing it at launch time
+            // guarantees [OpenBubblesOps.applyDeleteOldMessages] (which kills
+            // OB before editing its prefs) only fires while OB is backgrounded
+            // and about to be relaunched, never racing a live OB session the
+            // way a boot-time pass could.
             // One-time WhatsApp media-settings pass. Flips three values
             // in com.whatsapp_preferences_light.xml:
             //

@@ -9,13 +9,14 @@ plugins {
 android {
     namespace = "com.offlineinc.dumbdownlauncher"
     compileSdk = 36
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 174
-        versionName = "v4.82.0"
+        versionCode = 189
+        versionName = "v5.5.0-beta.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Battery diagnostics — compile-time gate for the DiagnosticsService,
@@ -51,8 +52,10 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        // Java 17 to match the dpad-messenger-backend modules (:gmessages and
+        // friends all compile at Java 17), mirroring the backend's own demo app.
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildFeatures {
@@ -63,7 +66,7 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_11)
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
@@ -74,6 +77,17 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
+
+    // In-app Google Messages messenger: backend + pairing/chat UI. Lives in
+    // the matrix-app repo as dpad-messenger-backend's :gmessages module,
+    // pulled in via the composite-build wiring in settings.gradle.kts (the
+    // coordinate below is substituted for that project). It api-exposes the
+    // dpad-messenger UI library, so MessengerActivity gets DpadMessengerTheme
+    // + GoogleMessagesApp transitively. MessengerActivity (in this :app
+    // module) is the launcher-specific shell opened when the user picks
+    // "android" as their smart-txt platform — replacing the previous "open
+    // messages.google.com/web in Chrome" behaviour.
+    implementation("com.offline.dpadmessenger.backend:gmessages:0.1.0-SNAPSHOT")
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

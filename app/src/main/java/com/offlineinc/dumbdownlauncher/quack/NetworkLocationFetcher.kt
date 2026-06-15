@@ -19,6 +19,7 @@ import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.offlineinc.dumbdownlauncher.diagnostics.DiagBreadcrumbs
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -54,6 +55,10 @@ object NetworkLocationFetcher {
         val ctx = context.applicationContext
         if (!hasLocationPermission(ctx)) {
             Log.w(TAG, "fetch: no location permission — required for SSID scan")
+            DiagBreadcrumbs.record(
+                "quack_netloc_scan",
+                mapOf("outcome" to "no_permission", "wifi_ap_count" to 0, "cell_count" to 0),
+            )
             return null
         }
 
@@ -61,7 +66,18 @@ object NetworkLocationFetcher {
         val cells = scanCells(ctx)
         Log.d(TAG, "fetch: gathered ${wifi.size} wifi APs, ${cells.size} cell towers")
 
-        if (wifi.size < 2 && cells.isEmpty()) {
+        val sufficient = !(wifi.size < 2 && cells.isEmpty())
+        DiagBreadcrumbs.record(
+            "quack_netloc_scan",
+            mapOf(
+                // "querying_beacondb" → we have enough signals and will POST;
+                // "insufficient_signals" → < 2 wifi and no cell, so GPS fallback is next.
+                "outcome" to if (sufficient) "querying_beacondb" else "insufficient_signals",
+                "wifi_ap_count" to wifi.size,
+                "cell_count" to cells.size,
+            ),
+        )
+        if (!sufficient) {
             Log.w(TAG, "fetch: insufficient signals (need ≥2 wifi or ≥1 cell)")
             return null
         }

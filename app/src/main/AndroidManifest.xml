@@ -25,6 +25,10 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Lets update downloads hide the system DownloadManager notification
+         (which only shows "time left") in favor of the launcher's own
+         progress notification (bar + MB/%). See DownloadAndInstallReceiver. -->
+    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION"/>
     <!-- Diagnostic logging (runtime opt-in via long-press on "weather" in
          All Apps). RebootLoggingService runs as a foreground service so
          the rolling 24-hour logcat tail survives doze/idle — a service
@@ -112,6 +116,15 @@
             android:exported="false" />
 
         <activity
+            android:name=".update.WifiThenUpdateActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
             android:name=".contactsync.ContactSyncActivity"
             android:exported="false"
             android:launchMode="singleTop"
@@ -123,6 +136,14 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:noHistory="true"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- dumb map (beta): no noHistory so the route/selection survives
+             leaving and returning via the navigation notification -->
+        <activity
+            android:name=".MapsActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.DumbDownLauncher" />
 
         <activity

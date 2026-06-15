@@ -160,6 +160,14 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
+            // map (beta) — built-in D-pad maps app
+            appItems.add(AppItem(
+                packageName = DUMB_MAP,
+                label = "map (beta)",
+                icon = pm.defaultActivityIcon,
+                launchComponent = null,
+            ))
+
             // Weather — always available as a built-in app
             appItems.add(AppItem(
                 packageName = WEATHER,
@@ -477,6 +485,13 @@ class AllAppsActivity : AppCompatActivity() {
                     QUACK -> {
                         startActivity(
                             Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.quack.QuackActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
+                    DUMB_MAP -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, MapsActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         )
                         overridePendingTransition(0, 0)

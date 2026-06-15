@@ -30,6 +30,23 @@ object NetworkUtils {
     }
 
     /**
+     * Returns `true` only when the active network is Wi-Fi *and* has internet
+     * capability. Used to gate large downloads (the OpenBubbles APK can be tens
+     * of MB) so we don't burn cellular data without consent. Validated state
+     * is intentionally not required — captive portals still report Wi-Fi here,
+     * and we'd rather attempt the download and fail than block on a portal the
+     * user already logged into.
+     */
+    fun isOnWifi(context: Context): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    /**
      * Runs [action] immediately if the network is already available,
      * otherwise registers a one-shot callback that fires as soon as
      * connectivity appears.  Safe to call from any thread.
