@@ -1147,19 +1147,16 @@ class MouseAccessibilityService : AccessibilityService() {
     }
 
     private fun handleAppleMusicDensity() {
-        shellExecutor.execute {
-            try {
-                val proc = ProcessBuilder("su", "-mm", "-c", "test -f /data/user/0/com.apple.android.music/files/IC-Info.sids && echo yes || echo no")
-                    .redirectErrorStream(true)
-                    .start()
-                val output = proc.inputStream.bufferedReader().readText().trim()
-                proc.waitFor()
-                val loggedIn = output.lines().any { it.trim() == "yes" }
-                setDensity(if (loggedIn) 120 else 80)
-            } catch (t: Throwable) {
-                Log.e("MOUSE_SVC", "handleAppleMusicDensity failed: ${t.message}")
-            }
+        val onSignInPage = try {
+            val root = rootInActiveWindow
+            val nodes = root?.findAccessibilityNodeInfosByViewId("com.apple.android.music:id/signin_title_tv")
+            root?.recycle()
+            !nodes.isNullOrEmpty()
+        } catch (t: Throwable) {
+            Log.e("MOUSE_SVC", "handleAppleMusicDensity: sign-in check failed: ${t.message}")
+            false
         }
+        setDensity(if (onSignInPage) 80 else 120)
     }
 
     private fun setDensity(density: Int) {
