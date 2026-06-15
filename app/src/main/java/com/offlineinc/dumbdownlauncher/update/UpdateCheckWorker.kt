@@ -42,10 +42,11 @@ class UpdateCheckWorker(
 
     override fun doWork(): Result {
         return try {
-            // Beta testers (opted in via long-press on "updates") get
-            // prerelease builds in the same update flow as stable ones.
-            val includePrereleases = PairingStore(context).betaTesterMode
-            val latest = UpdateChecker.fetchLatest(includePrereleases)
+            // Beta testers (opted in via long-press on "updates") are sandboxed
+            // onto the beta channel: they see ONLY prerelease builds, never
+            // stable ones, so prod releases can't overwrite a beta install.
+            val betaChannel = PairingStore(context).betaTesterMode
+            val latest = UpdateChecker.fetchLatest(betaChannel)
 
             // Check launcher update
             val launcherInfo = latest["dumb-down-launcher"]
@@ -157,8 +158,8 @@ class UpdateCheckWorker(
                 return UpdateCheckResult.NETWORK_ERROR
             }
             return try {
-                val includePrereleases = PairingStore(context).betaTesterMode
-                val latest = UpdateChecker.fetchLatest(includePrereleases)
+                val betaChannel = PairingStore(context).betaTesterMode
+                val latest = UpdateChecker.fetchLatest(betaChannel)
 
                 var found = false
                 val launcherInfo = latest["dumb-down-launcher"]
