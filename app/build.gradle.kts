@@ -9,12 +9,13 @@ plugins {
 android {
     namespace = "com.offlineinc.dumbdownlauncher"
     compileSdk = 36
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 188
+        versionCode = 189
         versionName = "v5.5.0-beta.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
