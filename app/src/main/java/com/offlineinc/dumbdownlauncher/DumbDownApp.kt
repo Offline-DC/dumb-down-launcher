@@ -269,6 +269,15 @@ class DumbDownApp : Application() {
         com.offlineinc.dumbdownlauncher.wifinudge.WifiNudgeAlarmReceiver.scheduleNext(this)
         com.offlineinc.dumbdownlauncher.wifinudge.WifiNudgeAlarmReceiver.nudgeOnBootIfOffline(this)
 
+        // Nightly 4 AM automatic update installer. Re-armed on every launcher
+        // process start (≈ every boot, since we're the HOME app) so the alarm
+        // chain survives reboots and app updates. When it fires it only acts if
+        // the device is on Wi-Fi and battery >= 40%; otherwise it skips to the
+        // next 4 AM. Installs are silent (root pm install) — see
+        // update/AutoUpdateAlarmReceiver. Idempotent: a single alarm slot
+        // updated in place, so calling this on every boot is cheap.
+        com.offlineinc.dumbdownlauncher.update.AutoUpdateAlarmReceiver.scheduleNext(this)
+
         // 4. Update FlipMouse (DumbMouse) binary if a newer version is bundled
         bootExecutor.execute { FlipMouseUpdater.checkAndUpdate(this) }
 
