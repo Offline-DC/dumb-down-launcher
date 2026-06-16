@@ -115,6 +115,48 @@
             android:name=".notifications.ui.NotificationsActivity"
             android:exported="false" />
 
+        <!-- In-app Google Messages messenger (replaces the old
+             "open messages.google.com/web in Chrome" path for the
+             "android" smart-txt platform). Phase A backs this with mock
+             data; Phase B+ wires the real Google Messages protocol.
+             singleTask + clearTaskOnLaunch so re-launching from the home
+             grid always lands on the room list rather than wherever the
+             user left off — matches the muscle memory the launcher's
+             other apps already have.
+
+             Distinct taskAffinity puts this messenger in its OWN task,
+             separate from the home/grid task. Without it, the messenger
+             shares the default (package) affinity with the grid, so Back
+             could walk into stale launcher state instead of returning to
+             the grid. Its own task keeps the app self-contained: home goes
+             home, and Back from here returns to wherever it was launched
+             (the grid). -->
+        <activity
+            android:name=".messenger.MessengerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.offlineinc.dumbdownlauncher.task.gmessages"
+            android:clearTaskOnLaunch="true"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- One-time "Google Messages is built in now" announcement, shown the
+             first time android smart txt is opened. singleTop so a double launch
+             (flip-phone keys can fire twice) doesn't stack two copies. -->
+        <activity
+            android:name=".messenger.GoogleMessagesAnnouncementActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- Receives Google-account cookies from the companion phone over the
+             Type Sync relay (Messages-for-web sign-in). -->
+        <activity
+            android:name=".messenger.GoogleCookieReceiveActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
         <activity
             android:name=".update.WifiThenUpdateActivity"
             android:exported="false"

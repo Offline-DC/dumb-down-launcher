@@ -76,34 +76,32 @@ class MainAppsGridActivity : AppCompatActivity() {
         }
 
         /**
-         * Open Google Messages web in Chrome — shared by the 3×3 grid and All Apps.
-         * Uses Custom Tabs for a cold session; brings Chrome to front for a warm one.
-         * A session is considered warm if opened within the last 6 hours.
+         * Launch the in-app Google Messages messenger — shared by the 3×3
+         * grid and the All Apps list. Name kept as `openMessagesInChrome`
+         * to avoid a rename storm at every call site; the body now opens
+         * [com.offlineinc.dumbdownlauncher.messenger.MessengerActivity]
+         * (Compose-based, DPAD-friendly) instead of Chrome Custom Tabs.
+         *
+         * The old web-based path had two problems on the Flip 2:
+         *  1. The desktop-style Messages-for-web UI is unusable at 240x320
+         *     with a hardware D-pad — the user landed in a layout the
+         *     mouse-accessibility hack was the only way to drive.
+         *  2. The 6-hour "warm session" optimisation against Chrome was
+         *     a constant source of state confusion (Chrome would silently
+         *     log the web app out and the user couldn't tell why messages
+         *     stopped working).
+         *
+         * Both go away with the in-app messenger: it owns its own session
+         * via [com.offline.dpadmessenger.backend.gmessages.GoogleMessagesRepository],
+         * and the UI was designed for this screen and input model.
+         *
+         * Mouse stays off: MessengerActivity is fully D-pad navigable.
          */
         fun openMessagesInChrome(activity: AppCompatActivity) {
-            MouseAccessibilityService.setMouseEnabled(activity, true)
-            val prefs = activity.getSharedPreferences("launcher_prefs", MODE_PRIVATE)
-            val lastMs = prefs.getLong("messages_last_opened_ms", 0L)
-            val warm = System.currentTimeMillis() - lastMs < 6 * 60 * 60 * 1000L
-
-            if (warm) {
-                Log.d("MESSAGES", "Warm session — bringing Chrome to front (no reload)")
-                Intent(Intent.ACTION_MAIN).apply {
-                    setPackage("com.android.chrome")
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                }.let { activity.startActivity(it) }
-            } else {
-                Log.d("MESSAGES", "Cold session — opening messages URL via Custom Tabs")
-                val url = WEB_APP_URLS.getValue(GOOGLE_MESSAGES)
-                CustomTabsIntent.Builder()
-                    .setUrlBarHidingEnabled(true)
-                    .build()
-                    .apply { intent.setPackage("com.android.chrome") }
-                    .launchUrl(activity, Uri.parse(url))
-            }
-            prefs.edit().putLong("messages_last_opened_ms", System.currentTimeMillis()).apply()
-            activity.overridePendingTransition(0, 0)
+            // First open shows the one-time "Google Messages is built in now"
+            // announcement (its own Activity), then opens the messenger; later
+            // opens go straight in. Debounced against flip-phone double-keys.
+            com.offlineinc.dumbdownlauncher.messenger.launchAndroidSmartTxt(activity)
         }
 
         private val bgExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()

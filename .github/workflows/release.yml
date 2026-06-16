@@ -27,8 +27,23 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout
+      # The launcher's settings.gradle.kts pulls in the chat UI via a COMPOSITE
+      # build at `../matrix-app/dpad-messenger`. So we check out BOTH repos as
+      # siblings and run Gradle from the launcher dir, exactly like the local
+      # dev layout (~/repos/dumb-down-launcher next to ~/repos/matrix-app).
+      - name: Checkout launcher
         uses: actions/checkout@v4
+        with:
+          path: dumb-down-launcher
+
+      - name: Checkout dpad-messenger (matrix-app)
+        uses: actions/checkout@v4
+        with:
+          repository: Offline-DC/matrix-app
+          # Pin to a tag/SHA for reproducible stable builds if desired; `main`
+          # tracks the latest co-developed UI.
+          ref: main
+          path: matrix-app
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -40,9 +55,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Decode keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > keystore.jks
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "${{ github.workspace }}/keystore.jks"
 
       - name: Build release APK
+        working-directory: dumb-down-launcher
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/keystore.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -53,14 +69,14 @@ jobs:
       - name: Locate and rename APK
         id: apk
         run: |
-          SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
-          cp "$SRC" dumb-down-launcher.apk
-          echo "sha256=$(sha256sum dumb-down-launcher.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          SRC=$(find dumb-down-launcher/app/build/outputs/apk/release -name "*.apk" | head -1)
+          cp "$SRC" "${{ github.workspace }}/dumb-down-launcher.apk"
+          echo "sha256=$(sha256sum "${{ github.workspace }}/dumb-down-launcher.apk" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Parse version code
         id: version
         run: |
-          echo "code=$(grep 'versionCode' app/build.gradle.kts | grep -oP '\d+' | head -1)" >> "$GITHUB_OUTPUT"
+          echo "code=$(grep 'versionCode' dumb-down-launcher/app/build.gradle.kts | grep -oP '\d+' | head -1)" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -69,3 +85,7 @@ jobs:
           name: ${{ github.ref_name }}
           body: "version_code=${{ steps.version.outputs.code }}\nsha256=${{ steps.apk.outputs.sha256 }}"
           files: dumb-down-launcher.apk
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f "${{ github.workspace }}/keystore.jks"

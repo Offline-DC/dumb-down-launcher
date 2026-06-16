@@ -39,6 +39,29 @@ class QuackLocationHelper(
      * chip indoors needs many minutes to download orbital data.
      */
     private val hardTimeoutMs: Long = HARD_TIMEOUT_MS,
+    /**
+     * Whether to spin the GPS chip when BeaconDB (Wi-Fi + cell) returns no
+     * fix. Foreground callers leave this true — the user is staring at a
+     * loading screen and a 5–100s GPS acquisition is worth it. Background
+     * callers (the hourly [QuackLocationRefreshWorker]) pass false: on an
+     * idle, screen-off device BeaconDB fails whenever Wi-Fi is disconnected,
+     * and falling back to GPS ~24×/day breaks Doze and is the single largest
+     * idle-battery cost on this hardware. With GPS disabled we serve the
+     * persisted/system cache instead (up to [QuackLocationStore.STALE_MAX_AGE_MS]),
+     * which is plenty fresh for a coarse 25-mile feed, and the next time the
+     * user actually opens quack the foreground path takes a live fix.
+     */
+    private val allowGpsFallback: Boolean = true,
+    /**
+     * Whether BeaconDB may actively trigger a fresh Wi-Fi scan. Foreground
+     * callers leave this true. Background callers pass false so the hourly
+     * refresh reads cached Wi-Fi scan results instead of forcing the WLAN
+     * chip awake (each active scan causes a WLAN AHB ISR suspend abort on
+     * this hardware). Paired with [allowGpsFallback]=false this makes the
+     * background refresh effectively zero-radio-cost: cache hit, or cell /
+     * cached-Wi-Fi BeaconDB lookup, or fall back to the persisted fix.
+     */
+    private val activeWifiScan: Boolean = true,
 ) {
 
     interface Callback {
@@ -196,7 +219,7 @@ class QuackLocationHelper(
         // NetworkLocationFetcher's ~20s worst case before GPS even begins.
         Thread({
             try {
-                val fix = NetworkLocationFetcher.fetch(appContext)
+                val fix = NetworkLocationFetcher.fetch(appContext, activeScan = activeWifiScan)
                 if (fix != null) {
                     Log.i(TAG, "BeaconDB fix: lat=${fix.lat} lng=${fix.lng} acc=${fix.accuracyMeters}m")
                     val synthetic = Location("beacondb").apply {
@@ -207,12 +230,12 @@ class QuackLocationHelper(
                     }
                     handler.post { if (!delivered) deliver(synthetic) }
                 } else {
-                    Log.w(TAG, "BeaconDB returned no fix — falling back to GPS providers")
-                    handler.post { if (!delivered) startGpsFallback(netAvail, gpsAvail) }
+                    Log.w(TAG, "BeaconDB returned no fix")
+                    handler.post { if (!delivered) onBeaconDbFailed(netAvail, gpsAvail, staleFallback, "beacondb-null") }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "BeaconDB fetch threw: ${e.message} — falling back to GPS providers")
-                handler.post { if (!delivered) startGpsFallback(netAvail, gpsAvail) }
+                Log.w(TAG, "BeaconDB fetch threw: ${e.message}")
+                handler.post { if (!delivered) onBeaconDbFailed(netAvail, gpsAvail, staleFallback, "beacondb-threw") }
             }
         }, "QuackLocation-BeaconDB").start()
 
@@ -252,6 +275,39 @@ class QuackLocationHelper(
                 }
             }
         }, hardTimeoutMs)
+    }
+
+    /**
+     * Decide what to do once BeaconDB (our primary source) has failed.
+     *
+     * Foreground callers ([allowGpsFallback] == true) spin GPS as before.
+     * Background callers skip GPS entirely and deliver the best cached fix
+     * we already have — this is the change that keeps the hourly refresh
+     * from waking the GPS chip ~24×/day and breaking Doze. If no usable
+     * cache exists we don't error out loudly in the background; we just let
+     * the outstanding hard-timeout stage resolve it.
+     */
+    private fun onBeaconDbFailed(
+        netAvail: Boolean,
+        gpsAvail: Boolean,
+        staleFallback: QuackLocationStore.StoredLocation?,
+        reason: String,
+    ) {
+        if (delivered) return
+        if (allowGpsFallback) {
+            Log.w(TAG, "$reason — falling back to GPS providers")
+            startGpsFallback(netAvail, gpsAvail)
+            return
+        }
+        // Background: never spin GPS. Serve cache; if none, leave the
+        // hard-timeout stage to deliver a stale fallback or error.
+        val systemCache = bestLastKnown()
+        if (systemCache != null || (staleFallback != null && staleFallback.ageMs < QuackLocationStore.STALE_MAX_AGE_MS)) {
+            Log.i(TAG, "$reason — GPS disabled (background); serving cached fix instead of spinning GPS")
+            deliverBestFallback(staleFallback, systemCache, reason)
+        } else {
+            Log.i(TAG, "$reason — GPS disabled (background) and no cache; deferring to hard-timeout stage")
+        }
     }
 
     /**

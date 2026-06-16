@@ -22,10 +22,10 @@
 # without opening any files.
 #
 # Usage:
-#   ./scripts/diag_reducesar_check.sh                 # default
-#   ./scripts/diag_reducesar_check.sh --serial XYZ    # pick a device
-#   ./scripts/diag_reducesar_check.sh --out ~/Desktop # custom dest
-#   ./scripts/diag_reducesar_check.sh -h
+#   ./battery_analysis/diag_reducesar_check.sh                 # default
+#   ./battery_analysis/diag_reducesar_check.sh --serial XYZ    # pick a device
+#   ./battery_analysis/diag_reducesar_check.sh --out ~/Desktop # custom dest
+#   ./battery_analysis/diag_reducesar_check.sh -h
 #
 # Designed to be readable by a human or pasted into a chat for review.
 

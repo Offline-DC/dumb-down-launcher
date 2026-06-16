@@ -97,7 +97,7 @@ PMIC/protection trip), which is exactly the class of "random reboot" the
 
 ### The overnight drain was inflated by the diagnostics itself
 Overnight, screen-off, in doze: **35% @ 22:51 → 1% @ 10:22 ≈ 3%/hour.** Healthy
-idle on this hardware should be ~0.5–1%/hour (per `battery-diagnostics-plan.md`).
+idle on this hardware should be ~0.5–1%/hour (per `../battery-diagnostics-plan.md`).
 Contributors visible in the data:
 
 - `dumpsys/suspend_stats-*`: **287 failed suspends (187 `failed_freeze`)**,

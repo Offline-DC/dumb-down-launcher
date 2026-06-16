@@ -50,8 +50,17 @@ object NetworkLocationFetcher {
     /**
      * Run a Wi-Fi + cell scan and resolve via BeaconDB. Returns lat/lng/accuracy
      * on success, null on any failure.
+     *
+     * [activeScan] controls whether we actively kick a fresh Wi-Fi scan via
+     * `WifiManager.startScan()`. Foreground callers pass true (the user is
+     * waiting for an accurate fix). Background callers pass false: on this
+     * MediaTek hardware each active scan triggers a WLAN chip wake that shows
+     * up as an `Abort: ... WLAN AHB ISR` suspend abort, so the hourly refresh
+     * uses whatever cached scan results the system already has instead of
+     * forcing the chip awake. If the cache is empty we simply get no Wi-Fi
+     * signals and fall through to cell-only / cached-location handling.
      */
-    fun fetch(context: Context): BeaconDbClient.Fix? {
+    fun fetch(context: Context, activeScan: Boolean = true): BeaconDbClient.Fix? {
         val ctx = context.applicationContext
         if (!hasLocationPermission(ctx)) {
             Log.w(TAG, "fetch: no location permission — required for SSID scan")
@@ -62,7 +71,7 @@ object NetworkLocationFetcher {
             return null
         }
 
-        val wifi = scanWifi(ctx)
+        val wifi = scanWifi(ctx, activeScan)
         val cells = scanCells(ctx)
         Log.d(TAG, "fetch: gathered ${wifi.size} wifi APs, ${cells.size} cell towers")
 
@@ -87,11 +96,22 @@ object NetworkLocationFetcher {
     // ─── Wi-Fi ──────────────────────────────────────────────────────────────
 
     @SuppressLint("MissingPermission")
-    private fun scanWifi(ctx: Context): List<BeaconDbClient.WifiAp> {
+    private fun scanWifi(ctx: Context, activeScan: Boolean = true): List<BeaconDbClient.WifiAp> {
         val wm = ctx.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return emptyList()
         if (!wm.isWifiEnabled) {
             Log.i(TAG, "scanWifi: Wi-Fi disabled — using whatever cached scanResults exist")
             return mapResults(wm.scanResults ?: emptyList())
+        }
+
+        // Background refresh: never force the Wi-Fi chip awake. Each
+        // startScan() on this MediaTek hardware causes a WLAN AHB ISR suspend
+        // abort, so passive callers just read the system's last scan results.
+        if (!activeScan) {
+            Log.i(TAG, "scanWifi: passive (background) — using cached scanResults, not triggering startScan()")
+            val cached = try { wm.scanResults ?: emptyList() } catch (e: Exception) {
+                Log.w(TAG, "scanWifi: getScanResults failed — ${e.message}"); emptyList()
+            }
+            return mapResults(cached)
         }
 
         // Subscribe to the SCAN_RESULTS broadcast *before* triggering the scan
