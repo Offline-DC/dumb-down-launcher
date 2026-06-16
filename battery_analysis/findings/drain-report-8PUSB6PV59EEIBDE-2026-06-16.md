@@ -123,7 +123,71 @@ In the quack location path, when `quack_netloc_scan` returns `insufficient_signa
 
 ## How to verify after a fix
 
-1. Reflash, leave the phone idle overnight (lid closed, off charger).
-2. `./scripts/diag_preflight.sh` before bed to confirm the service survives Doze.
-3. Pull again: `./scripts/diag_pull.sh --logcat --bundle`, then rebuild the bundle.
-4. Check: `suspend_stats/fail` near zero, `doze_changed` shows long uninterrupted idle stretches, **no** `quack_location_result` with `fell_back_to_gps: true` while screen-off, and in-Doze median current in the single digits.
+1. **Build and install** the fixed APK (`./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk`), then **reboot** so a new capture session starts.
+2. Leave the phone idle overnight (lid closed, off charger).
+3. `./battery_analysis/diag_preflight.sh` before bed to confirm the service survives Doze.
+4. Pull again: `./battery_analysis/diag_pull.sh --logcat --bundle`, then `python3 battery_analysis/drain_summary.py <new-pull>`.
+5. Check: `suspend_stats/fail` near zero, `doze_changed` shows long uninterrupted idle stretches, **no** `quack_location_result` with `fell_back_to_gps: true` while screen-off, and in-Doze median current in the single digits.
+
+---
+
+## Follow-up log
+
+### 2026-06-16 14:12 pull — fix committed, NOT yet measured ⚠️
+
+The quack patch is committed (`aa84f20 "Improve quack location"`, `f742764 "Improve
+battery after analysis"`): `allowGpsFallback = false`, `activeWifiScan = false`, and a
+`CONNECTED` network constraint on the refresh worker.
+
+**This pull does not measure the fix.** It shares the same `capture_session_id`
+(`1352210e…`) and the same 00:30 first sample as the original capture — i.e. the device
+was never rebuilt/reflashed/rebooted, so it is still running the pre-fix build. No APK
+exists under `app/build/outputs`. The idle samples are unchanged (in-Doze median 47.1 mA,
+6 GPS fallbacks — identical), confirming this is the same run with daytime active-use hours
+appended. The rises in WLAN aborts (191→555), `wifi_scan` (16→28) and fail-rate (14.9%→17.7%)
+are from those extra screen-on office hours on Wi-Fi, not a regression.
+
+**To produce a valid "after":** build + install the APK, reboot, then capture a fresh
+overnight idle window. The next pull must have a **new `capture_session_id`** and a
+screen-off/Doze stretch before any comparison is meaningful.
+
+### 2026-06-16 — additional opportunities found in the pre-fix data
+
+Re-mining the same capture for levers *beyond* the quack location fix already shipped:
+
+**A. The launcher's own cellular keepalives (~4 MB / 14 h).** Per-uid `netstats` shows
+overnight cellular split roughly evenly across four apps — openbubbles 3.98 MB
+(uid 10116), **launcher 3.96 MB (uid 10105)**, Uber Lite 3.77 MB (10109), WhatsApp
+3.22 MB (10104). The launcher's share is its persistent companion/relay sockets
+(`MouseAccessibilityService` relay, ContactSync, TypeSync, WebKeyboard). These keep
+`ccmni_md` (the #1 suspend-abort source) awake. *Opportunity:* tear down / pause these
+sockets when screen-off + companion idle, and reconnect on unlock. This is the largest
+remaining **launcher-owned** lever after the location fix.
+
+**B. Wi-Fi overnight is still the dominant systemic lever — but it's not launcher-only.**
+The cellular load is four roughly-equal apps, so even a perfect launcher fix removes only
+~25% of it. Getting (and keeping) the device on Wi-Fi overnight addresses all four at once.
+The launcher's WifiNudge only fires fortnightly — consider a more proactive nudge, or
+investigate why Wi-Fi drops when the screen is off (sleep policy).
+
+**C. The diagnostics module inflates the very drain it measures.** This 14 h capture wrote
+**426 MB** — ~1,300 `dumpsys` snapshots (≈19 types) plus 70 `logcat` dumps + a rolling
+logcat. Snapshots fire on *every* screen on/off as well as hourly (23 in the 12:00 hour of
+active use). Each snapshot wakes the CPU and does I/O. *Opportunity:* for long/production
+captures, drop the per-screen-transition full-`dumpsys` snapshots (keep hourly + a small
+set), and cap logcat retention. Reduces both the observer effect and storage pressure
+(device had only 685 MB free).
+
+**D. Third-party background apps.** WhatsApp fires ~50 `HEARTBEAT_WAKEUP` alarms and, with
+Uber Lite, each pulls ~3–4 MB of cellular overnight. Not launcher code, but if the launcher
+curates the app set it could place rarely-used apps in a restricted standby bucket / restrict
+background data. (Product decision.)
+
+**E. Minor — lid event handling.** 39 lid events (12 while screen-off, 2 `lid_bounce`).
+Each screen-off lid event risks waking the screen. A small debounce / ignore-spurious-lid
+pass would trim a handful of wakes. Low impact.
+
+**Ruled out (still):** no launcher wakelock leak — uid 10105 holds only the expected
+WorkManager job wakelock (6.8 s) plus trivial `*alarm*`/`*location*` locks; no
+`AndroidRuntime` crashes. The launcher's scheduled `RTC_WAKEUP` alarms are days in the
+future (fortnightly nudge), not a waker.
