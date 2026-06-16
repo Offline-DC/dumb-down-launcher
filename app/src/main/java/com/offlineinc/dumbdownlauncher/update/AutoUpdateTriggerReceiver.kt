@@ -23,19 +23,10 @@ class AutoUpdateTriggerReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         Log.i(TAG, "manual auto-update trigger: ${intent.action}")
-        val pending = goAsync()
-        Thread {
-            try {
-                AutoUpdateAlarmReceiver.runAutoUpdate(context)
-            } catch (t: Throwable) {
-                Log.e(TAG, "manual auto-update run failed", t)
-            } finally {
-                try {
-                    pending.finish()
-                } catch (_: Throwable) {
-                }
-            }
-        }.apply { isDaemon = true }.start()
+        // Same reason as the 4 AM alarm: the work can run for minutes, so it
+        // must NOT happen in the receiver (broadcast ANR at ~60 s). Hand off to
+        // the same WorkManager job and return immediately.
+        AutoUpdateWorker.enqueue(context)
     }
 
     companion object {

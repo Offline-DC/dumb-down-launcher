@@ -217,25 +217,13 @@ class AutoUpdateAlarmReceiver : BroadcastReceiver() {
             .putString(KEY_LAST_FIRED, dayKey(Calendar.getInstance()))
             .apply()
 
-        // Work is network + multi-MB I/O + a `pm` subprocess — keep it off the
-        // broadcast's main thread via goAsync().
-        val pending = goAsync()
-        Thread {
-            try {
-                runAutoUpdate(context)
-            } catch (t: Throwable) {
-                Log.e(TAG, "auto-update run failed", t)
-            } finally {
-                try {
-                    scheduleNext(context)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "re-arm failed", t)
-                }
-                try {
-                    pending.finish()
-                } catch (_: Throwable) {
-                }
-            }
-        }.apply { isDaemon = true }.start()
+        // The actual download+install can take minutes (the OpenBubbles zip is
+        // large), which is far beyond the ~60 s a BroadcastReceiver is allowed
+        // before the system raises a broadcast ANR and kills the process. So we
+        // do NOT run it here — hand off to a WorkManager job and return fast.
+        AutoUpdateWorker.enqueue(context)
+
+        // Re-arm tomorrow's alarm immediately (cheap, synchronous).
+        scheduleNext(context)
     }
 }

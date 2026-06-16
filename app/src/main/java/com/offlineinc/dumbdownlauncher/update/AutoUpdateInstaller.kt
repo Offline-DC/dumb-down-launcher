@@ -158,29 +158,63 @@ object AutoUpdateInstaller {
     }
 
     /**
-     * Installs [apks] (one for a single APK, many for a split set) atomically
-     * via root `pm install-multiple -r`. `-r` reinstalls keeping data; we only
-     * call this when the release is strictly newer, so no `-d` downgrade flag.
+     * Installs [apks] (one for a single APK, many for a split set) atomically as
+     * root via the PackageInstaller **session** shell API:
      *
-     * The files live in the launcher's own external-files / cache dir, which the
-     * root shell can read. Returns true on a "Success" result from `pm`.
+     *   pm install-create -r -S <total>   → "Success: created install session [N]"
+     *   pm install-write  -S <size> N <name> <path>   (once per apk)
+     *   pm install-commit N
+     *
+     * NOTE: there is no device-side `pm install-multiple` — that's a host/adb
+     * convenience that itself drives this same create/write/commit sequence.
+     * Calling it returns "Unknown command", which is the bug this replaces.
+     *
+     * `-r` reinstalls keeping data; we only call this when the release is
+     * strictly newer, so no `-d` downgrade flag. The apk files live in the
+     * launcher's own external-files / cache dir, readable by the root shell.
+     * Returns true only when the commit reports Success.
      */
     private fun rootInstall(apks: List<File>): Boolean {
         if (apks.isEmpty()) return false
-        val paths = apks.joinToString(" ") { "'" + it.absolutePath.replace("'", "'\\''") + "'" }
-        val cmd = "pm install-multiple -r $paths"
-        return try {
-            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-            val stdout = proc.inputStream.bufferedReader().readText().trim()
-            val stderr = proc.errorStream.bufferedReader().readText().trim()
-            val exit = proc.waitFor()
-            Log.i(TAG, "pm install-multiple exit=$exit out=$stdout err=$stderr")
-            // pm prints "Success" on stdout; some builds exit 0 with it there,
-            // others echo it regardless — trust the textual marker primarily.
-            exit == 0 && stdout.contains("Success", ignoreCase = true)
+        val total = apks.sumOf { it.length() }
+
+        val (cExit, cOut, cErr) = su("pm install-create -r -S $total")
+        Log.i(TAG, "install-create exit=$cExit out=$cOut err=$cErr")
+        if (cExit != 0) return false
+        val sid = Regex("\\[(\\d+)]").find(cOut)?.groupValues?.get(1)
+            ?: Regex("(\\d+)").find(cOut)?.groupValues?.get(1)
+            ?: run { Log.e(TAG, "could not parse session id from: $cOut"); return false }
+
+        try {
+            for (apk in apks) {
+                val (wExit, wOut, wErr) = su(
+                    "pm install-write -S ${apk.length()} $sid ${shq(apk.name)} ${shq(apk.absolutePath)}"
+                )
+                if (wExit != 0 || !wOut.contains("Success", ignoreCase = true)) {
+                    Log.e(TAG, "install-write failed for ${apk.name}: exit=$wExit out=$wOut err=$wErr")
+                    su("pm install-abandon $sid")
+                    return false
+                }
+            }
+            val (mExit, mOut, mErr) = su("pm install-commit $sid")
+            Log.i(TAG, "install-commit exit=$mExit out=$mOut err=$mErr")
+            return mExit == 0 && mOut.contains("Success", ignoreCase = true)
         } catch (t: Throwable) {
-            Log.e(TAG, "root pm install failed", t)
-            false
+            Log.e(TAG, "session install failed", t)
+            su("pm install-abandon $sid")
+            return false
         }
     }
+
+    /** Runs a root shell command, returning (exitCode, stdout, stderr). */
+    private fun su(cmd: String): Triple<Int, String, String> {
+        val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+        val out = proc.inputStream.bufferedReader().readText().trim()
+        val err = proc.errorStream.bufferedReader().readText().trim()
+        val exit = proc.waitFor()
+        return Triple(exit, out, err)
+    }
+
+    /** Single-quote a string for safe interpolation into a root shell command. */
+    private fun shq(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 }
