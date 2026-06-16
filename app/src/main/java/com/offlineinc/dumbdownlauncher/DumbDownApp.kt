@@ -775,6 +775,76 @@ class DumbDownApp : Application() {
     }
 
     /**
+     * Installs the `duckboot` Magisk module that overlays the bundled duck
+     * boot animation over the stock one.
+     *
+     * Layout created (mirrors a hand-built module):
+     *
+     *     /data/adb/modules/duckboot/
+     *     ├── module.prop
+     *     └── system/product/media/bootanimation.zip
+     *
+     * Magisk magic-mounts anything under the module's `system/` over the
+     * matching real path, so dropping the zip at `system/product/media/`
+     * overlays `/system/product/media/bootanimation.zip` (the live path on
+     * this device; `/product` is a symlink into `/system/product`). No
+     * scripts are required. surfaceflinger reads the new zip on the next
+     * boot, so the animation changes after a reboot.
+     *
+     * The zip ships in `assets/bootanimation.zip` already built store-only
+     * (uncompressed) — surfaceflinger will not play a deflated archive.
+     *
+     * All shell work goes through [rootExec], which enters init's mount
+     * namespace via `nsenter -t 1 -m` so Magisk sees the new module dir.
+     * Throws on any failure so the migration framework retries next boot.
+     */
+    private fun installDuckbootBootAnimation(tag: String) {
+        val base = "/data/adb/modules/duckboot"
+        val mediaDir = "$base/system/product/media"
+        val destZip = "$mediaDir/bootanimation.zip"
+
+        // Stage the bundled zip to the app cache dir — it lives on /data,
+        // which is visible inside init's mount namespace, and root can read
+        // it regardless of the cache dir's app-private permissions.
+        val staged = java.io.File(cacheDir, "duckboot_bootanimation.zip")
+        assets.open("bootanimation.zip").use { input ->
+            staged.outputStream().use { output -> input.copyTo(output) }
+        }
+
+        // Single rooted script. `printf` writes module.prop (double-quoted
+        // so the \n escapes survive rootExec's single-quote wrapping and
+        // printf expands them). chmod/chown to the standard root:root
+        // 0755-dir / 0644-file Magisk module perms; restorecon best-effort.
+        val script = listOf(
+            "set -e",
+            "mkdir -p $mediaDir",
+            "cp ${staged.absolutePath} $destZip",
+            "printf \"id=duckboot\\n" +
+                "name=Duck Boot Animation\\n" +
+                "version=v1.0\\n" +
+                "versionCode=1\\n" +
+                "author=jack\\n" +
+                "description=Bouncing duck boot animation. " +
+                "Overlays /product/media/bootanimation.zip systemlessly.\\n\" " +
+                "> $base/module.prop",
+            "chown -R 0:0 $base",
+            "chmod 0755 $base $base/system $base/system/product $mediaDir",
+            "chmod 0644 $base/module.prop $destZip",
+            "restorecon -R $base 2>/dev/null || true",
+            "test -f $destZip",
+        ).joinToString("\n")
+
+        val (exit, out, err) = rootExec(script)
+        staged.delete()
+        if (exit != 0) {
+            throw RuntimeException(
+                "duckboot Magisk module install failed (exit=$exit): out=$out err=$err"
+            )
+        }
+        Log.i(tag, "✅ Installed duckboot Magisk module — boot animation applies on next reboot")
+    }
+
+    /**
      * Runs one-time migrations keyed by name. Each migration executes at most
      * once across app updates. Add new entries to the map below.
      */
@@ -1229,6 +1299,27 @@ class DumbDownApp : Application() {
             // migrations prefs) won't create duplicates.
             "install_dumb_line_contact_v1" to {
                 DumbLineContactInstaller.ensureInstalled(this)
+            },
+            // Install the "duckboot" Magisk module that systemlessly
+            // overlays our duck boot animation over the stock one. The
+            // module is just module.prop + system/product/media/
+            // bootanimation.zip (a store-only zip shipped in
+            // app/src/main/assets/). Magisk magic-mounts the file over the
+            // real /system/product/media/bootanimation.zip because the
+            // in-module path mirrors the partition path — on this Galaxy
+            // /product is a symlink into /system/product, so that's the
+            // correct overlay target. No post-fs-data.sh / service.sh are
+            // needed; magic-mount alone does it. The new animation appears
+            // on the NEXT reboot (surfaceflinger reads the zip at boot).
+            //
+            // Idempotent: re-running overwrites module.prop and the zip in
+            // place under the same `duckboot` id. THROWS on failure (e.g.
+            // the su daemon isn't ready this early on a cold boot) so the
+            // framework leaves the flag unset and retries on the next
+            // boot. Bump the v-suffix (-> _v2) to force every device to
+            // re-copy the bundled zip after the asset changes.
+            "install_duckboot_bootanimation_v1" to {
+                installDuckbootBootAnimation(tag)
             },
         )
 
