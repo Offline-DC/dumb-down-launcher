@@ -45,7 +45,6 @@ class MouseAccessibilityService : AccessibilityService() {
     private var openBubblesForeground = false
     private var currentDensity = -1
 
-
     // True while the star-key special-char picker is open.
     // The mouse is disabled for this duration.
     private var specialCharPickerOpen = false
@@ -1180,7 +1179,7 @@ class MouseAccessibilityService : AccessibilityService() {
                 handlePackage(pkg, className)
                 return
             }
-            if (!className.contains("Activity") && pkg != "com.apple.android.music") {
+            if (!className.contains("Activity")) {
                 Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: skipped (no 'Activity' in className)")
                 return
             }
@@ -1328,8 +1327,6 @@ class MouseAccessibilityService : AccessibilityService() {
         if (!webViewActivityActive) {
             if (pkg == "com.whatsapp") {
                 handleWhatsAppDensity()
-            } else if (pkg == "com.apple.android.music") {
-                handleAppleMusicDensity()
             } else if (currentDensity != 120) {
                 setDensity(120)
             }
@@ -1350,19 +1347,6 @@ class MouseAccessibilityService : AccessibilityService() {
                 Log.e("MOUSE_SVC", "handleWhatsAppDensity failed: ${t.message}")
             }
         }
-    }
-
-    private fun handleAppleMusicDensity() {
-        val onSignInPage = try {
-            val root = rootInActiveWindow
-            val nodes = root?.findAccessibilityNodeInfosByViewId("com.apple.android.music:id/signin_title_tv")
-            root?.recycle()
-            !nodes.isNullOrEmpty()
-        } catch (t: Throwable) {
-            Log.e("MOUSE_SVC", "handleAppleMusicDensity: sign-in check failed: ${t.message}")
-            false
-        }
-        setDensity(if (onSignInPage) 80 else 120)
     }
 
     private fun setDensity(density: Int) {
