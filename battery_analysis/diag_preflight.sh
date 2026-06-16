@@ -13,11 +13,11 @@
 # numbered fix list with the exact taps to do on the phone.
 #
 # Usage:
-#   ./scripts/diag_preflight.sh                 # full check, ~3 min (incl. soak)
-#   ./scripts/diag_preflight.sh --soak 60       # shorter soak (default 180s)
-#   ./scripts/diag_preflight.sh --no-soak       # skip the live-sample soak
-#   ./scripts/diag_preflight.sh --serial XYZ    # pick a specific device
-#   ./scripts/diag_preflight.sh -h
+#   ./battery_analysis/diag_preflight.sh                 # full check, ~3 min (incl. soak)
+#   ./battery_analysis/diag_preflight.sh --soak 60       # shorter soak (default 180s)
+#   ./battery_analysis/diag_preflight.sh --no-soak       # skip the live-sample soak
+#   ./battery_analysis/diag_preflight.sh --serial XYZ    # pick a specific device
+#   ./battery_analysis/diag_preflight.sh -h
 #
 # What it checks (in order, fastest to slowest):
 #   1.  adb connection + single device
@@ -379,7 +379,7 @@ if [ "${#FAILS[@]}" -eq 0 ]; then
         echo "    2.  close the lid"
         echo "    3.  put it flat and don't touch it until morning"
         echo "    4.  in the morning, run:"
-        echo "        ./scripts/diag_pull.sh --logcat --bundle"
+        echo "        ./battery_analysis/diag_pull.sh --logcat --bundle"
         exit 0
     else
         echo "  ${Y}${B}🟡 safe to leave overnight, with ${#WARNS[@]} warning(s):${X}"
@@ -406,6 +406,6 @@ else
         done
     fi
     echo
-    echo "  rerun ${B}./scripts/diag_preflight.sh${X} after each fix."
+    echo "  rerun ${B}./battery_analysis/diag_preflight.sh${X} after each fix."
     exit 1
 fi

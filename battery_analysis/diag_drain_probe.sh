@@ -16,17 +16,17 @@
 # files.
 #
 # Usage:
-#   ./scripts/diag_drain_probe.sh                  # default suspect set
-#   ./scripts/diag_drain_probe.sh --serial XYZ     # pick a specific device
-#   ./scripts/diag_drain_probe.sh --out ~/Desktop  # custom destination
-#   ./scripts/diag_drain_probe.sh --extra-pkg com.foo,com.bar
+#   ./battery_analysis/diag_drain_probe.sh                  # default suspect set
+#   ./battery_analysis/diag_drain_probe.sh --serial XYZ     # pick a specific device
+#   ./battery_analysis/diag_drain_probe.sh --out ~/Desktop  # custom destination
+#   ./battery_analysis/diag_drain_probe.sh --extra-pkg com.foo,com.bar
 #                                                  # add packages to the
 #                                                  # jobscheduler + netstats
 #                                                  # probes (default set:
 #                                                  # launcher + openbubbles)
-#   ./scripts/diag_drain_probe.sh --no-history     # skip the slow history
+#   ./battery_analysis/diag_drain_probe.sh --no-history     # skip the slow history
 #                                                  # dump (saves ~5s)
-#   ./scripts/diag_drain_probe.sh -h
+#   ./battery_analysis/diag_drain_probe.sh -h
 #
 # Output layout:
 #   drain_probes/<serial>_<utc-ts>/

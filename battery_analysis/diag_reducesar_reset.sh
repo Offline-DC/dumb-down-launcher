@@ -25,7 +25,7 @@
 #       Application class re-runs from a known-clean state.
 #
 # After the phone is back up:
-#   ./scripts/diag_drain_probe.sh   # OPTIONAL — confirms reducesar IS
+#   ./battery_analysis/diag_drain_probe.sh   # OPTIONAL — confirms reducesar IS
 #                                   # holding GPS again (i.e. broken
 #                                   # state restored)
 #   adb install -r app/build/outputs/apk/debug/app-debug.apk   # or
@@ -35,16 +35,16 @@
 #                                   # .MtkCommonSarService"
 #   adb reboot                      # apply the disable
 #   # …unplug + lid closed + 45 min…
-#   ./scripts/diag_reducesar_check.sh   # confirm the fix took
+#   ./battery_analysis/diag_reducesar_check.sh   # confirm the fix took
 #
 # Usage:
-#   ./scripts/diag_reducesar_reset.sh                 # default
-#   ./scripts/diag_reducesar_reset.sh --serial XYZ    # pick a device
-#   ./scripts/diag_reducesar_reset.sh --no-reboot     # skip the final
+#   ./battery_analysis/diag_reducesar_reset.sh                 # default
+#   ./battery_analysis/diag_reducesar_reset.sh --serial XYZ    # pick a device
+#   ./battery_analysis/diag_reducesar_reset.sh --no-reboot     # skip the final
 #                                                     # reboot (you'll
 #                                                     # have to reboot
 #                                                     # manually later)
-#   ./scripts/diag_reducesar_reset.sh -h
+#   ./battery_analysis/diag_reducesar_reset.sh -h
 
 set -u
 
@@ -227,7 +227,7 @@ ${B}what to do next:${X}
      adb -s $SERIAL reboot
 
   5. ${D}# after the wait, plug back in and verify the fix engaged:${X}
-     ./scripts/diag_reducesar_check.sh --serial $SERIAL
+     ./battery_analysis/diag_reducesar_check.sh --serial $SERIAL
 EOF
 else
     warn "skipping reboot per --no-reboot"

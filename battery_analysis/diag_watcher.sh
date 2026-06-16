@@ -8,12 +8,12 @@
 # leave the phone plugged in on a desk.
 #
 # Usage:
-#   ./scripts/diag_watcher.sh                     # poll every 60s, run forever
-#   ./scripts/diag_watcher.sh --interval 30       # poll every 30s
-#   ./scripts/diag_watcher.sh --duration 1h       # stop after 1 hour
-#   ./scripts/diag_watcher.sh --duration 24h      # overnight watch
-#   ./scripts/diag_watcher.sh --interval 30 --duration 2h
-#   ./scripts/diag_watcher.sh -h
+#   ./battery_analysis/diag_watcher.sh                     # poll every 60s, run forever
+#   ./battery_analysis/diag_watcher.sh --interval 30       # poll every 30s
+#   ./battery_analysis/diag_watcher.sh --duration 1h       # stop after 1 hour
+#   ./battery_analysis/diag_watcher.sh --duration 24h      # overnight watch
+#   ./battery_analysis/diag_watcher.sh --interval 30 --duration 2h
+#   ./battery_analysis/diag_watcher.sh -h
 #
 # What it checks each poll:
 #   - device still connected

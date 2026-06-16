@@ -24,13 +24,13 @@
 #   ./diag_pulls/<device-serial>_<utc-timestamp>.tar.gz   (optional, with --bundle)
 #
 # Usage:
-#   ./scripts/diag_pull.sh                       # pull into ./diag_pulls/<...>/
-#   ./scripts/diag_pull.sh --out ~/Desktop       # custom destination root
-#   ./scripts/diag_pull.sh --logcat              # also grab a fresh logcat tail
-#   ./scripts/diag_pull.sh --bundle              # tar.gz the pull dir at the end
-#   ./scripts/diag_pull.sh --serial R5CN123      # pick a specific device
-#   ./scripts/diag_pull.sh --clear               # delete on-device diag/ after pulling
-#   ./scripts/diag_pull.sh -h
+#   ./battery_analysis/diag_pull.sh                       # pull into ./diag_pulls/<...>/
+#   ./battery_analysis/diag_pull.sh --out ~/Desktop       # custom destination root
+#   ./battery_analysis/diag_pull.sh --logcat              # also grab a fresh logcat tail
+#   ./battery_analysis/diag_pull.sh --bundle              # tar.gz the pull dir at the end
+#   ./battery_analysis/diag_pull.sh --serial R5CN123      # pick a specific device
+#   ./battery_analysis/diag_pull.sh --clear               # delete on-device diag/ after pulling
+#   ./battery_analysis/diag_pull.sh -h
 #
 # The pull leaves the on-device files in place by default so the service
 # can keep appending. Use --clear ONLY after you've sanity-checked the
