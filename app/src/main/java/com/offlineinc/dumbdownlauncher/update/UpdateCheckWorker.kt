@@ -48,17 +48,18 @@ class UpdateCheckWorker(
             val betaChannel = PairingStore(context).betaTesterMode
             val latest = UpdateChecker.fetchLatest(betaChannel)
 
+            // Collect all pending updates, then post a single combined notification
+            // so the shade shows one tile instead of one per app.
+            val pendingUpdates = mutableListOf<UpdateNotificationManager.PendingUpdate>()
+
             // Check launcher update
             val launcherInfo = latest["dumb-down-launcher"]
             if (launcherInfo != null && launcherInfo.versionCode > BuildConfig.VERSION_CODE) {
-                UpdateNotificationManager.notify(
-                    context = context,
-                    notificationId = UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER,
+                pendingUpdates.add(UpdateNotificationManager.PendingUpdate(
                     appKey = "dumb-down-launcher",
-                    appDisplayName = "Dumb Down Launcher",
                     versionName = launcherInfo.versionName,
                     downloadUrl = launcherInfo.downloadUrl,
-                )
+                ))
             }
 
             // Contact sync is now integrated — no separate update check needed
@@ -68,14 +69,11 @@ class UpdateCheckWorker(
             if (snakeInfo != null) {
                 val installedCode = getInstalledVersionCode("com.snake")
                 if (installedCode != null && snakeInfo.versionCode > installedCode) {
-                    UpdateNotificationManager.notify(
-                        context = context,
-                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_SNAKE,
+                    pendingUpdates.add(UpdateNotificationManager.PendingUpdate(
                         appKey = "snake",
-                        appDisplayName = "Snake",
                         versionName = snakeInfo.versionName,
                         downloadUrl = snakeInfo.downloadUrl,
-                    )
+                    ))
                 }
             }
 
@@ -94,16 +92,17 @@ class UpdateCheckWorker(
                         openBubblesInfo.versionName,
                         openBubblesInfo.versionCode,
                     )
-                    UpdateNotificationManager.notify(
-                        context = context,
-                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
+                    pendingUpdates.add(UpdateNotificationManager.PendingUpdate(
                         appKey = "openbubbles-messaging",
-                        appDisplayName = "Smart Txt",
                         versionName = openBubblesInfo.versionName,
                         downloadUrl = openBubblesInfo.downloadUrl,
-                    )
+                    ))
                 }
             }
+
+            // Post one combined notification for all pending updates (or one
+            // per-app tile if only a single update was found).
+            UpdateNotificationManager.notifyCombined(context, pendingUpdates)
 
             Result.success()
         } catch (_: Exception) {
@@ -161,18 +160,15 @@ class UpdateCheckWorker(
                 val betaChannel = PairingStore(context).betaTesterMode
                 val latest = UpdateChecker.fetchLatest(betaChannel)
 
-                var found = false
+                val pendingUpdates = mutableListOf<UpdateNotificationManager.PendingUpdate>()
+
                 val launcherInfo = latest["dumb-down-launcher"]
                 if (launcherInfo != null && launcherInfo.versionCode > BuildConfig.VERSION_CODE) {
-                    UpdateNotificationManager.notify(
-                        context = context,
-                        notificationId = UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER,
+                    pendingUpdates.add(UpdateNotificationManager.PendingUpdate(
                         appKey = "dumb-down-launcher",
-                        appDisplayName = "Dumb Launcher",
                         versionName = launcherInfo.versionName,
                         downloadUrl = launcherInfo.downloadUrl,
-                    )
-                    found = true
+                    ))
                 }
 
                 // Contact sync is now integrated — no separate update check needed
@@ -184,15 +180,11 @@ class UpdateCheckWorker(
                         PackageInfoCompat.getLongVersionCode(info).toInt()
                     } catch (_: Exception) { null }
                     if (installedCode != null && snakeInfo.versionCode > installedCode) {
-                        UpdateNotificationManager.notify(
-                            context = context,
-                            notificationId = UpdateNotificationManager.NOTIFICATION_ID_SNAKE,
+                        pendingUpdates.add(UpdateNotificationManager.PendingUpdate(
                             appKey = "snake",
-                            appDisplayName = "Snake",
                             versionName = snakeInfo.versionName,
                             downloadUrl = snakeInfo.downloadUrl,
-                        )
-                        found = true
+                        ))
                     }
                 }
 
@@ -209,19 +201,16 @@ class UpdateCheckWorker(
                             openBubblesInfo.versionName,
                             openBubblesInfo.versionCode,
                         )
-                        UpdateNotificationManager.notify(
-                            context = context,
-                            notificationId = UpdateNotificationManager.NOTIFICATION_ID_OPENBUBBLES,
+                        pendingUpdates.add(UpdateNotificationManager.PendingUpdate(
                             appKey = "openbubbles-messaging",
-                            appDisplayName = "Smart Txt",
                             versionName = openBubblesInfo.versionName,
                             downloadUrl = openBubblesInfo.downloadUrl,
-                        )
-                        found = true
+                        ))
                     }
                 }
 
-                if (found) UpdateCheckResult.UPDATE_FOUND else UpdateCheckResult.UP_TO_DATE
+                UpdateNotificationManager.notifyCombined(context, pendingUpdates)
+                if (pendingUpdates.isNotEmpty()) UpdateCheckResult.UPDATE_FOUND else UpdateCheckResult.UP_TO_DATE
             } catch (_: Exception) {
                 // fetchHighestRelease now propagates network/IO errors instead
                 // of swallowing them. Anything reaching here (UnknownHostException,
