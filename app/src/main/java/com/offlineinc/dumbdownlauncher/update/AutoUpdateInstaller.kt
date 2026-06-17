@@ -162,16 +162,24 @@ object AutoUpdateInstaller {
      * root via the PackageInstaller **session** shell API:
      *
      *   pm install-create -r -S <total>   → "Success: created install session [N]"
-     *   pm install-write  -S <size> N <name> <path>   (once per apk)
+     *   pm install-write  -S <size> N <name> -   (once per apk; APK streamed via stdin)
      *   pm install-commit N
      *
      * NOTE: there is no device-side `pm install-multiple` — that's a host/adb
      * convenience that itself drives this same create/write/commit sequence.
      * Calling it returns "Unknown command", which is the bug this replaces.
      *
+     * We stream each APK into `install-write` over **stdin** (the trailing `-`)
+     * rather than passing a file path. When a path is passed, it's system_server
+     * (the PackageInstaller session, SELinux context u:r:system_server:s0) that
+     * opens it — and it cannot read files under the app's external-files dir,
+     * which carry the u:object_r:sdcardfs:s0 label ("System server has no access
+     * to read file context ... sdcardfs"). Streaming has the root shell read the
+     * bytes (root *can* read sdcardfs) and hand the session an fd, so the staging
+     * location no longer matters.
+     *
      * `-r` reinstalls keeping data; we only call this when the release is
-     * strictly newer, so no `-d` downgrade flag. The apk files live in the
-     * launcher's own external-files / cache dir, readable by the root shell.
+     * strictly newer, so no `-d` downgrade flag.
      * Returns true only when the commit reports Success.
      */
     private fun rootInstall(apks: List<File>): Boolean {
@@ -187,8 +195,9 @@ object AutoUpdateInstaller {
 
         try {
             for (apk in apks) {
-                val (wExit, wOut, wErr) = su(
-                    "pm install-write -S ${apk.length()} $sid ${shq(apk.name)} ${shq(apk.absolutePath)}"
+                val (wExit, wOut, wErr) = suStdin(
+                    "pm install-write -S ${apk.length()} $sid ${shq(apk.name)} -",
+                    apk,
                 )
                 if (wExit != 0 || !wOut.contains("Success", ignoreCase = true)) {
                     Log.e(TAG, "install-write failed for ${apk.name}: exit=$wExit out=$wOut err=$wErr")
@@ -212,6 +221,30 @@ object AutoUpdateInstaller {
         val out = proc.inputStream.bufferedReader().readText().trim()
         val err = proc.errorStream.bufferedReader().readText().trim()
         val exit = proc.waitFor()
+        return Triple(exit, out, err)
+    }
+
+    /**
+     * Like [su], but streams [stdinFile]'s bytes into the command's stdin — used
+     * to feed an APK to `pm install-write … -` so system_server never has to open
+     * the (sdcardfs-labeled) file itself. The bytes are pumped on a separate
+     * thread while the main thread drains stdout/stderr, so a full pipe buffer
+     * can't deadlock the multi-MB write. A broken pipe (pm exiting early) is
+     * swallowed here and surfaced via the non-zero exit / stderr instead.
+     */
+    private fun suStdin(cmd: String, stdinFile: File): Triple<Int, String, String> {
+        val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+        val pump = Thread {
+            try {
+                proc.outputStream.use { os -> stdinFile.inputStream().use { it.copyTo(os) } }
+            } catch (_: Throwable) {
+                // Broken pipe if pm rejected the session before reading all bytes.
+            }
+        }.apply { start() }
+        val out = proc.inputStream.bufferedReader().readText().trim()
+        val err = proc.errorStream.bufferedReader().readText().trim()
+        val exit = proc.waitFor()
+        pump.join()
         return Triple(exit, out, err)
     }
 
