@@ -98,8 +98,16 @@ class DiagnosticsActivity : AppCompatActivity() {
                         Toast.makeText(this@DiagnosticsActivity, "Diagnostics started", Toast.LENGTH_SHORT).show()
                     } else {
                         store.enabled = false
+                        // The service wipes the battery-diagnostics logs it
+                        // collected as the LAST step of its own teardown
+                        // (see DiagnosticsService.onDestroy, gated on
+                        // store.enabled == false). Doing it there rather than
+                        // here avoids a race where the service's final
+                        // session_end write recreates events.jsonl right
+                        // after an activity-side delete. The rolling adb-log
+                        // tree is left untouched.
                         DiagnosticsService.stop(this@DiagnosticsActivity)
-                        Toast.makeText(this@DiagnosticsActivity, "Diagnostics stopped", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@DiagnosticsActivity, "Diagnostics stopped — logs cleared", Toast.LENGTH_SHORT).show()
                     }
                 },
                 onToggleRollingLogs = { newValue ->
@@ -113,10 +121,17 @@ class DiagnosticsActivity : AppCompatActivity() {
                             Toast.LENGTH_LONG,
                         ).show()
                     } else {
+                        // The service wipes the rolling-logcat tree it
+                        // collected as the last step of its own teardown
+                        // (see RebootLoggingService.onDestroy, gated on
+                        // store.enabled == false) — done there rather than
+                        // here so the tail thread can't recreate current.log
+                        // in the gap before teardown finishes. Battery
+                        // diagnostics files are left alone.
                         RebootLoggingService.stop(applicationContext)
                         Toast.makeText(
                             this@DiagnosticsActivity,
-                            "rolling adb logs off",
+                            "rolling adb logs off — logs cleared",
                             Toast.LENGTH_LONG,
                         ).show()
                     }
@@ -151,8 +166,21 @@ class DiagnosticsActivity : AppCompatActivity() {
                     }
                 },
                 onResetSession = {
-                    val fresh = store.resetSession()
-                    Toast.makeText(this@DiagnosticsActivity, "New session: ${fresh.take(8)}…", Toast.LENGTH_SHORT).show()
+                    // Wipe every existing log file BEFORE minting the new
+                    // session id, so the next capture bundle only contains
+                    // the new session's data. Delete on IO, then reset the
+                    // session + toast back on the main thread.
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        DiagnosticsPaths.clearAllLogs(applicationContext)
+                        withContext(Dispatchers.Main) {
+                            val fresh = store.resetSession()
+                            Toast.makeText(
+                                this@DiagnosticsActivity,
+                                "logs cleared — new session: ${fresh.take(8)}…",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
                 },
                 onBack = { finish() },
             )
@@ -206,7 +234,10 @@ private fun DiagnosticsScreen(
                 onSubmitLogs { uploading = false }
             }
         },
-        Row.Action("reset session") {
+        Row.Action(
+            "reset session",
+            secondary = "clears all logs, starts fresh",
+        ) {
             sessionVersion += 1
             onResetSession()
         },
@@ -217,6 +248,32 @@ private fun DiagnosticsScreen(
     )
 
     var selectedIndex by remember { mutableIntStateOf(0) }
+
+    // Keep the selected row visible as d-pad up/down moves selection.
+    // Without this the LazyColumn never scrolls to follow the cursor, so
+    // rows past the fold (reset session / the adb-pull info row) appear
+    // unreachable even though selection is landing on them —
+    // which reads as "scrolling is broken". Mirrors the same effect in
+    // FreeUpSpaceScreen.RowList: only scroll when the selection falls
+    // outside the fully-visible window, so navigating between already-
+    // visible rows doesn't re-center and look jumpy.
+    LaunchedEffect(selectedIndex) {
+        val visible = listState.layoutInfo.visibleItemsInfo
+        if (visible.isEmpty()) {
+            listState.scrollToItem(selectedIndex)
+            return@LaunchedEffect
+        }
+        val viewportStart = listState.layoutInfo.viewportStartOffset
+        val viewportEnd = listState.layoutInfo.viewportEndOffset
+        val fullyVisible = visible.filter {
+            it.offset >= viewportStart && it.offset + it.size <= viewportEnd
+        }
+        val firstFull = fullyVisible.firstOrNull()?.index ?: visible.first().index
+        val lastFull = fullyVisible.lastOrNull()?.index ?: visible.last().index
+        if (selectedIndex < firstFull || selectedIndex > lastFull) {
+            listState.animateScrollToItem(selectedIndex)
+        }
+    }
 
     // The center key that long-press-launched this screen is usually still
     // held when we open — its auto-repeat KeyDowns would instantly toggle

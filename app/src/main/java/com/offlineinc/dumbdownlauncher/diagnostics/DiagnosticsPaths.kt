@@ -55,4 +55,48 @@ internal object DiagnosticsPaths {
         root.walkTopDown().forEach { if (it.isFile) total += it.length() }
         return total
     }
+
+    /**
+     * Subdirectory (under each diag root) that the rolling adb-log tail
+     * writes into. [clearBatteryLogs] excludes it so turning battery
+     * analysis off doesn't take the rolling adb logs down with it. The
+     * rolling tree's own wipe lives on [DiagPaths.clearRollingLogs] (the
+     * path object the rolling-logs service uses); kept in sync by name.
+     */
+    private const val ROLLING_LOGCAT_DIRNAME = "rolling-logcat"
+
+    /**
+     * Delete only the BATTERY-DIAGNOSTICS files in both roots — everything
+     * in the diag root EXCEPT the rolling-logcat subdir
+     * (`samples-*.jsonl`, `events-*.jsonl`, `manifest.json`, the `dumpsys/`
+     * snapshots, and the `logcat-*.txt` captures). Called when the user
+     * turns the "battery analysis" toggle off. Defined by exclusion so a
+     * future battery output added to the root is cleared automatically
+     * without revisiting this list.
+     */
+    fun clearBatteryLogs(context: Context) = forEachRoot(context) { root ->
+        root.listFiles()?.forEach { entry ->
+            if (entry.name != ROLLING_LOGCAT_DIRNAME) entry.deleteRecursively()
+        }
+    }
+
+    /**
+     * Delete the ENTIRE diag tree (both subsystems) in both roots. Used by
+     * the "reset session" action, which wipes every existing log file
+     * before a fresh capture session id is minted so the next bundle only
+     * contains the new session's data.
+     */
+    fun clearAllLogs(context: Context) = forEachRoot(context) { root ->
+        root.listFiles()?.forEach { it.deleteRecursively() }
+    }
+
+    /**
+     * Run [action] against each existing diag root (private + adb-pull
+     * mirror). [privateDiagDir]/[mirrorDiagDir] both mkdirs() the root, so
+     * the services keep a valid directory to write into after a wipe; the
+     * mirror is skipped only when external storage isn't mounted.
+     */
+    private inline fun forEachRoot(context: Context, action: (File) -> Unit) {
+        listOfNotNull(privateDiagDir(context), mirrorDiagDir(context)).forEach(action)
+    }
 }

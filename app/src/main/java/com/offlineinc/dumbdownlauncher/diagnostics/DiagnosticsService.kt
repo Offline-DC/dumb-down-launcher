@@ -183,6 +183,19 @@ class DiagnosticsService : Service() {
         }
         if (this::samplesWriter.isInitialized) samplesWriter.close()
         executor.shutdownNow()
+        // If the user turned battery analysis OFF (store.enabled == false),
+        // discard the logs this service collected. Done HERE — after the
+        // writers are closed and the final session_end line is flushed —
+        // rather than from DiagnosticsActivity, because deleting from the
+        // activity raced ahead of this teardown: the session_end write above
+        // would recreate events.jsonl right after the activity's delete,
+        // leaving a stray events file behind. Gated on !store.enabled so an
+        // OS low-memory kill (which leaves enabled == true and relies on the
+        // sticky restart to resume collection) never wipes the logs.
+        if (this::store.isInitialized && !store.enabled) {
+            runCatching { DiagnosticsPaths.clearBatteryLogs(this) }
+                .onFailure { Log.w(tag, "clearBatteryLogs on teardown failed", it) }
+        }
         super.onDestroy()
     }
 
