@@ -82,6 +82,18 @@ class RebootLoggingService : Service() {
     override fun onDestroy() {
         try { rollingLogcat?.stop() } catch (_: Throwable) {}
         rollingLogcat = null
+        // If the user turned rolling adb logs OFF (store.enabled == false),
+        // discard the rolling-logcat tree this service collected. Done here,
+        // after the tail is stopped and its writer is closed, rather than
+        // from DiagnosticsActivity — so the tail thread can't recreate
+        // current.log in the gap between an activity-side delete and the
+        // service finishing teardown. Gated on !store.enabled so an OS
+        // low-memory kill (enabled stays true, sticky restart resumes
+        // collection) never wipes the logs.
+        if (this::store.isInitialized && !store.enabled) {
+            runCatching { DiagPaths.clearRollingLogs(this) }
+                .onFailure { Log.w(tag, "clearRollingLogs on teardown failed", it) }
+        }
         super.onDestroy()
     }
 

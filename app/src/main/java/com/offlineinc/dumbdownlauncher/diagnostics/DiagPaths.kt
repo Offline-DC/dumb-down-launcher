@@ -42,4 +42,21 @@ internal object DiagPaths {
     fun adbPullCommand(packageName: String): String =
         "adb pull /sdcard/Android/data/$packageName/files/" +
             "${RebootLoggingConfig.DIAG_DIRNAME}/rolling-logcat/"
+
+    /** Subdirectory (under each diag root) the rolling logcat tail writes into. */
+    private const val ROLLING_LOGCAT_DIRNAME = "rolling-logcat"
+
+    /**
+     * Delete the rolling adb-log tree (`diag/rolling-logcat/`) in both roots.
+     * Called from [RebootLoggingService.onDestroy] when the user has turned
+     * rolling adb logs off, so the logs that toggle collected don't linger
+     * after it's disabled. The battery-diagnostics files (owned by the
+     * separate [DiagnosticsPaths]/[DiagnosticsService] stack but living in
+     * the same diag root) are left untouched.
+     */
+    fun clearRollingLogs(context: Context) {
+        listOfNotNull(privateDiagDir(context), mirrorDiagDir(context)).forEach { root ->
+            File(root, ROLLING_LOGCAT_DIRNAME).deleteRecursively()
+        }
+    }
 }

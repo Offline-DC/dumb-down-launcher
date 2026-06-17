@@ -58,23 +58,12 @@ internal object DiagnosticsPaths {
 
     /**
      * Subdirectory (under each diag root) that the rolling adb-log tail
-     * writes into. Single source of truth for the
-     * "which files belong to rolling logs vs battery diagnostics" split
-     * the on-demand clear helpers below depend on. Must stay in sync with
-     * RollingLogcatTail.rollingDir (private there, duplicated here rather
-     * than exposed to avoid widening that class's API).
+     * writes into. [clearBatteryLogs] excludes it so turning battery
+     * analysis off doesn't take the rolling adb logs down with it. The
+     * rolling tree's own wipe lives on [DiagPaths.clearRollingLogs] (the
+     * path object the rolling-logs service uses); kept in sync by name.
      */
     private const val ROLLING_LOGCAT_DIRNAME = "rolling-logcat"
-
-    /**
-     * Delete only the ROLLING ADB-LOG tree (`diag/rolling-logcat/`) in both
-     * roots. Called when the user turns the "rolling adb logs" toggle off,
-     * so the logs that toggle collected don't linger after it's disabled.
-     * Leaves the battery-diagnostics files untouched.
-     */
-    fun clearRollingLogs(context: Context) = forEachRoot(context) { root ->
-        File(root, ROLLING_LOGCAT_DIRNAME).deleteRecursively()
-    }
 
     /**
      * Delete only the BATTERY-DIAGNOSTICS files in both roots — everything

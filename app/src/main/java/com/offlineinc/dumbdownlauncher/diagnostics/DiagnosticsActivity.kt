@@ -98,15 +98,15 @@ class DiagnosticsActivity : AppCompatActivity() {
                         Toast.makeText(this@DiagnosticsActivity, "Diagnostics started", Toast.LENGTH_SHORT).show()
                     } else {
                         store.enabled = false
+                        // The service wipes the battery-diagnostics logs it
+                        // collected as the LAST step of its own teardown
+                        // (see DiagnosticsService.onDestroy, gated on
+                        // store.enabled == false). Doing it there rather than
+                        // here avoids a race where the service's final
+                        // session_end write recreates events.jsonl right
+                        // after an activity-side delete. The rolling adb-log
+                        // tree is left untouched.
                         DiagnosticsService.stop(this@DiagnosticsActivity)
-                        // Turning battery analysis off discards the logs it
-                        // collected (samples / events / dumpsys / logcat
-                        // snapshots) — the rolling adb-log tree is left
-                        // alone. Stop first so the service isn't mid-write,
-                        // then delete off the main thread.
-                        lifecycleScope.launch(Dispatchers.IO) {
-                            DiagnosticsPaths.clearBatteryLogs(applicationContext)
-                        }
                         Toast.makeText(this@DiagnosticsActivity, "Diagnostics stopped — logs cleared", Toast.LENGTH_SHORT).show()
                     }
                 },
@@ -121,14 +121,14 @@ class DiagnosticsActivity : AppCompatActivity() {
                             Toast.LENGTH_LONG,
                         ).show()
                     } else {
+                        // The service wipes the rolling-logcat tree it
+                        // collected as the last step of its own teardown
+                        // (see RebootLoggingService.onDestroy, gated on
+                        // store.enabled == false) — done there rather than
+                        // here so the tail thread can't recreate current.log
+                        // in the gap before teardown finishes. Battery
+                        // diagnostics files are left alone.
                         RebootLoggingService.stop(applicationContext)
-                        // Turning rolling adb logs off discards the logs it
-                        // collected (the diag/rolling-logcat/ tree) — battery
-                        // diagnostics files are left alone. Stop first, then
-                        // delete off the main thread.
-                        lifecycleScope.launch(Dispatchers.IO) {
-                            DiagnosticsPaths.clearRollingLogs(applicationContext)
-                        }
                         Toast.makeText(
                             this@DiagnosticsActivity,
                             "rolling adb logs off — logs cleared",
