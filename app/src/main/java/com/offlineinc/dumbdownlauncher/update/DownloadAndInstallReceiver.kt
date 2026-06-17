@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import java.io.File
+import java.util.zip.ZipFile
 
 class DownloadAndInstallReceiver : BroadcastReceiver() {
 
@@ -24,12 +25,56 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             Log.i(TAG, "onReceive: action=${intent.action}")
             when (intent.action) {
                 UpdateNotificationManager.ACTION_DOWNLOAD_APK -> {
+                    // Combined tap: EXTRA_APP_KEYS carries all app keys, EXTRA_DOWNLOAD_URLS
+                    // carries all URLs. Start each download in sequence on a bg thread,
+                    // honouring the per-app Wi-Fi guard and in-progress de-dupe.
+                    val appKeys = intent.getStringArrayListExtra(UpdateNotificationManager.EXTRA_APP_KEYS)
+                    val urls = intent.getStringArrayListExtra(UpdateNotificationManager.EXTRA_DOWNLOAD_URLS)
+                    if (appKeys != null && urls != null && appKeys.size > 1) {
+                        Log.i(TAG, "combined download tap: ${appKeys.joinToString()}")
+                        UpdateNotificationManager.cancel(context, UpdateNotificationManager.NOTIFICATION_ID_COMBINED)
+                        val pending = goAsync()
+                        Thread {
+                            try {
+                                appKeys.zip(urls).forEach { (appKey, url) ->
+                                    // Cellular guard — skip OpenBubbles if not on Wi-Fi and
+                                    // show the Wi-Fi nudge for that app only.
+                                    if (appKey == "openbubbles-messaging" && !NetworkUtils.isOnWifi(context)) {
+                                        Log.i(TAG, "combined: openbubbles skipped (not on Wi-Fi)")
+                                        UpdateNotificationManager.notifyWifiRequired(context, appKey, url)
+                                        return@forEach
+                                    }
+                                    if (UpdateNotificationManager.isUpdateInProgress(context, appKey)) {
+                                        Log.i(TAG, "combined: $appKey already in progress — skipping")
+                                        return@forEach
+                                    }
+                                    UpdateNotificationManager.markUpdateInProgress(context, appKey)
+                                    try {
+                                        startDownload(context, url, appKey)
+                                        Log.i(TAG, "combined: enqueued download for $appKey")
+                                    } catch (t: Throwable) {
+                                        Log.e(TAG, "combined: start download failed for $appKey", t)
+                                        UpdateNotificationManager.notifyFailed(context, appKey)
+                                    }
+                                }
+                            } catch (t: Throwable) {
+                                Log.e(TAG, "combined download thread failed", t)
+                            } finally {
+                                try { pending.finish() } catch (_: Throwable) { }
+                            }
+                        }.start()
+                        return
+                    }
+
+                    // Single-app tap (original path).
                     val url = intent.getStringExtra(UpdateNotificationManager.EXTRA_DOWNLOAD_URL)
+                        ?: urls?.firstOrNull()
                     if (url == null) {
                         Log.w(TAG, "ACTION_DOWNLOAD_APK with no download URL — ignoring")
                         return
                     }
                     val appKey = intent.getStringExtra(UpdateNotificationManager.EXTRA_APP_KEY)
+                        ?: appKeys?.firstOrNull()
                         ?: "app"
                     Log.i(TAG, "download requested: appKey=$appKey url=$url")
 
@@ -232,58 +277,73 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             return
         })
 
-        // OpenBubbles ships as a .zip of split APKs — install the whole set via
-        // a PackageInstaller session (ACTION_VIEW can't install splits). The
-        // success/failure result arrives asynchronously at handleInstallResult.
+        // OpenBubbles ships as a .zip of split APKs — extract then install all
+        // splits silently via root `pm install-multiple -r` so no confirmation
+        // dialog appears. The user already gave consent by tapping the notification.
         if (appKey == "openbubbles-messaging") {
             val sizeMb = apkFile.length() / (1024 * 1024)
             val freeMb = (apkFile.parentFile?.freeSpace ?: -1L) / (1024 * 1024)
-            Log.i(TAG, "triggerInstall: OB split-zip install size=${sizeMb}MB free=${freeMb}MB")
-            // Swap the (now-frozen) download bar for an "Installing…" state for
-            // the duration of the split write + commit.
+            Log.i(TAG, "triggerInstall: OB split-zip size=${sizeMb}MB free=${freeMb}MB")
             UpdateNotificationManager.notifyInstalling(context, appKey)
-            val started = SplitApkInstaller.installFromZip(context, apkFile, appKey)
-            if (!started) {
-                Log.e(TAG, "triggerInstall: split install couldn't start for $appKey")
+            val splitDir = File(context.cacheDir, "ob-splits").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            try {
+                val splits = extractSplitApks(apkFile, splitDir)
+                if (splits.isEmpty()) {
+                    Log.e(TAG, "triggerInstall: no installable APKs in OB zip")
+                    UpdateNotificationManager.notifyFailed(context, appKey)
+                    return
+                }
+                val paths = splits.joinToString(" ") { "'" + it.absolutePath.replace("'", "'\\''") + "'" }
+                val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install-multiple -r $paths"))
+                val stdout = proc.inputStream.bufferedReader().readText().trim()
+                val stderr = proc.errorStream.bufferedReader().readText().trim()
+                val exit = proc.waitFor()
+                Log.i(TAG, "OB silent install: exit=$exit out=$stdout err=$stderr")
+                val ok = exit == 0 && stdout.contains("Success", ignoreCase = true)
+                if (ok) {
+                    UpdateNotificationManager.notifyInstalled(context, appKey)
+                    apkFile.delete()
+                    com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesGate
+                        .applyRetentionOnceAsync(context)
+                } else {
+                    UpdateNotificationManager.notifyFailed(context, appKey)
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "triggerInstall: OB silent install threw", t)
                 UpdateNotificationManager.notifyFailed(context, appKey)
+            } finally {
+                splitDir.deleteRecursively()
             }
             return
         }
 
-        // Diagnostics: the system installer ("App not installed") doesn't tell
-        // us *why*, so log how the downloaded APK compares to what's installed
-        // (package, versionCode, signature) plus free space, which covers the
-        // usual rejection causes: signature mismatch, version downgrade, and
-        // insufficient storage.
-        logInstallDiagnostics(context, apkFile, appKey)
-
-        // Install via the normal system installer (ACTION_VIEW), exactly like
-        // the launcher's own self-update. The launcher already holds the
-        // REQUEST_INSTALL_PACKAGES appop (granted at provisioning), so this
-        // installs with no "trust this source" prompt — and without any extra
-        // on-disk copy of the (large) APK.
-        val contentUri = try {
-            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
-        } catch (e: Exception) {
-            Log.e(TAG, "triggerInstall: FileProvider.getUriForFile failed for $appKey", e)
-            UpdateNotificationManager.notifyFailed(context, appKey)
-            return
+        // Silent root install — same approach as AutoUpdateInstaller for the
+        // nightly path. Using root `pm install -r` means no system dialog pops
+        // up; the user already gave consent by tapping the notification.
+        // The launcher process is replaced when its own package installs, so
+        // post the "installing..." state first so the shade shows something
+        // during the brief restart window.
+        UpdateNotificationManager.notifyInstalling(context, appKey)
+        val path = apkFile.absolutePath.replace("'", "'\\''")
+        val ok = try {
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install -r '$path'"))
+            val stdout = proc.inputStream.bufferedReader().readText().trim()
+            val stderr = proc.errorStream.bufferedReader().readText().trim()
+            val exit = proc.waitFor()
+            Log.i(TAG, "silent install $appKey: exit=$exit out=$stdout err=$stderr")
+            exit == 0 && stdout.contains("Success", ignoreCase = true)
+        } catch (t: Throwable) {
+            Log.e(TAG, "silent install $appKey: root pm install threw", t)
+            false
         }
-
-        val installIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(contentUri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            context.startActivity(installIntent)
-            Log.i(TAG, "triggerInstall: launched installer for $appKey")
-            UpdateNotificationManager.cancel(context, notificationIdForKey(appKey))
-            // Handed off to the system installer (no result callback to us) —
-            // release the in-progress guard so future updates aren't blocked.
-            UpdateNotificationManager.clearUpdateInProgress(context, appKey)
-        } catch (e: Exception) {
-            Log.e(TAG, "triggerInstall: startActivity(installer) failed for $appKey", e)
+        if (ok) {
+            UpdateNotificationManager.notifyInstalled(context, appKey)
+            apkFile.delete()
+        } else {
+            Log.e(TAG, "triggerInstall: silent install failed for $appKey")
             UpdateNotificationManager.notifyFailed(context, appKey)
         }
     }
@@ -424,6 +484,22 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
         private const val PREFS_NAME = "update_prefs"
         private val APP_KEYS = listOf("dumb-down-launcher", "snake", "openbubbles-messaging")
         private fun downloadIdKey(appKey: String) = "pending_download_id_$appKey"
+
+        /** Extracts genuine .apk entries from [zip] into [outDir], skipping macOS junk. */
+        private fun extractSplitApks(zip: File, outDir: File): List<File> {
+            val out = mutableListOf<File>()
+            ZipFile(zip).use { zf ->
+                zf.entries().asSequence().forEach { entry ->
+                    if (entry.isDirectory) return@forEach
+                    val name = entry.name.substringAfterLast('/')
+                    if (!name.endsWith(".apk") || name.startsWith("._") || entry.name.startsWith("__MACOSX/")) return@forEach
+                    val target = File(outDir, name)
+                    zf.getInputStream(entry).use { it.copyTo(target.outputStream()) }
+                    out.add(target)
+                }
+            }
+            return out
+        }
 
         fun notificationIdForKey(appKey: String) = when (appKey) {
             "dumb-down-launcher" -> UpdateNotificationManager.NOTIFICATION_ID_LAUNCHER

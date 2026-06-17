@@ -36,6 +36,14 @@ object UpdateNotificationManager {
     const val ACTION_INSTALL_RESULT = "com.offlineinc.dumbdownlauncher.action.INSTALL_RESULT"
     const val EXTRA_DOWNLOAD_URL = "extra_download_url"
     const val EXTRA_APP_KEY = "extra_app_key"
+    // Used by the combined multi-app notification tap path (see notifyCombined).
+    const val EXTRA_APP_KEYS = "extra_app_keys"        // ArrayList<String>
+    const val EXTRA_DOWNLOAD_URLS = "extra_download_urls" // ArrayList<String>
+    /** Notification ID for the combined "N updates available" tile. */
+    const val NOTIFICATION_ID_COMBINED = 1005
+
+    /** Carries the info needed to post and handle one pending update. */
+    data class PendingUpdate(val appKey: String, val versionName: String, val downloadUrl: String)
 
     // Persisted state for the sticky OpenBubbles forced-update tile, so it can
     // be re-posted after a reboot (which clears all notifications).
@@ -175,8 +183,8 @@ object UpdateNotificationManager {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Update available")
-            .setContentText("$appDisplayName v$versionName is ready to install")
+            .setContentTitle("updates available")
+            .setContentText("click to update")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(false)
             .setOngoing(isForced)
@@ -274,8 +282,8 @@ object UpdateNotificationManager {
         val appDisplayName = displayNameFor(appKey)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading update")
-            .setContentText("$appDisplayName is downloading…")
+            .setContentTitle("downloading...")
+            .setContentText("starting download")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setAutoCancel(false)
@@ -312,14 +320,14 @@ object UpdateNotificationManager {
             ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
         } else 0
         val text = if (knownTotal) {
-            "$appDisplayName: ${formatMb(downloadedBytes)} / ${formatMb(totalBytes)} MB ($pct%)"
+            "$pct% — ${formatMb(downloadedBytes)} / ${formatMb(totalBytes)} MB"
         } else {
-            "$appDisplayName: ${formatMb(downloadedBytes)} MB so far…"
+            "${formatMb(downloadedBytes)} MB so far…"
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading update")
+            .setContentTitle("downloading...")
             .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
@@ -393,12 +401,12 @@ object UpdateNotificationManager {
         val appDisplayName = displayNameFor(appKey)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Installing update")
-            .setContentText("$appDisplayName is installing…")
+            .setContentTitle("installing...")
+            .setContentText("this may take a moment")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setAutoCancel(false)
-            .setProgress(0, 0, true) // indeterminate
+            .setProgress(0, 0, true) // indeterminate — Android's PackageInstaller doesn't expose install progress
             .setOnlyAlertOnce(true)
             .build()
         nm.notify(notificationIdFor(appKey), notification)
@@ -441,8 +449,8 @@ object UpdateNotificationManager {
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Update installed")
-            .setContentText("$displayName is up to date")
+            .setContentTitle("done")
+            .setContentText("enjoy dummy :)")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setOngoing(false)
             .setAutoCancel(true)
@@ -517,6 +525,52 @@ object UpdateNotificationManager {
             .build()
             .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
         nm.notify(notificationId, notification)
+    }
+
+    /**
+     * Post a single "N updates available" notification for all [updates] at once.
+     * If only one update is in the list, falls back to the regular per-app [notify]
+     * so the single-app tap path (with its OpenBubbles Wi-Fi guard) still works.
+     * For two or more updates, posts one combined tile whose tap intent carries
+     * all app keys + URLs via [EXTRA_APP_KEYS] / [EXTRA_DOWNLOAD_URLS] so
+     * [DownloadAndInstallReceiver] can start all downloads in one shot.
+     */
+    fun notifyCombined(context: Context, updates: List<PendingUpdate>) {
+        if (updates.isEmpty()) return
+        if (updates.size == 1) {
+            val u = updates[0]
+            notify(context, notificationIdFor(u.appKey), u.appKey, displayNameFor(u.appKey), u.versionName, u.downloadUrl)
+            return
+        }
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val appKeys = ArrayList(updates.map { it.appKey })
+        val urls = ArrayList(updates.map { it.downloadUrl })
+        val names = updates.joinToString(", ") { displayNameFor(it.appKey) }
+
+        val tapIntent = Intent(ACTION_DOWNLOAD_APK).apply {
+            setPackage(context.packageName)
+            putStringArrayListExtra(EXTRA_APP_KEYS, appKeys)
+            putStringArrayListExtra(EXTRA_DOWNLOAD_URLS, urls)
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            NOTIFICATION_ID_COMBINED,
+            tapIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("updates available")
+            .setContentText("click to update")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(false)
+            .setContentIntent(pendingIntent)
+            .build()
+            .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
+        nm.notify(NOTIFICATION_ID_COMBINED, notification)
     }
 
     fun cancel(context: Context, notificationId: Int) {
