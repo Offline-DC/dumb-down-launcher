@@ -15,8 +15,8 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 196
-        versionName = "v5.8.0-beta.4"
+        versionCode = 197
+        versionName = "v5.8.0-beta.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Battery diagnostics — compile-time gate for the DiagnosticsService,
