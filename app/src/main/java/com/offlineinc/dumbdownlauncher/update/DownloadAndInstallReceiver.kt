@@ -296,13 +296,14 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
                     UpdateNotificationManager.notifyFailed(context, appKey)
                     return
                 }
-                val paths = splits.joinToString(" ") { "'" + it.absolutePath.replace("'", "'\\''") + "'" }
-                val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install-multiple -r $paths"))
-                val stdout = proc.inputStream.bufferedReader().readText().trim()
-                val stderr = proc.errorStream.bufferedReader().readText().trim()
-                val exit = proc.waitFor()
-                Log.i(TAG, "OB silent install: exit=$exit out=$stdout err=$stderr")
-                val ok = exit == 0 && stdout.contains("Success", ignoreCase = true)
+                // Install the splits by streaming each into a PackageInstaller
+                // session via root ([AutoUpdateInstaller.rootInstall]). Passing
+                // paths to `pm install-multiple` fails two ways here: there's no
+                // device-side `install-multiple` (it's an adb-host convenience),
+                // and system_server can't read the sdcardfs-labelled split files.
+                // Streaming over stdin avoids both.
+                val ok = AutoUpdateInstaller.rootInstall(splits)
+                Log.i(TAG, "OB silent install via session: ok=$ok (${splits.size} splits)")
                 if (ok) {
                     UpdateNotificationManager.notifyInstalled(context, appKey)
                     apkFile.delete()
@@ -320,23 +321,21 @@ class DownloadAndInstallReceiver : BroadcastReceiver() {
             return
         }
 
-        // Silent root install — same approach as AutoUpdateInstaller for the
-        // nightly path. Using root `pm install -r` means no system dialog pops
-        // up; the user already gave consent by tapping the notification.
+        // Silent root install — reuse the nightly path's stdin-streaming session
+        // install ([AutoUpdateInstaller.rootInstall]). A plain `pm install -r
+        // <path>` fails here because system_server can't read the APK at its
+        // sdcardfs path ("System server has no access to read file context ...
+        // sdcardfs"); streaming the bytes over stdin has the root shell read the
+        // file instead. No system dialog appears — the user already consented by
+        // tapping the notification.
         // The launcher process is replaced when its own package installs, so
         // post the "installing..." state first so the shade shows something
         // during the brief restart window.
         UpdateNotificationManager.notifyInstalling(context, appKey)
-        val path = apkFile.absolutePath.replace("'", "'\\''")
         val ok = try {
-            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "pm install -r '$path'"))
-            val stdout = proc.inputStream.bufferedReader().readText().trim()
-            val stderr = proc.errorStream.bufferedReader().readText().trim()
-            val exit = proc.waitFor()
-            Log.i(TAG, "silent install $appKey: exit=$exit out=$stdout err=$stderr")
-            exit == 0 && stdout.contains("Success", ignoreCase = true)
+            AutoUpdateInstaller.rootInstall(listOf(apkFile))
         } catch (t: Throwable) {
-            Log.e(TAG, "silent install $appKey: root pm install threw", t)
+            Log.e(TAG, "silent install $appKey: session install threw", t)
             false
         }
         if (ok) {
