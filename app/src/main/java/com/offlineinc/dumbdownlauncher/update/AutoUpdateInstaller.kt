@@ -273,13 +273,8 @@ object AutoUpdateInstaller {
      * `-r` reinstalls keeping data; we only call this when the release is
      * strictly newer, so no `-d` downgrade flag.
      * Returns true only when the commit reports Success.
-     *
-     * Exposed (internal) so the tap-an-update-notification path
-     * ([DownloadAndInstallReceiver]) can reuse the exact same stdin-streaming
-     * session install — a plain `pm install <path>` fails there because
-     * system_server can't read the APK at its sdcardfs path.
      */
-    internal fun rootInstall(apks: List<File>): Boolean {
+    private fun rootInstall(apks: List<File>): Boolean {
         if (apks.isEmpty()) return false
         val total = apks.sumOf { it.length() }
 
