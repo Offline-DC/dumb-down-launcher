@@ -248,6 +248,12 @@ class ContactSyncRepository(
         Log.i(TAG, "[ContactSync] downloadSmartContacts: starting import — signalling canClose")
         onCanClose?.invoke()
 
+        // Make the sync account visible before writing. This sets
+        // UNGROUPED_VISIBLE=1 on the account's Settings row so contacts get
+        // in_visible_group=1; it also recomputes visibility for contacts
+        // synced before this fix existed. Idempotent.
+        AndroidContactsUpserter.ensureAccountVisible(context)
+
         // Build stable source IDs based on name+first-phone rather than random UIDs
         val keepSourceIds = mutableSetOf<String>()
         var skipped = 0
