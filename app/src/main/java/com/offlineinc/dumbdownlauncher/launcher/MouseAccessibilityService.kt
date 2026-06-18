@@ -44,6 +44,20 @@ class MouseAccessibilityService : AccessibilityService() {
     // onAccessibilityEvent.
     private var openBubblesForeground = false
     private var currentDensity = -1
+    @Volatile private var appleMusicSignInPoller: Thread? = null
+    // For the "clean Apple Music while it's closed" feature: wipe its data at most
+    // once per signed-out period (re-armed once the user signs back in), and
+    // throttle the check so it doesn't fire on every launcher window event.
+    @Volatile private var appleMusicClearedWhileSignedOut = false
+    @Volatile private var lastAppleMusicSignInCheckMs = 0L
+    private val appleMusicCheckThrottleMs = 5_000L
+    // Tracks whether Apple Music was signed in last time we checked, so we can
+    // detect the signed-in → signed-out transition (an in-app logout) and trigger
+    // the black-screen wipe + relaunch.
+    @Volatile private var appleMusicWasLoggedIn = false
+    @Volatile private var blackOverlayView: android.view.View? = null
+    private val overlayHandler = Handler(Looper.getMainLooper())
+
 
     // True while the star-key special-char picker is open.
     // The mouse is disabled for this duration.
@@ -1179,7 +1193,7 @@ class MouseAccessibilityService : AccessibilityService() {
                 handlePackage(pkg, className)
                 return
             }
-            if (!className.contains("Activity")) {
+            if (!className.contains("Activity") && pkg != "com.apple.android.music") {
                 Log.d("MOUSE_SVC", "WINDOW_STATE_CHANGED: skipped (no 'Activity' in className)")
                 return
             }
@@ -1325,10 +1339,40 @@ class MouseAccessibilityService : AccessibilityService() {
 
         // Density switching: only act when WhatsApp is foreground, or we need to reset
         if (!webViewActivityActive) {
+            if (pkg == packageName) {
+                // We're on our own launcher, so Apple Music is NOT open. If the user
+                // is signed out of Apple Music, wipe its data now — while it's closed
+                // — so the next time they open it the sign-in starts clean instead of
+                // hanging. Clearing a closed app can't crash it.
+                maybeClearAppleMusicIfSignedOut()
+            }
             if (pkg == "com.whatsapp") {
                 handleWhatsAppDensity()
+            } else if (pkg == "com.apple.android.music") {
+                handleAppleMusicDensity()
             } else if (currentDensity != 120) {
-                setDensity(120)
+                // If we're leaving Apple Music (its sign-in poller is still active
+                // and the screen is at 80), reset to 120 IMMEDIATELY on a dedicated
+                // thread instead of queueing setDensity() behind the login-file
+                // checks still draining on the shared worker — that queue wait is
+                // what made the reset feel slow. Also stop the poller so it can't
+                // fire more checks. This is Apple-Music-scoped: appleMusicSignInPoller
+                // is only ever non-null because of Apple Music, so every other app
+                // still takes the unchanged setDensity(120) path below.
+                if (appleMusicSignInPoller != null) {
+                    appleMusicSignInPoller?.interrupt()
+                    appleMusicSignInPoller = null
+                    currentDensity = 120
+                    Thread {
+                        try {
+                            ProcessBuilder("su", "-c", "wm density 120")
+                                .redirectErrorStream(true).start().waitFor()
+                            Log.d("MOUSE_SVC", "reset to 120 (left Apple Music)")
+                        } catch (_: Throwable) {}
+                    }.start()
+                } else {
+                    setDensity(120)
+                }
             }
         }
     }
@@ -1346,6 +1390,224 @@ class MouseAccessibilityService : AccessibilityService() {
             } catch (t: Throwable) {
                 Log.e("MOUSE_SVC", "handleWhatsAppDensity failed: ${t.message}")
             }
+        }
+    }
+
+    private fun handleAppleMusicDensity() {
+        shellExecutor.execute {
+            try {
+                val loggedIn = isAppleMusicLoggedIn()
+                if (loggedIn) {
+                    // Common case: screen is already 120, so setAppleMusicDensity's
+                    // "check first" guard runs nothing — instant, no crash risk.
+                    appleMusicSignInPoller?.interrupt()
+                    appleMusicSignInPoller = null
+                    // Re-arm the clean-while-closed feature so a future logout wipes again.
+                    appleMusicClearedWhileSignedOut = false
+                    appleMusicWasLoggedIn = true
+                    setAppleMusicDensity(120)
+                    return@execute
+                }
+
+                // Detect an in-app logout: we were signed in, now we're not, and
+                // Apple Music is still the foreground app. Wipe + relaunch behind a
+                // black screen so the immediate retry sign-in is clean and doesn't
+                // hang. This is a one-shot transition, so it can't loop.
+                if (appleMusicWasLoggedIn) {
+                    appleMusicWasLoggedIn = false
+                    cleanRelaunchAppleMusicAfterLogout()
+                    return@execute
+                }
+
+                // Signed out. Apply 80 for the sign-in page on a dedicated thread so
+                // the sleeps never block the shared shellExecutor (which also runs
+                // mouse enable/disable and WhatsApp density).
+                appleMusicSignInPoller?.interrupt()
+                appleMusicSignInPoller = Thread {
+                    try {
+                        // Wait for Apple Music to finish cold-launching before
+                        // applying 80. Changing density mid-launch races with the
+                        // sign-in WebView build and intermittently crashes it.
+                        Thread.sleep(2500)
+                        // Re-confirm Apple Music is still foreground so we don't
+                        // shrink a different app if the user navigated away during
+                        // the delay.
+                        if (currentPackage == "com.apple.android.music") {
+                            setAppleMusicDensity(80)
+                        }
+
+                        // Sign-in finishes inside the same window (no new window
+                        // event fires), so poll the login file and flip to 120 once
+                        // auth completes — waiting a moment for the post-login UI to
+                        // settle first so we don't disrupt the sign-in WebView.
+                        repeat(60) {                 // up to ~2 min
+                            Thread.sleep(2000)
+                            if (isAppleMusicLoggedIn()) {
+                                Thread.sleep(3000)   // let the post-login UI settle
+                                Log.i("MOUSE_SVC", "Apple Music signed in — switching to 120")
+                                setAppleMusicDensity(120)
+                                return@Thread
+                            }
+                        }
+                    } catch (_: InterruptedException) {}
+                }.also { it.start() }
+            } catch (t: Throwable) {
+                Log.e("MOUSE_SVC", "handleAppleMusicDensity failed: ${t.message}")
+            }
+        }
+    }
+
+    /** True if Apple Music has a saved account session (sign-in complete). */
+    private fun isAppleMusicLoggedIn(): Boolean {
+        val proc = ProcessBuilder("su", "-mm", "-c",
+            "test -f /data/user/0/com.apple.android.music/files/IC-Info.sids && echo yes || echo no")
+            .redirectErrorStream(true)
+            .start()
+        val output = proc.inputStream.bufferedReader().readText().trim()
+        proc.waitFor()
+        return output.lines().any { it.trim() == "yes" }
+    }
+
+    /**
+     * Called when our launcher is foregrounded (so Apple Music is NOT open). If
+     * Apple Music is signed out, wipe its data now — while it's closed — so the
+     * next time the user opens it the sign-in starts clean and doesn't hang.
+     * Clearing a closed app can't crash it (nothing is launching), which is why
+     * this is safe where clearing on open/exit was not.
+     *
+     * Wipes at most once per signed-out period (re-armed once the user signs back
+     * in, in handleAppleMusicDensity), and is throttled so it doesn't run a root
+     * shell on every launcher window event.
+     */
+    private fun maybeClearAppleMusicIfSignedOut() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastAppleMusicSignInCheckMs < appleMusicCheckThrottleMs) return
+        lastAppleMusicSignInCheckMs = now
+        shellExecutor.execute {
+            try {
+                if (isAppleMusicLoggedIn()) {
+                    // Signed in — re-arm so a future logout triggers a fresh wipe.
+                    appleMusicClearedWhileSignedOut = false
+                    return@execute
+                }
+                if (appleMusicClearedWhileSignedOut) return@execute  // already cleaned this period
+                Log.i("MOUSE_SVC", "Apple Music signed out + closed — wiping for a clean next sign-in")
+                ProcessBuilder("su", "-c", "pm clear com.apple.android.music")
+                    .redirectErrorStream(true).start().waitFor()
+                appleMusicClearedWhileSignedOut = true
+            } catch (t: Throwable) {
+                Log.e("MOUSE_SVC", "maybeClearAppleMusicIfSignedOut failed: ${t.message}")
+            }
+        }
+    }
+
+    /**
+     * Handles an in-app logout: shows a black overlay, wipes Apple Music's data,
+     * and relaunches it so the user lands on a clean sign-in screen that won't
+     * hang. The black overlay hides the wipe/relaunch flicker. Fires once per
+     * logout (driven by the signed-in → signed-out transition in
+     * handleAppleMusicDensity), so it can't loop.
+     */
+    private fun cleanRelaunchAppleMusicAfterLogout() {
+        Log.i("MOUSE_SVC", "Apple Music in-app logout detected — black-screen wipe + relaunch")
+        appleMusicSignInPoller?.interrupt()
+        appleMusicSignInPoller = null
+        // Mark as cleared so the launcher-wipe path doesn't also fire.
+        appleMusicClearedWhileSignedOut = true
+        showBlackOverlay()
+        Thread {
+            try {
+                // Wipe (force-stops Apple Music — hidden behind the black overlay).
+                ProcessBuilder("su", "-c", "pm clear com.apple.android.music")
+                    .redirectErrorStream(true).start().waitFor()
+                // Relaunch clean.
+                ProcessBuilder("su", "-c",
+                    "monkey -p com.apple.android.music -c android.intent.category.LAUNCHER 1")
+                    .redirectErrorStream(true).start().waitFor()
+                // Give it time to reach the sign-in screen before revealing it.
+                Thread.sleep(4000)
+            } catch (t: Throwable) {
+                Log.e("MOUSE_SVC", "cleanRelaunchAppleMusicAfterLogout failed: ${t.message}")
+            } finally {
+                hideBlackOverlay()
+            }
+        }.start()
+    }
+
+    private fun showBlackOverlay() {
+        overlayHandler.post {
+            if (blackOverlayView != null) return@post
+            try {
+                val wm = getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+                val v = android.view.View(this).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                }
+                val lp = android.view.WindowManager.LayoutParams(
+                    android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                    android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                    android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                    android.graphics.PixelFormat.OPAQUE
+                )
+                wm.addView(v, lp)
+                blackOverlayView = v
+                Log.d("MOUSE_SVC", "black overlay shown")
+            } catch (t: Throwable) {
+                Log.e("MOUSE_SVC", "showBlackOverlay failed: ${t.message}")
+            }
+        }
+    }
+
+    private fun hideBlackOverlay() {
+        overlayHandler.post {
+            try {
+                blackOverlayView?.let {
+                    (getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).removeView(it)
+                    Log.d("MOUSE_SVC", "black overlay hidden")
+                }
+            } catch (_: Throwable) {}
+            blackOverlayView = null
+        }
+    }
+
+    /**
+     * Density setter used ONLY by Apple Music.
+     *
+     * Unlike [setDensity], this first reads the screen's ACTUAL current
+     * density and skips the `wm density` command entirely if it already
+     * matches. `wm density` always forces a global configuration change —
+     * even when the value is unchanged — and that config change crashes
+     * Apple Music's sign-in WebView and bounces the user back to the
+     * launcher. Reading the real value first avoids that needless change
+     * (e.g. opening Apple Music while already logged in at 120).
+     *
+     * Deliberately separate from [setDensity] so WhatsApp and the
+     * reset-to-120 path are completely unaffected.
+     *
+     * Called from inside handleAppleMusicDensity's shellExecutor task, so it
+     * runs inline on that thread (no nested executor dispatch).
+     */
+    private fun setAppleMusicDensity(density: Int) {
+        if (currentDensity == density) return
+        try {
+            val out = ProcessBuilder("su", "-c", "wm density")
+                .redirectErrorStream(true).start()
+                .inputStream.bufferedReader().readText()
+            val actual = Regex("Override density: (\\d+)").find(out)?.groupValues?.get(1)?.toIntOrNull()
+                ?: Regex("Physical density: (\\d+)").find(out)?.groupValues?.get(1)?.toIntOrNull()
+            if (actual == density) {
+                // Screen is already at the target — record it and do nothing,
+                // avoiding the config change that kills the sign-in WebView.
+                currentDensity = density
+                Log.d("MOUSE_SVC", "setAppleMusicDensity: already $density — skipping wm density")
+                return
+            }
+            ProcessBuilder("su", "-c", "wm density $density")
+                .redirectErrorStream(true).start().waitFor()
+            currentDensity = density
+            Log.d("MOUSE_SVC", "setAppleMusicDensity $density done (was $actual)")
+        } catch (t: Throwable) {
+            Log.e("MOUSE_SVC", "setAppleMusicDensity failed: ${t.message}")
         }
     }
 
@@ -1382,6 +1644,7 @@ class MouseAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        hideBlackOverlay()
         instance = null
     }
 }
