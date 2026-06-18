@@ -32,7 +32,8 @@ import java.util.TimeZone
  *     segment-YYYYmmdd-HHMMSS.log.gz   (older)
  *     ...
  *
- * The tail subprocess is `logcat -v threadtime *:V`, started under
+ * The tail subprocess is `logcat -v threadtime <filterspec>` (default
+ * `*:W` — see RebootLoggingConfig.ROLLING_LOGCAT_FILTERSPEC), started under
  * `su -c` so we get every UID — the launcher process's own buffer is
  * useless for diagnosing a crash that occurs inside system_server or
  * a vendor service. The subprocess is restarted if it dies (Magisk
@@ -133,9 +134,11 @@ internal class RollingLogcatTail(
         // `-v threadtime` gives wall-clock + pid/tid + tag/priority +
         // message — the same format dropboxd-derived crash logs use,
         // so it's parseable by the same tools downstream.
-        // `*:V` keeps verbose for every tag; we'd rather over-collect
-        // and trim than miss the line that names the cause.
-        val cmd = arrayOf("su", "-c", "logcat -v threadtime *:V")
+        // Priority-filtered (ROLLING_LOGCAT_FILTERSPEC, default `*:W`) rather
+        // than `*:V`: the continuous verbose stream was the module's biggest
+        // always-on battery cost, and warning-and-above keeps the crash/reboot
+        // signal while dropping the firehose. See RebootLoggingConfig.
+        val cmd = arrayOf("su", "-c", "logcat -v threadtime ${RebootLoggingConfig.ROLLING_LOGCAT_FILTERSPEC}")
         val p = ProcessBuilder(*cmd)
             .redirectErrorStream(true)
             .start()
