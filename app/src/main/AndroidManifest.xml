@@ -37,6 +37,7 @@
          via `su -c` (root via Magisk) so READ_LOGS isn't required on the
          app itself. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
@@ -450,6 +451,17 @@
             android:authorities="com.offlineinc.dumbdownlauncher.devicelink"
             android:exported="true"
             android:readPermission="com.offlineinc.dumbdownlauncher.DEVICE_LINK_READ" />
+
+        <!-- WorkManager's foreground-service host ships with no
+             foregroundServiceType, so when AutoUpdateWorker runs as a foreground
+             job and passes FOREGROUND_SERVICE_TYPE_DATA_SYNC, startForeground
+             rejects it ("type 0x1 is not a subset of 0x0"). Merge the dataSync
+             type onto the library's service so the typed ForegroundInfo is
+             accepted (and is required at all on targetSdk 34+). -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
     </application>
 

@@ -162,8 +162,12 @@ class AutoUpdateAlarmReceiver : BroadcastReceiver() {
                 Log.i(TAG, "Skipping auto-update — phone in use (screen on / lid open)")
                 return
             }
-            if (!NetworkUtils.isOnWifi(context)) {
-                Log.i(TAG, "Skipping auto-update — not on Wi-Fi")
+            // We no longer require Wi-Fi for the whole run: the launcher APK is
+            // tiny (~7 MB) and fine to pull over cellular. Only a connection of
+            // some kind is required; the large OpenBubbles zip is gated on Wi-Fi
+            // individually below.
+            if (!NetworkUtils.isNetworkAvailable(context)) {
+                Log.i(TAG, "Skipping auto-update — no network")
                 return
             }
             val pct = batteryPercent(context)
@@ -171,7 +175,8 @@ class AutoUpdateAlarmReceiver : BroadcastReceiver() {
                 Log.i(TAG, "Skipping auto-update — battery $pct% < $MIN_BATTERY_PCT%")
                 return
             }
-            Log.i(TAG, "Conditions met (Wi-Fi + battery $pct%) — checking for updates")
+            val onWifi = NetworkUtils.isOnWifi(context)
+            Log.i(TAG, "Conditions met (network=${if (onWifi) "Wi-Fi" else "cellular"}, battery $pct%) — checking for updates")
 
             val latest = try {
                 UpdateChecker.fetchLatest(PairingStore(context).betaTesterMode)
@@ -182,18 +187,25 @@ class AutoUpdateAlarmReceiver : BroadcastReceiver() {
 
             // OpenBubbles FIRST: installing the launcher replaces our own
             // (running HOME) process, so do everything else before that.
+            // It's a large (~160 MB) split-APK zip, so only over Wi-Fi — if we're
+            // on cellular, defer it to a future run that's on Wi-Fi.
             val obInfo = latest["openbubbles-messaging"]
             if (obInfo != null && PlatformPreferences.getChoice(context) == "ios") {
                 val installed = OpenBubblesOps.installedVersionCode(context)
                 if (installed != null && obInfo.versionCode > installed) {
-                    Log.i(TAG, "Smart Txt update ${obInfo.versionName} (vc ${obInfo.versionCode} > $installed) — installing")
-                    AutoUpdateInstaller.installOpenBubbles(context, obInfo.downloadUrl)
+                    if (onWifi) {
+                        Log.i(TAG, "Smart Txt update ${obInfo.versionName} (vc ${obInfo.versionCode} > $installed) — installing")
+                        AutoUpdateInstaller.installOpenBubbles(context, obInfo.downloadUrl)
+                    } else {
+                        Log.i(TAG, "Smart Txt update ${obInfo.versionName} available — deferred until on Wi-Fi (large download)")
+                    }
                 } else {
                     Log.i(TAG, "Smart Txt up to date (installed=$installed)")
                 }
             }
 
             // Launcher LAST — pm install of our own package restarts this process.
+            // Small (~7 MB) APK, so allowed over cellular as well as Wi-Fi.
             val launcherInfo = latest["dumb-down-launcher"]
             if (launcherInfo != null && launcherInfo.versionCode > BuildConfig.VERSION_CODE) {
                 Log.i(TAG, "Launcher update ${launcherInfo.versionName} (vc ${launcherInfo.versionCode} > ${BuildConfig.VERSION_CODE}) — installing")

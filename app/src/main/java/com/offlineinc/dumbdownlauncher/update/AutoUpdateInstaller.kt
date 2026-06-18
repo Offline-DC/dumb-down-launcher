@@ -48,7 +48,8 @@ object AutoUpdateInstaller {
      * Returns true if `pm install` reported success.
      */
     fun installLauncher(context: Context, url: String): Boolean {
-        val dl = downloadViaManager(context, url, "auto-launcher.apk") ?: return false
+        // Launcher is small (~7 MB) — allow it over cellular as well as Wi-Fi.
+        val dl = downloadViaManager(context, url, "auto-launcher.apk", wifiOnly = false) ?: return false
         return try {
             val ok = rootInstall(listOf(dl.file))
             Log.i(TAG, "launcher silent install ok=$ok")
@@ -71,7 +72,8 @@ object AutoUpdateInstaller {
      * Returns true if `pm install-multiple` reported success.
      */
     fun installOpenBubbles(context: Context, url: String): Boolean {
-        val dl = downloadViaManager(context, url, "auto-openbubbles.zip") ?: return false
+        // OpenBubbles is large (~160 MB) — Wi-Fi only.
+        val dl = downloadViaManager(context, url, "auto-openbubbles.zip", wifiOnly = true) ?: return false
         val splitDir = File(context.cacheDir, "auto-ob-splits").apply {
             deleteRecursively()
             mkdirs()
@@ -127,20 +129,34 @@ object AutoUpdateInstaller {
      * On success returns the local file *and* its DownloadManager id so the
      * caller can [cleanupDownload] both the file and the row once it's done
      * installing (or failed installing).
+     *
+     * [wifiOnly] restricts the transfer to Wi-Fi (used for the large OpenBubbles
+     * zip); when false the download may also run over cellular (used for the
+     * small launcher APK). Roaming is never allowed, to avoid surprise charges.
      */
-    private fun downloadViaManager(context: Context, url: String, fileName: String): Download? {
+    private fun downloadViaManager(
+        context: Context,
+        url: String,
+        fileName: String,
+        wifiOnly: Boolean,
+    ): Download? {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: run {
             Log.e(TAG, "DownloadManager unavailable — cannot download $fileName")
             return null
+        }
+        val allowedNetworks = if (wifiOnly) {
+            DownloadManager.Request.NETWORK_WIFI
+        } else {
+            DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE
         }
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle("Updating $fileName")
             // We surface our own progress notification elsewhere; hide the
             // system one (needs DOWNLOAD_WITHOUT_NOTIFICATION, already held).
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
-            // Wi-Fi only. The 4 AM guard already required Wi-Fi; this also
-            // stops a mid-download network switch from spending cellular data.
-            .setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
+            // Wi-Fi (and, when allowed, cellular). Roaming stays off so a slow
+            // mid-download network switch can't run up roaming data charges.
+            .setAllowedNetworkTypes(allowedNetworks)
             .setAllowedOverRoaming(false)
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
         val id = dm.enqueue(request)
