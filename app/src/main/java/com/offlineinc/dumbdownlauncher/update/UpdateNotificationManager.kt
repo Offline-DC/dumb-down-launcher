@@ -31,6 +31,14 @@ object UpdateNotificationManager {
      */
     const val NOTIFICATION_ID_BETA_REMINDER = 1010
 
+    /**
+     * Ongoing notification shown while the nightly [AutoUpdateWorker] runs as a
+     * foreground/expedited job. The foreground status is what keeps the app out
+     * of Doze so DownloadManager actually transfers the APK overnight (a plain
+     * background worker gets the download deferred until a maintenance window).
+     */
+    const val NOTIFICATION_ID_AUTO_UPDATE = 1011
+
     const val ACTION_DOWNLOAD_APK = "com.offlineinc.dumbdownlauncher.action.DOWNLOAD_APK"
     // Result broadcast from a PackageInstaller split-APK session (OpenBubbles).
     const val ACTION_INSTALL_RESULT = "com.offlineinc.dumbdownlauncher.action.INSTALL_RESULT"
@@ -76,6 +84,21 @@ object UpdateNotificationManager {
     fun clearUpdateInProgress(context: Context, appKey: String) {
         context.getSharedPreferences(IN_PROGRESS_PREFS, Context.MODE_PRIVATE)
             .edit().remove(inProgressKey(appKey)).apply()
+    }
+
+    /**
+     * Low-key ongoing notification for the auto-update foreground worker. Posted
+     * to [CHANNEL_ID] but at LOW priority so it stays silent in the shade at
+     * ~4 AM. Required by Android to run [AutoUpdateWorker] as a foreground job.
+     */
+    fun autoUpdateForegroundNotification(context: Context): Notification {
+        ensureChannel(context)
+        return NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Checking for updates")
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
     }
 
     fun ensureChannel(context: Context) {
