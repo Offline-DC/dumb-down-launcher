@@ -64,4 +64,22 @@ internal object RebootLoggingConfig {
     const val ROLLING_LOGCAT_RETENTION_HOURS: Int = 24
     const val ROLLING_LOGCAT_RESPAWN_INITIAL_MS: Long = 5_000L
     const val ROLLING_LOGCAT_RESPAWN_MAX_MS: Long = 5L * 60_000L
+
+    /**
+     * Priority filter for the CONTINUOUS rolling logcat tail. Previously the
+     * tail ran `logcat -v threadtime *:V` — every line from every UID at
+     * verbose. That continuous stream (plus a flush-to-flash on every line) was
+     * the diagnostics module's single largest always-on cost: it kept the CPU
+     * busy and flash writing whenever anything on the device logged, so a tool
+     * meant to MEASURE idle drain was itself preventing idle.
+     *
+     * `*:W` keeps warning/error/fatal — which is where the reboot- and
+     * crash-relevant lines live (`AndroidRuntime` FATAL, ANRs, vendor-service
+     * errors, suspend/PM warnings) — and drops the INFO/DEBUG/VERBOSE firehose.
+     * That cuts the line volume (and thus the per-line flush IO) by ~1–2 orders
+     * of magnitude on a normally-chatty device. Kernel-level reboot causes
+     * still come through `dmesg`, which is captured separately. Set to `*:V`
+     * for a specific deep investigation that needs the full stream.
+     */
+    const val ROLLING_LOGCAT_FILTERSPEC: String = "*:W"
 }

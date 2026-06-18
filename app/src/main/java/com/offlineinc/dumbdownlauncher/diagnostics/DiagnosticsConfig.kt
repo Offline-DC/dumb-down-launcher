@@ -15,8 +15,29 @@ internal object DiagnosticsConfig {
     /** Per-minute battery sample cadence. Cheap; cost is dominated by IO not sampling. */
     const val BATTERY_SAMPLE_INTERVAL_MS: Long = 60_000L
 
-    /** Privileged dumpsys snapshot cadence. Hourly + on every screen-on/off. */
+    /** Privileged dumpsys snapshot cadence for the FULL (heavy) snapshot set. Hourly. */
     const val DUMPSYS_SNAPSHOT_INTERVAL_MS: Long = 60 * 60_000L
+
+    /**
+     * Minimum spacing between screen-transition-triggered snapshots. On a flip
+     * phone the lid drives ACTION_SCREEN_ON/OFF dozens–hundreds of times a day;
+     * without this debounce each one used to run the full root dump set
+     * (including a ~4.5 MB `dmesg`), producing ~1 GB of logs in a day AND making
+     * the diagnostics module itself a top battery consumer. Screen transitions
+     * within this window of the last one are dropped. The hourly cadence is
+     * unaffected. 15 min keeps boundary coverage without the flood.
+     */
+    const val SCREEN_SNAPSHOT_MIN_INTERVAL_MS: Long = 15 * 60_000L
+
+    /**
+     * Cap on lines captured from `dmesg` per snapshot. The full ring buffer is
+     * ~43k lines / ~4.5 MB and ~92% of it is identical to the previous dump, so
+     * re-capturing it whole every snapshot was almost pure redundancy. We tail
+     * the most recent N lines instead — enough to catch the
+     * `PM: suspend exit / Abort:Last active Wakeup Source` lines we actually
+     * parse, at a fraction of the size. dmesg is also now hourly-only (heavy).
+     */
+    const val DMESG_TAIL_LINES: Int = 2000
 
     /** Days of rolling history retained on device. 14 = the spec from the plan. */
     const val RETENTION_DAYS: Int = 14
@@ -37,8 +58,22 @@ internal object DiagnosticsConfig {
     /** Shell timeout for the longest dumpsys/bugreport-style calls. */
     const val SHELL_TIMEOUT_MS: Long = 20_000L
 
-    /** Per-line cap when reading `logcat -d` so a runaway log doesn't fill the disk. */
-    const val LOGCAT_TAIL_LINES: Int = 10_000
+    /**
+     * Per-line cap when reading `logcat -d`. Was 10_000 captured on EVERY
+     * snapshot; the per-snapshot logcat is now hourly-only (see the scheduler)
+     * and priority-filtered, so a smaller tail is plenty — battery diagnosis
+     * cares about warnings/errors/crashes, not the verbose firehose.
+     */
+    const val LOGCAT_TAIL_LINES: Int = 2_000
+
+    /**
+     * Priority filter for the per-snapshot `logcat -d`. `*:W` keeps warning,
+     * error and fatal lines (which is where ANRs and `AndroidRuntime` FATAL
+     * crashes live) and drops the INFO/DEBUG/VERBOSE noise that made the
+     * capture large and the collection expensive. Adjust to `*:V` only if a
+     * specific investigation needs the full stream.
+     */
+    const val LOGCAT_SNAPSHOT_FILTERSPEC: String = "*:W"
 
     /** Schema version stamped into every JSONL line for forward compatibility. */
     const val SCHEMA_VERSION: Int = 1
