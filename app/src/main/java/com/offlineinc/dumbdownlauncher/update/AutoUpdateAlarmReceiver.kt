@@ -195,7 +195,17 @@ class AutoUpdateAlarmReceiver : BroadcastReceiver() {
                 if (installed != null && obInfo.versionCode > installed) {
                     if (onWifi) {
                         Log.i(TAG, "Smart Txt update ${obInfo.versionName} (vc ${obInfo.versionCode} > $installed) — installing")
-                        AutoUpdateInstaller.installOpenBubbles(context, obInfo.downloadUrl)
+                        // Isolate the OpenBubbles install: it returns false on the
+                        // expected failures, but a few paths can still throw (e.g. a
+                        // corrupt zip in extractSplits, or DownloadManager.enqueue).
+                        // Swallow any such throw here so it can never skip the
+                        // launcher update below — the failure just waits for the next
+                        // 4 AM run, same as a returned-false failure.
+                        try {
+                            AutoUpdateInstaller.installOpenBubbles(context, obInfo.downloadUrl)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "Smart Txt install threw — skipping it, will retry next 4 AM", t)
+                        }
                     } else {
                         Log.i(TAG, "Smart Txt update ${obInfo.versionName} available — deferred until on Wi-Fi (large download)")
                     }
