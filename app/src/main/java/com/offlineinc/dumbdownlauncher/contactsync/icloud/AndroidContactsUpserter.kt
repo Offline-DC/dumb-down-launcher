@@ -14,6 +14,45 @@ object AndroidContactsUpserter {
     private const val ACCOUNT_TYPE = "com.offlineinc.dumbcontactsync"
     private const val ACCOUNT_NAME = "iPhone"
 
+    /**
+     * Ensure the sync account's contacts are visible.
+     *
+     * Contacts written under our custom account have no group membership, so
+     * the ContactsProvider computes their read-only [ContactsContract.Contacts.IN_VISIBLE_GROUP]
+     * column from the account's [ContactsContract.Settings] row. Without a
+     * Settings row, UNGROUPED_VISIBLE defaults to 0, marking every synced
+     * contact in_visible_group=0 — which hides them from apps (e.g. OpenBubbles)
+     * that read only visible contacts.
+     *
+     * Setting UNGROUPED_VISIBLE=1 makes the provider recompute visibility for
+     * the WHOLE account, so this also un-hides contacts that were already
+     * synced before this fix shipped. Idempotent — safe to call every sync.
+     */
+    fun ensureAccountVisible(ctx: Context) {
+        val settingsUri = ContactsContract.Settings.CONTENT_URI.buildUpon()
+            .appendQueryParameter(ContactsContract.CALLER_IS_SYNCADAPTER, "true")
+            .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME, ACCOUNT_NAME)
+            .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE, ACCOUNT_TYPE)
+            .build()
+
+        val values = android.content.ContentValues().apply {
+            put(ContactsContract.Settings.ACCOUNT_NAME, ACCOUNT_NAME)
+            put(ContactsContract.Settings.ACCOUNT_TYPE, ACCOUNT_TYPE)
+            put(ContactsContract.Settings.SHOULD_SYNC, 1)
+            put(ContactsContract.Settings.UNGROUPED_VISIBLE, 1)
+        }
+
+        // Settings has a unique constraint per (account_name, account_type):
+        // update first, insert only if no row exists yet.
+        val rows = ctx.contentResolver.update(
+            settingsUri, values,
+            "${ContactsContract.Settings.ACCOUNT_NAME}=? AND ${ContactsContract.Settings.ACCOUNT_TYPE}=?",
+            arrayOf(ACCOUNT_NAME, ACCOUNT_TYPE)
+        )
+        if (rows == 0) ctx.contentResolver.insert(settingsUri, values)
+        Log.i(TAG, "ensureAccountVisible: UNGROUPED_VISIBLE=1 set (updatedRows=$rows)")
+    }
+
     fun upsertByRawId(ctx: Context, rawId: Long, card: VCardMini) {
         val ops = ArrayList<ContentProviderOperation>()
         val dataUri = asSyncAdapter(ContactsContract.Data.CONTENT_URI)

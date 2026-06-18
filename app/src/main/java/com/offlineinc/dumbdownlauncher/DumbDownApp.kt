@@ -11,6 +11,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.app.AppCompatDelegate
 import com.offlineinc.dumbdownlauncher.calllog.CallLogCleanupWorker
+import com.offlineinc.dumbdownlauncher.contactsync.icloud.AndroidContactsUpserter
 import com.offlineinc.dumbdownlauncher.coverdisplay.CoverDisplayService
 import com.offlineinc.dumbdownlauncher.launcher.NetworkUtils
 import com.offlineinc.dumbdownlauncher.openbubbles.OpenBubblesAttachmentCleanupWorker
@@ -1308,6 +1309,25 @@ class DumbDownApp : Application() {
             // migrations prefs) won't create duplicates.
             "install_dumb_line_contact_v1" to {
                 DumbLineContactInstaller.ensureInstalled(this)
+            },
+            // Un-hide contacts synced before the visibility fix shipped.
+            // Contacts written under our custom account
+            // (com.offlineinc.dumbcontactsync / iPhone) had no
+            // ContactsContract.Settings row, so the provider defaulted
+            // UNGROUPED_VISIBLE to 0 and computed in_visible_group=0 for
+            // every synced contact — hiding them from apps that read only
+            // visible contacts (OpenBubbles). ensureAccountVisible sets
+            // UNGROUPED_VISIBLE=1, which makes the provider recompute
+            // visibility for the WHOLE account, so already-synced contacts
+            // flip to visible immediately without a re-sync.
+            //
+            // Idempotent (update-or-insert of the single Settings row), so
+            // it's safe on devices that never synced. THROWS if the write
+            // fails (e.g. WRITE_CONTACTS not yet granted this early in boot),
+            // which leaves the flag unset so the framework retries on the
+            // next boot.
+            "contact_sync_visibility_v1" to {
+                AndroidContactsUpserter.ensureAccountVisible(this)
             },
             // Install the "duckboot" Magisk module that systemlessly
             // overlays our duck boot animation over the stock one. The
