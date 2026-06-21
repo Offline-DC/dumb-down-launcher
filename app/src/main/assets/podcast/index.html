@@ -100,11 +100,18 @@
   #npbar i { position:absolute; left:0; top:0; height:4px; background:var(--yellow); }
   #npbar .dot { position:absolute; top:-3px; width:10px; height:10px; border-radius:50%;
     background:var(--yellow); margin-left:-5px; }
-  #nptime { display:flex; justify-content:space-between; font-size:12px;
-    color:var(--gray); padding:3px 10px 8px; flex-shrink:0; }
-  #npstate { color:var(--yellow); }
+  #nptime { position:relative; display:flex; justify-content:space-between;
+    font-size:12px; color:var(--gray); padding:3px 10px 8px; flex-shrink:0; }
+  /* absolutely-centered so it never shifts as the timestamp digits change width */
+  #npstate { position:absolute; left:0; right:0; text-align:center;
+    color:var(--yellow); pointer-events:none; }
 
   /* ---- overlay menu (options / episode actions) ---- */
+  /* full-height (covers the list behind so a wrapped title can't peek through
+     and get cut off at the sheet's top edge) */
+  /* bottom sheet: height hugs its content so it pops up from the bottom (no gap
+     beneath) while the screen behind stays visible above it. The yellow divider
+     marks the sheet's top edge so the screen underneath reads as background. */
   .overlay { position:absolute; left:0; right:0; bottom:22px; top:auto; z-index:2500;
     background:#000; border-top:2px solid var(--yellow); display:none; }
   .overlay.on { display:block; }
@@ -118,6 +125,26 @@
   @keyframes spin { to { transform:rotate(360deg); } }
 
   #infobody { font-size:13px; color:#ddd; padding:10px; line-height:1.6; }
+
+  /* ---- episode info (artwork + scrollable show notes) ---- */
+  #epinfoart { height:150px; margin:8px; background:#101010 center/contain no-repeat;
+    border:1px solid #1a1a1a; flex-shrink:0; }
+  #epinfometa { font-size:15px; color:#fff; line-height:1.2; padding:2px 10px 0; }
+  #epinfosub { font-size:11px; color:var(--gray); padding:2px 10px 6px;
+    border-bottom:1px solid var(--line); margin-bottom:6px; }
+  #epinfodesc { font-size:13px; color:#ddd; line-height:1.55; padding:0 10px 12px;
+    white-space:pre-wrap; word-break:break-word; }
+  #epinfodesc.empty { color:var(--gray); }
+  /* long episode titles: clamp to a clean 2 lines with an ellipsis. line-clamp
+     sizes the box to exactly 2 lines, so both rows (incl. descenders) show in
+     full — no hard max-height, which was clipping the 2nd line. */
+  #epovltitle, #epinfotitle { overflow:hidden; display:-webkit-box;
+    -webkit-line-clamp:2; -webkit-box-orient:vertical; line-height:1.3; }
+  /* download progress bar (downloads list, in-progress items) */
+  .dlbar { height:3px; background:#333; margin-top:4px; }
+  .dlbar i { display:block; height:3px; background:var(--yellow); transition:width .3s linear; }
+  /* downloads + episode lists show the full episode title (no 2-line clamp) */
+  #dllist .rtitle, #episodes .rtitle { display:block; overflow:visible; }
 </style>
 </head>
 <body>
@@ -188,6 +215,12 @@
   </div>
 </div>
 
+<!-- ===== EPISODE INFO (artwork + scrollable description) ===== -->
+<div id="epinfo" class="screen">
+  <h1 class="title" id="epinfotitle">episode</h1>
+  <div class="body" id="epinfobody"></div>
+</div>
+
 <!-- ===== EPISODE ACTIONS OVERLAY ===== -->
 <div id="epovl" class="overlay">
   <h2 id="epovltitle">episode</h2>
@@ -210,13 +243,13 @@ function esc(s){ return String(s==null?'':s)
 
 /* ============ screens / mode ============ */
 var S = { HOME:'home', SEARCH:'search', PODCAST:'podcast', NP:'np',
-          DOWNLOADS:'downloads', INFO:'info' };
+          DOWNLOADS:'downloads', INFO:'info', EPINFO:'epinfo' };
 var mode = S.HOME;
 var overlay = null;            // 'epovl' | 'menu' | null
 var prevMode = S.HOME;         // where NP returns to
 
 function show(scr){
-  ['home','search','podcast','np','downloads','info'].forEach(function(id){
+  ['home','search','podcast','np','downloads','info','epinfo'].forEach(function(id){
     $(id).classList.toggle('on', id === scr);
   });
   mode = scr;
@@ -250,16 +283,18 @@ function refreshSoft(){
   if (overlay === 'menu' || overlay === 'epovl'){ setSoft('', 'select', 'back'); return; }
   switch (mode){
     case S.HOME:
-      setSoft('menu', homeFocus==='cont'?'resume':(subs.length?'open':''), 'search'); return;
+      setSoft('search', homeFocus==='cont'?(np.id?'open':'resume'):(subs.length?'open':''), 'menu'); return;
     case S.SEARCH:
       setSoft(searchFocus==='input'?'search':'', searchFocus==='results'?'open':'', 'back'); return;
     case S.PODCAST:
-      setSoft(isSub(curFeed)?'unsub':'subscribe', episodes.length?'play':'', 'back'); return;
+      setSoft(isSub(curFeed)?'unsub':'subscribe', episodes.length?'open':'', 'back'); return;
     case S.NP:
       setSoft('menu', np.playing?'pause':'play', 'back'); return;
     case S.DOWNLOADS:
       setSoft(dlItems.length?'delete':'', dlItems.length?'play':'', 'back'); return;
     case S.INFO:
+      setSoft('', '', 'back'); return;
+    case S.EPINFO:
       setSoft('', '', 'back'); return;
   }
 }
@@ -331,7 +366,7 @@ function ensureAudio(){
   return htmlAudio;
 }
 
-var np = { id:'', url:'', title:'', pod:'', art:'', feed:'',
+var np = { id:'', url:'', title:'', pod:'', art:'', feed:'', desc:'',
            posMs:0, durMs:0, playing:false };
 
 function localPathFor(id){
@@ -364,10 +399,10 @@ function playEpisode(ep, fromStart){
   var src = local || ep.url;
 
   np = { id:ep.id, url:ep.url, title:ep.title, pod:ep.pod, art:ep.art, feed:ep.feed,
-         posMs:startMs, durMs:ep.durMs||0, playing:true };
+         desc:ep.desc||'', posMs:startMs, durMs:ep.durMs||0, playing:true };
   setPos(ep.id, mergePos(ep.id, {title:ep.title, pod:ep.pod, art:ep.art, url:ep.url,
                                   feed:ep.feed, durMs:ep.durMs||0, posMs:startMs,
-                                  updated:Date.now()}));
+                                  desc:ep.desc||'', updated:Date.now()}));
   if (HAS_BRIDGE){
     Bridge.play(src, ep.id, ep.title||'', ep.pod||'', ep.art||'', startMs|0);
   } else {
@@ -411,12 +446,20 @@ function onState(id, state){
   if (id !== np.id) return;
   np.playing = (state==='playing' || state==='buffering');
   if (state==='ended'){ setPos(id, mergePos(id, {posMs:0, updated:Date.now()})); np.playing = false; }
-  if (mode===S.NP) $('npstate').textContent = state==='buffering'?'buffering…':(np.playing?'playing':state);
+  if (mode===S.NP) $('npstate').textContent = state==='buffering'?'loading…':(np.playing?'playing':state);
   refreshSoft();
 }
 window.__onProgress = onProgress;
 window.__onState = onState;
-window.__onDownload = function(id, st){ if (mode===S.PODCAST) renderEpisodes(); if(mode===S.DOWNLOADS) gotoDownloads(); toast('downloaded'); };
+window.__onDownload = function(id, st){
+  st = st || {};
+  // remember the terminal state so the downloads page can show it even after
+  // DownloadManager forgets the (now finalized) download record.
+  if (st.state) setPos(id, mergePos(id, {dlState:st.state}));
+  toast(st.state==='failed' ? 'download failed' : 'downloaded');
+  if (mode===S.PODCAST) renderEpisodes();
+  if (mode===S.DOWNLOADS) gotoDownloads();
+};
 window.__onResume = function(){ if (np.id){ syncNP(); if(mode===S.NP) renderNPProgress(); } };
 /* tapping the playback notification deep-links straight to now-playing */
 window.__openNowPlaying = function(){ if (np.id){ syncNP(); closeOverlay(); openNP(); } };
@@ -472,12 +515,15 @@ function homeKey(name, rep){
   }
   if (name==='Enter'){
     if (!gate('ok')) return;
-    if (homeFocus==='cont'){ var c=continueItem(); if(c) resumeFromPos(c); }
+    if (homeFocus==='cont'){
+      if (np.id){ openNP(); }                       // already playing → just open now-playing
+      else { var c=continueItem(); if(c) resumeFromPos(c); }
+    }
     else if (n){ openPodcastFromSub(subs[li]); }
     return;
   }
-  if (name==='SoftLeft'){ if(!rep) openMenu(); return; }
-  if (name==='SoftRight'){ if(!rep) gotoSearch(); return; }
+  if (name==='SoftLeft'){ if(!rep) gotoSearch(); return; }
+  if (name==='SoftRight'){ if(!rep) openMenu(); return; }
   if (name==='Back'){ if(!rep && window.Bridge && Bridge.exitApp) Bridge.exitApp(); return; }
 }
 function resumeFromPos(o){
@@ -591,14 +637,33 @@ function fetchFeed(feed){
       var dur = 0; var dn = it.getElementsByTagNameNS('*','duration');
       if (dn.length) dur = parseDuration(txt(dn[0]));
       var pub = txt(it.querySelector('pubDate'));
+      // description: prefer <description>, then itunes:summary, then content:encoded
+      var rawDesc = txt(it.querySelector('description'));
+      if (!rawDesc){ var su = it.getElementsByTagNameNS('*','summary'); if (su.length) rawDesc = txt(su[0]); }
+      if (!rawDesc){ var ce = it.getElementsByTagNameNS('*','encoded'); if (ce.length) rawDesc = txt(ce[0]); }
+      // per-episode artwork (itunes:image), else fall back to channel/podcast art
+      var epImg = ''; var ii = it.getElementsByTagNameNS('*','image');
+      for (var b=0;b<ii.length;b++){ var hh = ii[b].getAttribute('href'); if (hh){ epImg = hh; break; } }
       eps.push({ id:hashId(guid), url:url, title:title||'episode',
-                 pod:chTitle||curPod.title||'', art:art||curPod.art||'',
-                 feed:feed, durMs:dur, date:fmtDate(pub) });
+                 pod:chTitle||curPod.title||'', art:epImg||art||curPod.art||'',
+                 feed:feed, durMs:dur, date:fmtDate(pub), desc:stripHtml(rawDesc) });
     }
     return { title:chTitle, art:art, episodes:eps };
   });
 }
 function txt(node){ return node ? (node.textContent||'').trim() : ''; }
+/* Show notes are HTML (often CDATA). Turn them into readable plain text:
+   keep paragraph/line breaks, drop tags, decode entities. */
+function stripHtml(html){
+  if (!html) return '';
+  var s = String(html)
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6])\s*>/gi, '\n\n')
+    .replace(/<li[^>]*>/gi, '• ');
+  var d = document.createElement('div'); d.innerHTML = s;
+  var t = d.textContent || d.innerText || '';
+  return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 function fmtDate(s){ if(!s) return ''; var d=new Date(s); if(isNaN(d)) return '';
   return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
 
@@ -628,8 +693,6 @@ function podcastKey(name, rep){
   var rc = epRowCount();
   if (name==='ArrowDown'){ ei=Math.min(rc-1, ei+1); paintRows('episodes', ei); return; }
   if (name==='ArrowUp'){ ei=Math.max(0, ei-1); paintRows('episodes', ei); return; }
-  if (name==='8'){ ei=Math.min(rc-1, ei+5); paintRows('episodes', ei); return; }
-  if (name==='2'){ ei=Math.max(0, ei-5); paintRows('episodes', ei); return; }
   if (name==='Enter'){
     if(!rep && gate('ok')){
       var shown = Math.min(epShown, episodes.length);
@@ -664,7 +727,8 @@ function openEpisodeMenu(ep){
   } else {
     epActions.push({label:'download', fn:function(){ doDownload(ep); closeOverlay(); }});
   }
-  $('epovltitle').textContent = ep.title.slice(0,40);
+  epActions.push({label:'info', fn:function(){ closeOverlay(); openEpInfo(ep); }});
+  $('epovltitle').textContent = ep.title || 'episode';
   eai = 0; renderEpActions(); openOverlay('epovl');
 }
 function renderEpActions(){
@@ -673,8 +737,9 @@ function renderEpActions(){
   }).join('');
 }
 function doDownload(ep){
-  if (HAS_BRIDGE && Bridge.download){ Bridge.download(ep.url, ep.id, ep.title||''); toast('downloading…');
-    setPos(ep.id, mergePos(ep.id, {title:ep.title,pod:ep.pod,art:ep.art,url:ep.url,feed:ep.feed,durMs:ep.durMs,updated:Date.now()}));
+  if (HAS_BRIDGE && Bridge.download){ Bridge.download(ep.url, ep.id, ep.title||''); toast('downloading… view in downloads', 2400);
+    setPos(ep.id, mergePos(ep.id, {title:ep.title,pod:ep.pod,art:ep.art,url:ep.url,feed:ep.feed,durMs:ep.durMs,
+                                   dl:true, dlState:'running', updated:Date.now()}));
   } else { toast('downloads need the app'); }
 }
 function epovlKey(name, rep){
@@ -684,7 +749,31 @@ function epovlKey(name, rep){
   if (name==='Back' || name==='SoftRight'){ if(!rep){ closeOverlay(); refreshSoft(); } return; }
 }
 
+/* ============ EPISODE INFO (artwork + scrollable show notes) ============ */
+var curEpInfo = null, epinfoFrom = 'epovl';   // 'epovl' (episode menu) | 'np'
+function openEpInfo(ep, from){
+  curEpInfo = ep; epinfoFrom = from || 'epovl';
+  $('epinfotitle').textContent = ep.title || 'episode';
+  var art = ep.art || '';
+  var sub = [ep.date, ep.durMs?fmtTime(ep.durMs):''].filter(Boolean).join('  &middot;  ');
+  var desc = ep.desc || '';
+  $('epinfobody').innerHTML =
+      '<div id="epinfoart"'+(art?' style="background-image:url(\''+art.replace(/[\\\\\']/g,'')+'\')"':'')+'></div>'
+    + '<div id="epinfometa">'+esc(ep.title||'')+'</div>'
+    + (sub?'<div id="epinfosub">'+sub+'</div>':'')
+    + '<div id="epinfodesc"'+(desc?'':' class="empty"')+'>'+esc(desc||'no description available.')+'</div>';
+  $('epinfobody').scrollTop = 0;
+  show(S.EPINFO); refreshSoft();
+}
+
 /* ============ NOW PLAYING ============ */
+/* Build an episode-info object for the currently-playing item (desc may live on
+   np or, for items played from downloads/continue, in its saved position). */
+function npEp(){
+  var p = getPos(np.id) || {};
+  return { id:np.id, url:np.url, title:np.title, pod:np.pod, art:np.art, feed:np.feed,
+           durMs:np.durMs, desc:np.desc || p.desc || '', date:'' };
+}
 function openNP(){ prevMode = (mode===S.NP?prevMode:mode); show(S.NP); renderNP(); refreshSoft(); }
 function renderNP(){
   $('nptitle').textContent = np.title||'';
@@ -714,30 +803,98 @@ function restoreScreen(scr){
 }
 
 /* ============ DOWNLOADS ============ */
-var dlItems = [], di = 0;
+var dlItems = [], di = 0, dlPoll = null;
 function gotoDownloads(){
-  dlItems = allPos().filter(function(o){ return localPathFor(o._id); });
+  // include both finished downloads and anything currently/recently downloading
+  dlItems = allPos().filter(function(o){ return o.dl || localPathFor(o._id); });
   dlItems.sort(function(a,b){ return (b.updated||0)-(a.updated||0); });
-  di=0; show(S.DOWNLOADS); renderDownloads(); refreshSoft();
+  di=0; show(S.DOWNLOADS); renderDownloads(); refreshSoft(); startDlPoll();
+}
+/* Live status for one item: a finished file wins; otherwise ask the bridge and
+   remember the result so it survives DownloadManager forgetting the record. */
+function dlStatusFor(o){
+  if (localPathFor(o._id)) return {state:'done', percent:100};
+  var st = null;
+  if (HAS_BRIDGE && Bridge.downloadStatus){
+    try { st = JSON.parse(Bridge.downloadStatus(o._id)||'{}'); } catch(e){}
+  }
+  if (st && st.state && st.state!=='none'){
+    if (o.dlState!==st.state){ setPos(o._id, mergePos(o._id, {dlState:st.state})); o.dlState=st.state; }
+    return st;
+  }
+  // record gone and no file → fall back to last known state; a download that was
+  // "running" but left no file has failed.
+  if (o.dlState==='failed' || o.dlState==='running') return {state:'failed', percent:0};
+  return {state:'none', percent:0};
+}
+function dlBadge(st){
+  if (st.state==='done')    return '<span class="badge">&#8595;</span>';
+  if (st.state==='running') return '<span class="badge" style="color:var(--gray)">'+(st.percent||0)+'%</span>';
+  if (st.state==='failed')  return '<span class="badge" style="color:var(--red)">failed</span>';
+  return '<span class="badge" style="color:var(--gray)">queued</span>';
+}
+/* a thin progress bar shown under the title while a download is in flight */
+function dlBar(st){
+  if (st.state!=='running') return '';
+  return '<div class="dlbar"><i style="width:'+(st.percent||0)+'%"></i></div>';
+}
+function dlSub(o, st){
+  if (st.state==='running') return st.percent ? 'downloading… '+st.percent+'%' : 'starting…';
+  if (st.state==='failed')  return 'download failed';
+  return esc(o.pod||'');
 }
 function renderDownloads(){
-  if (!dlItems.length){ $('dllist').innerHTML='<div class="empty">no downloads yet.<br><br>open an episode and choose <b>download</b>.</div>'; return; }
+  if (!dlItems.length){ $('dllist').innerHTML='<div class="empty">no downloads yet.<br><br>open an episode and choose <b>download</b>.</div>'; stopDlPoll(); return; }
   $('dllist').innerHTML = dlItems.map(function(o,i){
+    var st = dlStatusFor(o);
     return '<div class="row'+(i===di?' sel':'')+'">'
       + '<img class="rthumb" src="'+esc(o.art||'')+'">'
       + '<div class="rmain"><div class="rtitle">'+esc(o.title||'')+'</div>'
-      + '<div class="rsub">'+esc(o.pod||'')+'</div></div><span class="badge">&#8595;</span></div>';
+      + '<div class="rsub">'+dlSub(o, st)+'</div>'+dlBar(st)+'</div>'+dlBadge(st)+'</div>';
   }).join('');
   var rows = $('dllist').querySelectorAll('.row'); if (rows[di]) rows[di].scrollIntoView({block:'nearest'});
 }
+/* While downloading, update each row's badge / bar / sub-line in place so the
+   artwork doesn't reload. Stops the poll once nothing is still running. */
+function updateDlRows(){
+  var rows = $('dllist').querySelectorAll('.row'); var running=false;
+  for (var i=0;i<dlItems.length && i<rows.length;i++){
+    var o = dlItems[i], row = rows[i], st = dlStatusFor(o);
+    if (st.state==='running') running=true;
+    var b = row.querySelector('.badge'); if (b) b.outerHTML = dlBadge(st);
+    var sub = row.querySelector('.rsub'); if (sub) sub.innerHTML = dlSub(o, st);
+    var rmain = row.querySelector('.rmain'), bar = row.querySelector('.dlbar');
+    if (st.state==='running'){
+      if (!bar && rmain){ bar = document.createElement('div'); bar.className='dlbar';
+        bar.innerHTML='<i></i>'; rmain.appendChild(bar); }
+      if (bar) bar.querySelector('i').style.width = (st.percent||0)+'%';
+    } else if (bar){ bar.parentNode.removeChild(bar); }
+  }
+  if (!running) stopDlPoll();
+}
+function startDlPoll(){
+  stopDlPoll();
+  var anyRunning = dlItems.some(function(o){ return dlStatusFor(o).state==='running'; });
+  if (!anyRunning) return;
+  dlPoll = setInterval(function(){
+    if (mode!==S.DOWNLOADS){ stopDlPoll(); return; }
+    updateDlRows();
+  }, 1500);
+}
+function stopDlPoll(){ if (dlPoll){ clearInterval(dlPoll); dlPoll=null; } }
 function downloadsKey(name, rep){
   if (name==='ArrowDown'){ di=Math.min(dlItems.length-1,di+1); paintRows('dllist', di); return; }
   if (name==='ArrowUp'){ di=Math.max(0,di-1); paintRows('dllist', di); return; }
   if (name==='Enter'){ if(!rep && gate('ok') && dlItems.length){ var o=dlItems[di];
-    activate({id:o._id,url:o.url,title:o.title,pod:o.pod,art:o.art,feed:o.feed,durMs:o.durMs}, false); } return; }
+    if (dlStatusFor(o).state==='done'){
+      activate({id:o._id,url:o.url,title:o.title,pod:o.pod,art:o.art,feed:o.feed,durMs:o.durMs}, false);
+    } else { toast(dlStatusFor(o).state==='failed' ? 'download failed' : 'still downloading…'); }
+  } return; }
   if (name==='SoftLeft'){ if(!rep && dlItems.length){ var o2=dlItems[di];
-    if(window.Bridge&&Bridge.deleteDownload) Bridge.deleteDownload(o2._id); toast('deleted'); gotoDownloads(); } return; }
-  if (name==='SoftRight' || name==='Back'){ if(!rep) goHome(); return; }
+    if(window.Bridge&&Bridge.deleteDownload) Bridge.deleteDownload(o2._id);
+    setPos(o2._id, mergePos(o2._id, {dl:false, dlState:'none'}));   // drop from the list
+    toast('deleted'); gotoDownloads(); } return; }
+  if (name==='SoftRight' || name==='Back'){ if(!rep){ stopDlPoll(); goHome(); } return; }
 }
 
 /* ============ MENU OVERLAY ============ */
@@ -747,19 +904,20 @@ function openMenu(){
     {label:'search', fn:function(){ closeOverlay(); gotoSearch(); }},
     {label:'downloads', fn:function(){ closeOverlay(); gotoDownloads(); }}
   ];
-  if (np.id) menuItems.push({label:'now playing', fn:function(){ closeOverlay(); openNP(); }});
-  menuItems.push({label:'info', fn:function(){ closeOverlay(); show(S.INFO); refreshSoft(); }});
+  if (np.id){
+    menuItems.push({label:'now playing', fn:function(){ closeOverlay(); openNP(); }});
+    menuItems.push({label:'info', fn:function(){ closeOverlay(); openEpInfo(npEp(), 'np'); }});
+  }
   mi=0; renderMenu(); openOverlay('menu');
 }
 function renderMenu(){
   $('menubody').innerHTML = menuItems.map(function(a,i){
-    return '<div class="row'+(i===mi?' sel':'')+'"><span class="num">'+(i+1)+'</span>'+esc(a.label)+'</div>';
+    return '<div class="row'+(i===mi?' sel':'')+'">'+esc(a.label)+'</div>';
   }).join('');
 }
 function menuKey(name, rep){
   if (name==='ArrowDown'){ mi=Math.min(menuItems.length-1,mi+1); paintRows('menubody', mi); return; }
   if (name==='ArrowUp'){ mi=Math.max(0,mi-1); paintRows('menubody', mi); return; }
-  if (name>='1' && name<=String(menuItems.length)){ menuItems[+name-1].fn(); return; }
   if (name==='Enter'){ if(!rep && gate('ok')) menuItems[mi].fn(); return; }
   if (name==='Back' || name==='SoftRight'){ if(!rep){ closeOverlay(); refreshSoft(); } return; }
 }
@@ -781,6 +939,16 @@ function handleKey(name, rep){
       if (name==='ArrowDown'){ $('infobody').scrollTop+=40; return; }
       if (name==='ArrowUp'){ $('infobody').scrollTop-=40; return; }
       if (name==='Back' || name==='SoftRight' || name==='Enter'){ if(!rep) goHome(); refreshSoft(); }
+      return;
+    case S.EPINFO:
+      if (name==='ArrowDown'){ $('epinfobody').scrollTop+=48; return; }
+      if (name==='ArrowUp'){ $('epinfobody').scrollTop-=48; return; }
+      if (name==='Back' || name==='SoftRight'){
+        if(!rep){
+          if (epinfoFrom==='np'){ show(S.NP); renderNP(); refreshSoft(); }   // back to now playing
+          else { show(S.PODCAST); renderEpisodes(); if(curEpInfo) openEpisodeMenu(curEpInfo); }
+        }
+      }
       return;
   }
 }

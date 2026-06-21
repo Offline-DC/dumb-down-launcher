@@ -10,6 +10,7 @@ import android.content.ServiceConnection
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.util.Log
 import android.view.KeyEvent
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -58,8 +59,11 @@ class PodcastActivity : AppCompatActivity() {
         override fun onReceive(c: Context?, i: Intent?) {
             val id = i?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
             val eid = downloads.episodeForDownload(id) ?: return
-            downloads.finalize(eid)
+            // Read status BEFORE finalize: finalize drops the id→download mapping,
+            // which would otherwise mask a FAILED download as "none".
             val status = downloads.statusJson(eid)
+            Log.i("PodcastDL", "complete id=$id eid=$eid status=$status")
+            downloads.finalize(eid)
             js("window.__onDownload && __onDownload(${jsStr(eid)},$status)")
         }
     }
