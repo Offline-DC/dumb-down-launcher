@@ -37,6 +37,8 @@
          via `su -c` (root via Magisk) so READ_LOGS isn't required on the
          app itself. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- built-in podcast app's PlaybackService runs as a media-playback FGS -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
@@ -187,6 +189,34 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- dumb podcast: no noHistory so the now-playing/episode state survives
+             leaving and returning via the playback notification. singleTop so a
+             notification tap reuses the existing instance (onNewIntent). -->
+        <activity
+            android:name=".podcast.PodcastActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DumbDownLauncher" />
+
+        <!-- podcast audio: media-playback foreground service + media-button
+             handling (notification / lock-screen / headset transport keys) -->
+        <service
+            android:name=".podcast.PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".snake.SnakeActivity"

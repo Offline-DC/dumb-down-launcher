@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.offlineinc.dumbdownlauncher.CONTACT_SYNC
 import com.offlineinc.dumbdownlauncher.DEVICE_SETUP
 import com.offlineinc.dumbdownlauncher.DUMB_MAP
+import com.offlineinc.dumbdownlauncher.DUMB_PODCAST
 import com.offlineinc.dumbdownlauncher.CHECK_UPDATES
 import com.offlineinc.dumbdownlauncher.FREE_UP_SPACE
 import com.offlineinc.dumbdownlauncher.GOOGLE_MESSAGES
@@ -70,4 +71,5 @@ val appDrawableResIcons: Map<String, Int> = mapOf(
     QUACK to R.drawable.ic_duck,
     SNAKE to R.drawable.ic_snake,
     DUMB_MAP to R.drawable.ic_dumb_map,
+    DUMB_PODCAST to R.drawable.ic_dumb_podcast,
 )

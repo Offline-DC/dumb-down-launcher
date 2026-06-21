@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Podcast</title>
+<style>
+  /* ===== Dumb theme: black bg, #FAF594 yellow, Helvetica Now Black everywhere
+     (headers included), quack-style 22px softkey bar (mdpi: 1dp = 1px) ===== */
+  @font-face { font-family:'HelvNow'; src:url('helvetica_now_text_black.ttf'); }
+  :root { --yellow:#FAF594; --dim:rgba(250,245,148,0.65); --gray:#AAAAAA;
+          --red:#E53935; --line:#222; }
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden;
+    background:#000; color:#fff; font-family:'HelvNow', sans-serif;
+    -webkit-user-select:none; user-select:none; }
+
+  /* ---- generic screen ---- */
+  .screen { position:absolute; top:0; left:0; right:0; bottom:22px;
+    display:none; flex-direction:column; overflow:hidden; }
+  .screen.on { display:flex; }
+  h1.title { font-family:'HelvNow', sans-serif; font-size:20px; line-height:1.1;
+    color:var(--yellow); margin:0; padding:8px 8px 6px; flex-shrink:0; }
+  .body { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+
+  /* ---- softkey bar ---- */
+  #softbar { position:absolute; bottom:0; left:0; right:0; height:22px; z-index:3000;
+    background:#000; display:flex; align-items:center; padding:0 10px;
+    box-sizing:border-box; border-top:1px solid #111; }
+  #softbar span { flex:1; font-size:12px; color:var(--dim);
+    overflow:hidden; white-space:nowrap; }
+  #sk-l { text-align:left; } #sk-c { text-align:center; } #sk-r { text-align:right; }
+
+  /* ---- toast ---- */
+  #toast { position:absolute; top:6px; left:8px; right:8px; z-index:4000;
+    background:rgba(0,0,0,0.9); color:var(--yellow); font-size:13px;
+    padding:5px 7px; text-align:center; display:none; border:1px solid var(--dim); }
+
+  /* ---- HOME: continue card + single-column subscription rows ---- */
+  #contwrap { padding:4px 8px 2px; }
+  .contcard { border:2px solid transparent; background:#0c0c0c; padding:6px 8px;
+    display:flex; align-items:center; }
+  .contcard.sel { border-color:var(--yellow); background:rgba(250,245,148,0.12); }
+  .contcard .cthumb { width:40px; height:40px; flex-shrink:0; background:#222;
+    margin-right:8px; object-fit:cover; }
+  .contcard .clabel { font-size:10px; color:var(--yellow); text-transform:uppercase;
+    letter-spacing:0.5px; }
+  .contcard .ctitle { font-size:14px; color:#fff; line-height:1.15;
+    overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .contcard .cbar { height:3px; background:#333; margin-top:3px; }
+  .contcard .cbar i { display:block; height:3px; background:var(--yellow); }
+
+  .empty { color:var(--gray); font-size:14px; padding:24px 16px; text-align:center;
+    line-height:1.5; }
+  .empty b { color:var(--yellow); font-weight:normal; }
+
+  /* ---- roving-focus rows (home subs, search, episodes, downloads, menus) ---- */
+  .row { padding:7px 9px; font-size:14px; line-height:1.25; border:2px solid transparent;
+    color:#ddd; display:flex; align-items:center; }
+  .row.sel { border-color:var(--yellow); background:rgba(250,245,148,0.12); color:#fff; }
+  .row .rthumb { width:38px; height:38px; flex-shrink:0; background:#222;
+    margin-right:9px; object-fit:cover; }
+  .row .rmain { flex:1; min-width:0; }
+  .row .rtitle { font-size:14px; color:inherit; line-height:1.2;
+    overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .row .rsub { font-size:11px; color:var(--gray); margin-top:1px; }
+  .row .num { color:var(--yellow); margin-right:6px; flex-shrink:0; }
+  .row .badge { color:var(--yellow); font-size:12px; margin-left:6px; flex-shrink:0; }
+  .row .chev { color:var(--gray); margin-left:4px; flex-shrink:0; }
+  .row.more { color:var(--yellow); justify-content:center; font-size:13px; }
+
+  /* ---- search input ---- */
+  #searchform { display:flex; margin:8px; }
+  #searchinput { flex:1; min-width:0; padding:7px; font-size:16px; background:#111;
+    color:#fff; border:2px solid var(--dim); box-sizing:border-box;
+    font-family:'HelvNow', sans-serif; }
+  #searchinput:focus { border-color:var(--yellow); outline:none; }
+  #searchinput::-webkit-search-cancel-button { -webkit-appearance:none; display:none; }
+  #searchhint { font-size:11px; color:var(--gray); padding:0 10px 4px; }
+
+  /* ---- podcast detail header ---- */
+  #pchead { display:flex; padding:8px; border-bottom:1px solid var(--line); flex-shrink:0; }
+  #pcart { width:64px; height:64px; background:#1a1a1a; object-fit:cover; flex-shrink:0;
+    margin-right:8px; }
+  #pcmeta { flex:1; min-width:0; }
+  #pctitle { font-size:15px; color:#fff; line-height:1.15;
+    overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
+  #pcsubbed { font-size:11px; margin-top:3px; }
+  #pcsubbed.yes { color:var(--yellow); } #pcsubbed.no { color:var(--gray); }
+
+  /* ---- now playing ---- */
+  #np { background:#000; }
+  #npart { flex:1; min-height:0; background:#101010 center/contain no-repeat; margin:8px;
+    border:1px solid #1a1a1a; }
+  #npinfo { padding:2px 10px; flex-shrink:0; }
+  #nptitle { font-size:15px; color:#fff; line-height:1.2;
+    overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  #nppod { font-size:12px; color:var(--yellow); margin-top:1px; }
+  #npbarwrap { padding:6px 10px 0; flex-shrink:0; }
+  #npbar { height:4px; background:#333; position:relative; }
+  #npbar i { position:absolute; left:0; top:0; height:4px; background:var(--yellow); }
+  #npbar .dot { position:absolute; top:-3px; width:10px; height:10px; border-radius:50%;
+    background:var(--yellow); margin-left:-5px; }
+  #nptime { display:flex; justify-content:space-between; font-size:12px;
+    color:var(--gray); padding:3px 10px 8px; flex-shrink:0; }
+  #npstate { color:var(--yellow); }
+
+  /* ---- overlay menu (options / episode actions) ---- */
+  .overlay { position:absolute; left:0; right:0; bottom:22px; top:auto; z-index:2500;
+    background:#000; border-top:2px solid var(--yellow); display:none; }
+  .overlay.on { display:block; }
+  .overlay h2 { font-family:'HelvNow', sans-serif; font-size:16px; color:var(--yellow);
+    margin:0; padding:6px 10px 5px; }
+
+  /* ---- spinner ---- */
+  .spinwrap { display:flex; justify-content:center; padding:22px; }
+  .spinner { width:24px; height:24px; border:3px solid rgba(250,245,148,0.25);
+    border-top-color:var(--yellow); border-radius:50%; animation:spin 0.8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  #infobody { font-size:13px; color:#ddd; padding:10px; line-height:1.6; }
+</style>
+</head>
+<body>
+
+<div id="toast"></div>
+
+<!-- ===== HOME ===== -->
+<div id="home" class="screen on">
+  <h1 class="title">podcast</h1>
+  <div class="body" id="homebody">
+    <div id="contwrap"></div>
+    <div id="sublist"></div>
+    <div id="homeempty" class="empty" style="display:none">
+      no subscriptions yet.<br><br>press <b>search</b> to find a show,
+      then <b>subscribe</b> to add it here.
+    </div>
+  </div>
+</div>
+
+<!-- ===== SEARCH ===== -->
+<div id="search" class="screen">
+  <h1 class="title">search</h1>
+  <form id="searchform" action="#">
+    <input id="searchinput" type="search" autocomplete="off" enterkeyhint="search"
+      placeholder="show name">
+  </form>
+  <div id="searchhint">type a show, then press search</div>
+  <div class="body" id="results"></div>
+</div>
+
+<!-- ===== PODCAST DETAIL ===== -->
+<div id="podcast" class="screen">
+  <div id="pchead">
+    <img id="pcart" alt="">
+    <div id="pcmeta">
+      <div id="pctitle"></div>
+      <div id="pcsubbed" class="no"></div>
+    </div>
+  </div>
+  <div class="body" id="episodes"></div>
+</div>
+
+<!-- ===== NOW PLAYING ===== -->
+<div id="np" class="screen">
+  <h1 class="title" style="padding-bottom:2px">now playing</h1>
+  <div id="npart"></div>
+  <div id="npinfo">
+    <div id="nptitle"></div>
+    <div id="nppod"></div>
+  </div>
+  <div id="npbarwrap"><div id="npbar"><i></i><span class="dot"></span></div></div>
+  <div id="nptime"><span id="npcur">00:00</span><span id="npstate">paused</span><span id="nprem">-00:00</span></div>
+</div>
+
+<!-- ===== DOWNLOADS ===== -->
+<div id="downloads" class="screen">
+  <h1 class="title">downloads</h1>
+  <div class="body" id="dllist"></div>
+</div>
+
+<!-- ===== INFO ===== -->
+<div id="info" class="screen">
+  <h1 class="title">info</h1>
+  <div class="body" id="infobody">
+    <div>podcast v1.0</div>
+    <div style="color:var(--gray);margin-top:6px">a d-pad podcast player for the flip 2.</div>
+    <div style="color:var(--gray);margin-top:6px">search by Apple Podcasts. no ads, ever.</div>
+  </div>
+</div>
+
+<!-- ===== EPISODE ACTIONS OVERLAY ===== -->
+<div id="epovl" class="overlay">
+  <h2 id="epovltitle">episode</h2>
+  <div id="epovlbody"></div>
+</div>
+
+<!-- ===== MENU OVERLAY ===== -->
+<div id="menu" class="overlay">
+  <h2>menu</h2>
+  <div id="menubody"></div>
+</div>
+
+<div id="softbar"><span id="sk-l"></span><span id="sk-c"></span><span id="sk-r"></span></div>
+
+<script>
+'use strict';
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/* ============ screens / mode ============ */
+var S = { HOME:'home', SEARCH:'search', PODCAST:'podcast', NP:'np',
+          DOWNLOADS:'downloads', INFO:'info' };
+var mode = S.HOME;
+var overlay = null;            // 'epovl' | 'menu' | null
+var prevMode = S.HOME;         // where NP returns to
+
+function show(scr){
+  ['home','search','podcast','np','downloads','info'].forEach(function(id){
+    $(id).classList.toggle('on', id === scr);
+  });
+  mode = scr;
+}
+function openOverlay(id){ closeOverlay(); overlay = id; $(id).classList.add('on'); refreshSoft(); }
+function closeOverlay(){ if (overlay){ $(overlay).classList.remove('on'); overlay = null; } }
+
+/* ============ key debounce — TIME-BASED so it self-heals if a key-up is
+   missed (the old boolean gate could stick and silently block actions) ====== */
+var held = {};
+function gate(code){
+  var t = Date.now();
+  if (held[code] && t - held[code] < 1200) return false;
+  held[code] = t; return true;
+}
+
+/* ============ generic snappy list painting ============
+   Build a list's DOM once, then move the highlight by toggling .sel only —
+   no innerHTML rebuild on every arrow press, so artwork never reloads. */
+function paintRows(containerId, idx){
+  var rows = $(containerId).querySelectorAll('.row, .contcard');
+  for (var i=0;i<rows.length;i++) rows[i].classList.toggle('sel', i===idx);
+  if (rows[idx]) rows[idx].scrollIntoView({block:'nearest'});
+}
+
+/* ============ softkeys ============ */
+function setSoft(l, c, r){
+  $('sk-l').textContent = l||''; $('sk-c').textContent = c||''; $('sk-r').textContent = r||'';
+}
+function refreshSoft(){
+  if (overlay === 'menu' || overlay === 'epovl'){ setSoft('', 'select', 'back'); return; }
+  switch (mode){
+    case S.HOME:
+      setSoft('menu', homeFocus==='cont'?'resume':(subs.length?'open':''), 'search'); return;
+    case S.SEARCH:
+      setSoft(searchFocus==='input'?'search':'', searchFocus==='results'?'open':'', 'back'); return;
+    case S.PODCAST:
+      setSoft(isSub(curFeed)?'unsub':'subscribe', episodes.length?'play':'', 'back'); return;
+    case S.NP:
+      setSoft('menu', np.playing?'pause':'play', 'back'); return;
+    case S.DOWNLOADS:
+      setSoft(dlItems.length?'delete':'', dlItems.length?'play':'', 'back'); return;
+    case S.INFO:
+      setSoft('', '', 'back'); return;
+  }
+}
+
+/* ============ formatting ============ */
+function fmtTime(ms){
+  if (!ms || ms<0 || !isFinite(ms)) ms = 0;
+  var s = Math.floor(ms/1000), h = Math.floor(s/3600);
+  s -= h*3600; var m = Math.floor(s/60); s -= m*60;
+  var mm = (h>0 && m<10?'0':'')+m, ss = (s<10?'0':'')+s;
+  return (h>0? h+':' : '') + mm + ':' + ss;
+}
+function parseDuration(d){
+  if (!d) return 0;
+  if (/^\d+$/.test(d)) return parseInt(d,10)*1000;
+  var p = d.split(':').map(Number), s = 0;
+  for (var i=0;i<p.length;i++){ s = s*60 + (p[i]||0); }
+  return s*1000;
+}
+function hashId(str){
+  var h = 5381; str = String(str);
+  for (var i=0;i<str.length;i++){ h = ((h<<5)+h + str.charCodeAt(i))|0; }
+  return 'e' + (h>>>0).toString(36);
+}
+function pct(p,d){ return d>0 ? Math.min(100, Math.round(p*100/d)) : 0; }
+
+/* ============ storage ============ */
+function lsGet(k, def){ try { var v = localStorage.getItem(k); return v==null?def:JSON.parse(v); } catch(e){ return def; } }
+function lsSet(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+
+var subs = lsGet('subs', []);
+function saveSubs(){ lsSet('subs', subs); }
+function isSub(feed){ return subs.some(function(s){ return s.feed===feed; }); }
+function addSub(p){ if(!isSub(p.feed)){ subs.unshift({feed:p.feed,title:p.title,art:p.art}); saveSubs(); } }
+function removeSub(feed){ subs = subs.filter(function(s){ return s.feed!==feed; }); saveSubs(); }
+
+function getPos(id){ return lsGet('pos_'+id, null); }
+function setPos(id, o){ lsSet('pos_'+id, o); }
+function mergePos(id, patch){ var cur = getPos(id) || {}; for (var k in patch) cur[k]=patch[k]; return cur; }
+function allPos(){
+  var out = [];
+  for (var i=0;i<localStorage.length;i++){
+    var k = localStorage.key(i);
+    if (k && k.indexOf('pos_')===0){ var o = lsGet(k,null); if(o){ o._id = k.slice(4); out.push(o); } }
+  }
+  return out;
+}
+function continueItem(){
+  var list = allPos().filter(function(o){
+    return o.posMs > 3000 && (!o.durMs || o.posMs < o.durMs - 8000);
+  });
+  list.sort(function(a,b){ return (b.updated||0)-(a.updated||0); });
+  return list[0] || null;
+}
+
+/* ============ native bridge / audio abstraction ============ */
+var HAS_BRIDGE = !!(window.Bridge && window.Bridge.play);
+var htmlAudio = null;
+function ensureAudio(){
+  if (!htmlAudio){
+    htmlAudio = new Audio();
+    htmlAudio.addEventListener('timeupdate', function(){
+      if (np.id) onProgress(np.id, htmlAudio.currentTime*1000, (htmlAudio.duration||0)*1000, !htmlAudio.paused);
+    });
+    htmlAudio.addEventListener('ended', function(){ if(np.id) onState(np.id,'ended'); });
+    htmlAudio.addEventListener('play', function(){ if(np.id) onState(np.id,'playing'); });
+    htmlAudio.addEventListener('pause', function(){ if(np.id) onState(np.id,'paused'); });
+  }
+  return htmlAudio;
+}
+
+var np = { id:'', url:'', title:'', pod:'', art:'', feed:'',
+           posMs:0, durMs:0, playing:false };
+
+function localPathFor(id){
+  if (HAS_BRIDGE && Bridge.localPath){ try { return Bridge.localPath(id) || ''; } catch(e){} }
+  return '';
+}
+
+/* Is the given episode the one currently loaded in the player? */
+function isActive(id){
+  if (HAS_BRIDGE){
+    try { var s = JSON.parse(Bridge.playbackState()||'{}');
+      return s.episodeId === id && s.prepared; } catch(e){ return false; }
+  }
+  return !!(htmlAudio && htmlAudio.src && !htmlAudio.ended && np.id===id);
+}
+
+/* The single entry point for "play / resume this episode".
+   If it's already the active episode (and we're not forcing a restart) we just
+   re-open now-playing and keep whatever state it's in — pressing resume must
+   NOT pause or restart something that's already going. */
+function activate(ep, fromStart){
+  if (!fromStart && isActive(ep.id)){ syncNP(); openNP(); return; }
+  playEpisode(ep, fromStart);
+}
+
+function playEpisode(ep, fromStart){
+  var saved = getPos(ep.id);
+  var startMs = fromStart ? 0 : (saved && saved.posMs ? saved.posMs : 0);
+  var local = localPathFor(ep.id);
+  var src = local || ep.url;
+
+  np = { id:ep.id, url:ep.url, title:ep.title, pod:ep.pod, art:ep.art, feed:ep.feed,
+         posMs:startMs, durMs:ep.durMs||0, playing:true };
+  setPos(ep.id, mergePos(ep.id, {title:ep.title, pod:ep.pod, art:ep.art, url:ep.url,
+                                  feed:ep.feed, durMs:ep.durMs||0, posMs:startMs,
+                                  updated:Date.now()}));
+  if (HAS_BRIDGE){
+    Bridge.play(src, ep.id, ep.title||'', ep.pod||'', ep.art||'', startMs|0);
+  } else {
+    var a = ensureAudio(); a.src = src;
+    a.addEventListener('loadedmetadata', function once(){ a.removeEventListener('loadedmetadata',once);
+      if (startMs>0) a.currentTime = startMs/1000; a.play(); });
+    a.load();
+  }
+  renderNP(); openNP();
+}
+
+function togglePlay(){
+  if (!np.id) return;
+  if (HAS_BRIDGE){ Bridge.togglePause(); }
+  else { var a = ensureAudio(); if (a.paused) a.play(); else a.pause(); }
+}
+function skip(deltaMs){
+  if (!np.id) return;
+  if (HAS_BRIDGE){ Bridge.skip(deltaMs); }
+  else { var a = ensureAudio(); a.currentTime = Math.max(0, a.currentTime + deltaMs/1000); }
+}
+function syncNP(){
+  if (HAS_BRIDGE){
+    try { var s = JSON.parse(Bridge.playbackState()||'{}');
+      if (s.episodeId === np.id){ np.posMs = s.positionMs||np.posMs;
+        np.durMs = s.durationMs||np.durMs; np.playing = !!s.playing; } } catch(e){}
+  } else if (htmlAudio){ np.playing = !htmlAudio.paused; }
+}
+
+/* ---- native callbacks ---- */
+function onProgress(id, posMs, durMs, playing){
+  if (id !== np.id) return;
+  np.posMs = posMs; if (durMs>0) np.durMs = durMs; np.playing = playing;
+  if (!onProgress._t || Date.now()-onProgress._t > 4000){
+    onProgress._t = Date.now();
+    setPos(id, mergePos(id, {posMs:posMs, durMs:np.durMs, updated:Date.now()}));
+  }
+  if (mode === S.NP) renderNPProgress();
+}
+function onState(id, state){
+  if (id !== np.id) return;
+  np.playing = (state==='playing' || state==='buffering');
+  if (state==='ended'){ setPos(id, mergePos(id, {posMs:0, updated:Date.now()})); np.playing = false; }
+  if (mode===S.NP) $('npstate').textContent = state==='buffering'?'buffering…':(np.playing?'playing':state);
+  refreshSoft();
+}
+window.__onProgress = onProgress;
+window.__onState = onState;
+window.__onDownload = function(id, st){ if (mode===S.PODCAST) renderEpisodes(); if(mode===S.DOWNLOADS) gotoDownloads(); toast('downloaded'); };
+window.__onResume = function(){ if (np.id){ syncNP(); if(mode===S.NP) renderNPProgress(); } };
+/* tapping the playback notification deep-links straight to now-playing */
+window.__openNowPlaying = function(){ if (np.id){ syncNP(); closeOverlay(); openNP(); } };
+
+/* ============ HOME (continue card + subscription rows) ============ */
+var homeFocus = 'list';   // 'cont' | 'list'
+var li = 0;               // subscription row index
+function renderHome(){
+  var cont = continueItem();
+  var cw = $('contwrap');
+  if (cont){
+    cw.innerHTML = '<div class="contcard" id="contcard">'
+      + '<img class="cthumb" src="'+esc(cont.art||'')+'">'
+      + '<div style="flex:1;min-width:0">'
+      + '<div class="clabel">continue</div>'
+      + '<div class="ctitle">'+esc(cont.title||'episode')+'</div>'
+      + '<div class="cbar"><i style="width:'+pct(cont.posMs,cont.durMs)+'%"></i></div>'
+      + '</div></div>';
+  } else { cw.innerHTML = ''; if(homeFocus==='cont') homeFocus='list'; }
+
+  var sl = $('sublist');
+  if (subs.length===0){
+    sl.innerHTML=''; $('homeempty').style.display='block';
+  } else {
+    $('homeempty').style.display='none';
+    sl.innerHTML = subs.map(function(s){
+      return '<div class="row"><img class="rthumb" src="'+esc(s.art||'')+'">'
+        + '<div class="rmain"><div class="rtitle">'+esc(s.title||'')+'</div></div>'
+        + '<span class="chev">&rsaquo;</span></div>';
+    }).join('');
+  }
+  li = Math.min(li, Math.max(0, subs.length-1));
+  if (subs.length===0 && cont) homeFocus='cont';
+  paintHome(); refreshSoft();
+}
+function paintHome(){
+  var cc = $('contcard');
+  if (cc) cc.classList.toggle('sel', homeFocus==='cont');
+  var rows = $('sublist').querySelectorAll('.row');
+  for (var i=0;i<rows.length;i++) rows[i].classList.toggle('sel', homeFocus==='list' && i===li);
+  var sel = rows[li]; if (sel && homeFocus==='list') sel.scrollIntoView({block:'nearest'});
+}
+function homeKey(name, rep){
+  var n = subs.length, hasCont = !!$('contcard');
+  if (name==='ArrowUp'){
+    if (homeFocus==='list'){ if (li===0 && hasCont){ homeFocus='cont'; } else { li=Math.max(0,li-1); } paintHome(); refreshSoft(); }
+    return;
+  }
+  if (name==='ArrowDown'){
+    if (homeFocus==='cont'){ if(n){ homeFocus='list'; li=0; paintHome(); refreshSoft(); } }
+    else { li=Math.min(n-1, li+1); paintHome(); }
+    return;
+  }
+  if (name==='Enter'){
+    if (!gate('ok')) return;
+    if (homeFocus==='cont'){ var c=continueItem(); if(c) resumeFromPos(c); }
+    else if (n){ openPodcastFromSub(subs[li]); }
+    return;
+  }
+  if (name==='SoftLeft'){ if(!rep) openMenu(); return; }
+  if (name==='SoftRight'){ if(!rep) gotoSearch(); return; }
+  if (name==='Back'){ if(!rep && window.Bridge && Bridge.exitApp) Bridge.exitApp(); return; }
+}
+function resumeFromPos(o){
+  activate({id:o._id, url:o.url, title:o.title, pod:o.pod, art:o.art, feed:o.feed, durMs:o.durMs}, false);
+}
+
+/* ============ SEARCH ============ */
+var searchFocus = 'input';   // 'input' | 'results'
+var results = [], ri = 0;
+function gotoSearch(){
+  show(S.SEARCH); searchFocus='input'; results=[]; ri=0;
+  $('results').innerHTML=''; $('searchhint').style.display='block';
+  focusInput(); refreshSoft();
+}
+function focusInput(){
+  var inp = $('searchinput'), t=0;
+  (function f(){ inp.focus(); if (document.activeElement!==inp && ++t<8) requestAnimationFrame(f); })();
+}
+function runSearch(){
+  var term = $('searchinput').value.trim();
+  if (!term) return;
+  searchFocus='input';                       // stay in the input; no row highlighted yet
+  $('searchhint').style.display='none';
+  $('results').innerHTML = '<div class="spinwrap"><div class="spinner"></div></div>';
+  refreshSoft();
+  var url = 'https://itunes.apple.com/search?media=podcast&limit=5&term='+encodeURIComponent(term);
+  fetch(url).then(function(r){ return r.json(); }).then(function(j){
+    results = (j.results||[]).filter(function(x){ return x.feedUrl; }).slice(0,5).map(function(x){
+      return { feed:x.feedUrl, title:x.collectionName||x.trackName||'',
+               author:x.artistName||'', art:x.artworkUrl600||x.artworkUrl100||'' };
+    });
+    if (results.length){ renderResults(); }       // built unhighlighted (searchFocus='input')
+    else $('results').innerHTML = '<div class="empty">no shows found.</div>';
+    refreshSoft();
+  }).catch(function(){
+    $('results').innerHTML = '<div class="empty">search failed.<br>check your connection.</div>';
+    refreshSoft();
+  });
+}
+function renderResults(){
+  $('results').innerHTML = results.map(function(r,i){
+    return '<div class="row'+(i===ri&&searchFocus==='results'?' sel':'')+'">'
+      + '<img class="rthumb" src="'+esc(r.art)+'">'
+      + '<div class="rmain"><div class="rtitle">'+esc(r.title)+'</div>'
+      + '<div class="rsub">'+esc(r.author)+(isSub(r.feed)?' &middot; subscribed':'')+'</div></div>'
+      + '<span class="chev">&rsaquo;</span></div>';
+  }).join('');
+}
+function searchKey(name, rep){
+  if (searchFocus==='input'){
+    if (name==='Enter' || name==='SoftLeft'){ if(!rep && gate('ok')) runSearch(); return 'eat'; }
+    if (name==='ArrowDown' && results.length){
+      searchFocus='results'; ri=0; $('searchinput').blur();
+      paintRows('results', 0); refreshSoft(); return 'eat';      // lands on the FIRST result
+    }
+    if (name==='Back' || name==='SoftRight'){ if(!rep){ $('searchinput').blur(); goHome(); } return 'eat'; }
+    return 'pass';   // let it type
+  }
+  // results focus — move highlight only, no rebuild
+  if (name==='ArrowDown'){ ri=Math.min(results.length-1, ri+1); paintRows('results', ri); return; }
+  if (name==='ArrowUp'){
+    if (ri===0){ searchFocus='input'; paintRows('results', -1); focusInput(); refreshSoft(); }
+    else { ri--; paintRows('results', ri); }
+    return;
+  }
+  if (name==='Enter' || name==='SoftLeft'){ if(!rep && gate('ok')) openPodcast(results[ri]); return; }
+  if (name==='Back' || name==='SoftRight'){ if(!rep){ searchFocus='input'; paintRows('results',-1); focusInput(); refreshSoft(); } return; }
+}
+
+/* ============ PODCAST DETAIL (paginated episodes) ============ */
+var curFeed='', curPod=null, episodes=[], ei=0;
+var EP_PAGE=10, epShown=EP_PAGE;
+function openPodcastFromSub(s){ openPodcast({feed:s.feed, title:s.title, art:s.art, author:''}); }
+function openPodcast(p){
+  curFeed = p.feed; curPod = p; ei = 0; episodes = []; epShown = EP_PAGE;
+  $('pcart').src = p.art||''; $('pctitle').textContent = p.title||'';
+  updateSubbedLabel();
+  $('episodes').innerHTML = '<div class="spinwrap"><div class="spinner"></div></div>';
+  show(S.PODCAST); refreshSoft();
+  fetchFeed(p.feed).then(function(data){
+    if (data.art && !curPod.art){ curPod.art = data.art; $('pcart').src = data.art; }
+    if (data.title){ $('pctitle').textContent = data.title; curPod.title = data.title; }
+    episodes = data.episodes; ei = 0; epShown = EP_PAGE;
+    renderEpisodes(); refreshSoft();
+  }).catch(function(){
+    $('episodes').innerHTML = '<div class="empty">couldn\'t load episodes.<br>check your connection.</div>';
+    refreshSoft();
+  });
+}
+function updateSubbedLabel(){
+  var el = $('pcsubbed');
+  if (isSub(curFeed)){ el.textContent='subscribed'; el.className='yes'; }
+  else { el.textContent='not subscribed'; el.className='no'; }
+}
+function fetchFeed(feed){
+  return fetch(feed).then(function(r){ return r.text(); }).then(function(xml){
+    var doc = new DOMParser().parseFromString(xml, 'text/xml');
+    var chTitle = txt(doc.querySelector('channel > title'));
+    var chArt = doc.querySelector('channel > image > url');
+    var art = chArt ? txt(chArt) : '';
+    if (!art){ var im = doc.getElementsByTagNameNS('*','image');
+      for (var a=0;a<im.length;a++){ var h=im[a].getAttribute('href'); if(h){ art=h; break; } } }
+    var items = doc.querySelectorAll('item'); var eps = [];
+    for (var i=0; i<items.length && i<300; i++){
+      var it = items[i];
+      var enc = it.querySelector('enclosure');
+      var url = enc ? enc.getAttribute('url') : '';
+      if (!url) continue;
+      var title = txt(it.querySelector('title'));
+      var guid = txt(it.querySelector('guid')) || url;
+      var dur = 0; var dn = it.getElementsByTagNameNS('*','duration');
+      if (dn.length) dur = parseDuration(txt(dn[0]));
+      var pub = txt(it.querySelector('pubDate'));
+      eps.push({ id:hashId(guid), url:url, title:title||'episode',
+                 pod:chTitle||curPod.title||'', art:art||curPod.art||'',
+                 feed:feed, durMs:dur, date:fmtDate(pub) });
+    }
+    return { title:chTitle, art:art, episodes:eps };
+  });
+}
+function txt(node){ return node ? (node.textContent||'').trim() : ''; }
+function fmtDate(s){ if(!s) return ''; var d=new Date(s); if(isNaN(d)) return '';
+  return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
+
+function epRowCount(){ var shown=Math.min(epShown, episodes.length); return shown + (epShown<episodes.length?1:0); }
+function renderEpisodes(){
+  if (!episodes.length){ $('episodes').innerHTML='<div class="empty">no episodes.</div>'; return; }
+  var shown = Math.min(epShown, episodes.length);
+  var html = '';
+  for (var i=0;i<shown;i++){
+    var e = episodes[i];
+    var dl = localPathFor(e.id) ? '<span class="badge">&#8595;</span>' : '';
+    var p = getPos(e.id);
+    var prog = (p && p.posMs>3000) ? '<span class="badge" style="color:var(--gray)">'+pct(p.posMs,p.durMs||e.durMs)+'%</span>' : '';
+    var sub = [e.date, e.durMs?fmtTime(e.durMs):''].filter(Boolean).join('  &middot;  ');
+    html += '<div class="row'+(i===ei?' sel':'')+'">'
+      + '<div class="rmain"><div class="rtitle">'+esc(e.title)+'</div>'
+      + '<div class="rsub">'+sub+'</div></div>'+prog+dl+'<span class="chev">&rsaquo;</span></div>';
+  }
+  if (epShown < episodes.length){
+    var left = episodes.length - epShown;
+    html += '<div class="row more'+(ei===shown?' sel':'')+'">load '+Math.min(EP_PAGE,left)+' more &#9662; ('+left+' left)</div>';
+  }
+  $('episodes').innerHTML = html;
+  var rows = $('episodes').querySelectorAll('.row'); if (rows[ei]) rows[ei].scrollIntoView({block:'nearest'});
+}
+function podcastKey(name, rep){
+  var rc = epRowCount();
+  if (name==='ArrowDown'){ ei=Math.min(rc-1, ei+1); paintRows('episodes', ei); return; }
+  if (name==='ArrowUp'){ ei=Math.max(0, ei-1); paintRows('episodes', ei); return; }
+  if (name==='8'){ ei=Math.min(rc-1, ei+5); paintRows('episodes', ei); return; }
+  if (name==='2'){ ei=Math.max(0, ei-5); paintRows('episodes', ei); return; }
+  if (name==='Enter'){
+    if(!rep && gate('ok')){
+      var shown = Math.min(epShown, episodes.length);
+      if (epShown<episodes.length && ei===shown){ epShown += EP_PAGE; renderEpisodes(); }  // load-more row
+      else if (episodes[ei]) openEpisodeMenu(episodes[ei]);
+    }
+    return;
+  }
+  if (name==='SoftLeft'){ if(!rep) toggleSub(); return; }
+  if (name==='SoftRight' || name==='Back'){ if(!rep) goHome(); return; }
+}
+function toggleSub(){
+  if (isSub(curFeed)){ removeSub(curFeed); toast('unsubscribed'); }
+  else { addSub({feed:curFeed, title:curPod.title, art:curPod.art}); toast('subscribed'); }
+  updateSubbedLabel(); refreshSoft();
+}
+
+/* ============ EPISODE ACTIONS OVERLAY ============ */
+var epActions = [], eai = 0;
+function openEpisodeMenu(ep){
+  var local = localPathFor(ep.id);
+  var pos = getPos(ep.id);
+  epActions = [];
+  if (pos && pos.posMs>3000 && (!pos.durMs || pos.posMs<pos.durMs-8000)){
+    epActions.push({label:'resume ('+fmtTime(pos.posMs)+')', fn:function(){ closeOverlay(); activate(ep,false); }});
+    epActions.push({label:'play from start', fn:function(){ closeOverlay(); playEpisode(ep,true); }});
+  } else {
+    epActions.push({label:local?'play (downloaded)':'stream', fn:function(){ closeOverlay(); activate(ep,false); }});
+  }
+  if (local){
+    epActions.push({label:'delete download', fn:function(){ if(window.Bridge&&Bridge.deleteDownload) Bridge.deleteDownload(ep.id); toast('deleted'); closeOverlay(); renderEpisodes(); }});
+  } else {
+    epActions.push({label:'download', fn:function(){ doDownload(ep); closeOverlay(); }});
+  }
+  $('epovltitle').textContent = ep.title.slice(0,40);
+  eai = 0; renderEpActions(); openOverlay('epovl');
+}
+function renderEpActions(){
+  $('epovlbody').innerHTML = epActions.map(function(a,i){
+    return '<div class="row'+(i===eai?' sel':'')+'">'+esc(a.label)+'</div>';
+  }).join('');
+}
+function doDownload(ep){
+  if (HAS_BRIDGE && Bridge.download){ Bridge.download(ep.url, ep.id, ep.title||''); toast('downloading…');
+    setPos(ep.id, mergePos(ep.id, {title:ep.title,pod:ep.pod,art:ep.art,url:ep.url,feed:ep.feed,durMs:ep.durMs,updated:Date.now()}));
+  } else { toast('downloads need the app'); }
+}
+function epovlKey(name, rep){
+  if (name==='ArrowDown'){ eai=Math.min(epActions.length-1,eai+1); paintRows('epovlbody', eai); return; }
+  if (name==='ArrowUp'){ eai=Math.max(0,eai-1); paintRows('epovlbody', eai); return; }
+  if (name==='Enter'){ if(!rep && gate('ok')) epActions[eai].fn(); return; }
+  if (name==='Back' || name==='SoftRight'){ if(!rep){ closeOverlay(); refreshSoft(); } return; }
+}
+
+/* ============ NOW PLAYING ============ */
+function openNP(){ prevMode = (mode===S.NP?prevMode:mode); show(S.NP); renderNP(); refreshSoft(); }
+function renderNP(){
+  $('nptitle').textContent = np.title||'';
+  $('nppod').textContent = np.pod||'';
+  $('npart').style.backgroundImage = np.art ? 'url("'+np.art.replace(/"/g,'')+'")' : 'none';
+  renderNPProgress();
+}
+function renderNPProgress(){
+  var p = pct(np.posMs, np.durMs);
+  $('npbar').querySelector('i').style.width = p+'%';
+  $('npbar').querySelector('.dot').style.left = p+'%';
+  $('npcur').textContent = fmtTime(np.posMs);
+  $('nprem').textContent = np.durMs ? '-'+fmtTime(Math.max(0,np.durMs-np.posMs)) : fmtTime(np.durMs);
+  $('npstate').textContent = np.playing ? 'playing' : 'paused';
+}
+function npKey(name, rep){
+  if (name==='Enter'){ if(!rep && gate('ok')) togglePlay(); return; }
+  if (name==='ArrowRight' || name==='3' || name==='6'){ skip(30000); return; }
+  if (name==='ArrowLeft'  || name==='1' || name==='4'){ skip(-15000); return; }
+  if (name==='SoftLeft'){ if(!rep) openMenu(); return; }
+  if (name==='SoftRight' || name==='Back'){ if(!rep){ show(prevMode); restoreScreen(prevMode); refreshSoft(); } return; }
+}
+function restoreScreen(scr){
+  if (scr===S.HOME) renderHome();
+  else if (scr===S.PODCAST) renderEpisodes();
+  else if (scr===S.DOWNLOADS) renderDownloads();
+}
+
+/* ============ DOWNLOADS ============ */
+var dlItems = [], di = 0;
+function gotoDownloads(){
+  dlItems = allPos().filter(function(o){ return localPathFor(o._id); });
+  dlItems.sort(function(a,b){ return (b.updated||0)-(a.updated||0); });
+  di=0; show(S.DOWNLOADS); renderDownloads(); refreshSoft();
+}
+function renderDownloads(){
+  if (!dlItems.length){ $('dllist').innerHTML='<div class="empty">no downloads yet.<br><br>open an episode and choose <b>download</b>.</div>'; return; }
+  $('dllist').innerHTML = dlItems.map(function(o,i){
+    return '<div class="row'+(i===di?' sel':'')+'">'
+      + '<img class="rthumb" src="'+esc(o.art||'')+'">'
+      + '<div class="rmain"><div class="rtitle">'+esc(o.title||'')+'</div>'
+      + '<div class="rsub">'+esc(o.pod||'')+'</div></div><span class="badge">&#8595;</span></div>';
+  }).join('');
+  var rows = $('dllist').querySelectorAll('.row'); if (rows[di]) rows[di].scrollIntoView({block:'nearest'});
+}
+function downloadsKey(name, rep){
+  if (name==='ArrowDown'){ di=Math.min(dlItems.length-1,di+1); paintRows('dllist', di); return; }
+  if (name==='ArrowUp'){ di=Math.max(0,di-1); paintRows('dllist', di); return; }
+  if (name==='Enter'){ if(!rep && gate('ok') && dlItems.length){ var o=dlItems[di];
+    activate({id:o._id,url:o.url,title:o.title,pod:o.pod,art:o.art,feed:o.feed,durMs:o.durMs}, false); } return; }
+  if (name==='SoftLeft'){ if(!rep && dlItems.length){ var o2=dlItems[di];
+    if(window.Bridge&&Bridge.deleteDownload) Bridge.deleteDownload(o2._id); toast('deleted'); gotoDownloads(); } return; }
+  if (name==='SoftRight' || name==='Back'){ if(!rep) goHome(); return; }
+}
+
+/* ============ MENU OVERLAY ============ */
+var menuItems = [], mi = 0;
+function openMenu(){
+  menuItems = [
+    {label:'search', fn:function(){ closeOverlay(); gotoSearch(); }},
+    {label:'downloads', fn:function(){ closeOverlay(); gotoDownloads(); }}
+  ];
+  if (np.id) menuItems.push({label:'now playing', fn:function(){ closeOverlay(); openNP(); }});
+  menuItems.push({label:'info', fn:function(){ closeOverlay(); show(S.INFO); refreshSoft(); }});
+  mi=0; renderMenu(); openOverlay('menu');
+}
+function renderMenu(){
+  $('menubody').innerHTML = menuItems.map(function(a,i){
+    return '<div class="row'+(i===mi?' sel':'')+'"><span class="num">'+(i+1)+'</span>'+esc(a.label)+'</div>';
+  }).join('');
+}
+function menuKey(name, rep){
+  if (name==='ArrowDown'){ mi=Math.min(menuItems.length-1,mi+1); paintRows('menubody', mi); return; }
+  if (name==='ArrowUp'){ mi=Math.max(0,mi-1); paintRows('menubody', mi); return; }
+  if (name>='1' && name<=String(menuItems.length)){ menuItems[+name-1].fn(); return; }
+  if (name==='Enter'){ if(!rep && gate('ok')) menuItems[mi].fn(); return; }
+  if (name==='Back' || name==='SoftRight'){ if(!rep){ closeOverlay(); refreshSoft(); } return; }
+}
+
+/* ============ nav helpers ============ */
+function goHome(){ show(S.HOME); renderHome(); }
+
+/* ============ key dispatch ============ */
+function handleKey(name, rep){
+  if (overlay==='menu') return menuKey(name, rep);
+  if (overlay==='epovl') return epovlKey(name, rep);
+  switch (mode){
+    case S.HOME: return homeKey(name, rep);
+    case S.SEARCH: return searchKey(name, rep);
+    case S.PODCAST: return podcastKey(name, rep);
+    case S.NP: return npKey(name, rep);
+    case S.DOWNLOADS: return downloadsKey(name, rep);
+    case S.INFO:
+      if (name==='ArrowDown'){ $('infobody').scrollTop+=40; return; }
+      if (name==='ArrowUp'){ $('infobody').scrollTop-=40; return; }
+      if (name==='Back' || name==='SoftRight' || name==='Enter'){ if(!rep) goHome(); refreshSoft(); }
+      return;
+  }
+}
+function keyName(e){
+  var k = e.key;
+  if (k==='SoftLeft' || k==='F1') return 'SoftLeft';
+  if (k==='SoftRight' || k==='F2') return 'SoftRight';
+  if (k==='Escape' || k==='GoBack' || k==='BrowserBack') return 'Back';
+  return k;
+}
+document.addEventListener('keydown', function(e){
+  var name = keyName(e);
+  var typing = document.activeElement === $('searchinput');
+  if (typing && mode===S.SEARCH && searchFocus==='input'){
+    if (['Enter','ArrowDown','Back','SoftLeft','SoftRight'].indexOf(name)<0) return;
+  }
+  var r = handleKey(name, e.repeat);
+  if (r !== 'pass') e.preventDefault();
+});
+document.addEventListener('keyup', function(e){
+  var n = keyName(e); delete held[n]; delete held['ok'];
+});
+window.__key = function(name){ handleKey(name, false); };
+window.__keyRepeat = function(name){ handleKey(name, true); };
+window.__keyUp = function(name){ delete held[name]; delete held['ok']; };
+
+/* ============ toast ============ */
+var toastT;
+function toast(msg, ms){
+  var t = $('toast'); t.textContent = msg; t.style.display='block';
+  clearTimeout(toastT); toastT = setTimeout(function(){ t.style.display='none'; }, ms||1600);
+}
+$('searchform').addEventListener('submit', function(ev){ ev.preventDefault(); runSearch(); });
+
+/* ============ boot ============ */
+renderHome();
+if (!HAS_BRIDGE) toast('browser preview: F1/F2 = softkeys', 2500);
+</script>
+</body>
+</html>
