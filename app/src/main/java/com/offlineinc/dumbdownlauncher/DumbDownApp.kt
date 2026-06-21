@@ -1003,6 +1003,46 @@ class DumbDownApp : Application() {
                     Log.w(tag, "Cannot disable com.tcl.fota.system: ${e.message}")
                 }
             },
+            // Disable the Skyhook Wi-Fi network-location provider
+            // (com.skyhookwireless.provider, a /system/priv-app running as the
+            // system uid). On these no-Play-Services TCL/MediaTek devices it
+            // serves the AOSP NETWORK_PROVIDER by periodically scanning Wi-Fi —
+            // which battery captures showed to be the single biggest standby
+            // drain: it was the top alarm-wakeup source (~half of all alarm
+            // wakeups) and drove the WLAN-interrupt wakelock that repeatedly
+            // aborted SoC suspend ("Abort: Pending Wakeup Sources: WLAN AHB
+            // ISR"), pinning idle draw at ~77 mA instead of a real deep-sleep
+            // floor. quack/weather don't need it — they get coarse Wi-Fi/cell
+            // location through BeaconDB (NetworkLocationFetcher) independently —
+            // so disabling it removes the scan thrash with no loss to our own
+            // location features. See
+            // battery_analysis/findings/drain-report-non-diagnostic-20260619-033933Z.md.
+            //
+            // Reversible (pm enable) and idempotent. Skips cleanly on hardware
+            // variants that don't ship Skyhook. THROWS on su/pm failure so the
+            // framework leaves the flag unset and retries on the next boot,
+            // rather than silently giving up if the su daemon isn't ready yet.
+            "disable_skyhook_location_v1" to {
+                val skyhookPkg = "com.skyhookwireless.provider"
+                try {
+                    packageManager.getPackageInfo(skyhookPkg, 0)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    Log.d(tag, "$skyhookPkg not installed — nothing to disable")
+                    return@to
+                }
+                val proc = Runtime.getRuntime().exec(
+                    arrayOf("su", "-c", "pm disable-user --user 0 $skyhookPkg")
+                )
+                val stdout = proc.inputStream.bufferedReader().readText().trim()
+                val stderr = proc.errorStream.bufferedReader().readText().trim()
+                val exit = proc.waitFor()
+                if (exit != 0) {
+                    throw RuntimeException(
+                        "pm disable-user $skyhookPkg failed (exit=$exit): out=$stdout err=$stderr"
+                    )
+                }
+                Log.i(tag, "✅ Disabled $skyhookPkg — Wi-Fi location scan thrash removed")
+            },
             // Re-enable com.tct.phone for devices on which the now-removed
             // `disable_tct_phone` migration turned it off. That earlier
             // migration ran `pm disable-user --user 0 com.tct.phone` to
