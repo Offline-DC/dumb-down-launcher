@@ -62,9 +62,11 @@ class RebootLoggingService : Service() {
 
         startForeground(RebootLoggingConfig.NOTIFICATION_ID, buildNotification())
 
+        // Rolling logs are kept ONLY in the app-private diag dir — no /sdcard
+        // mirror. The bundle is pulled via "submit logs" (uploads the private
+        // dir) or, with root, straight from /data/data/<pkg>/files/diag/.
         val privateRoot = DiagPaths.privateDiagDir(this)
-        val mirrorRoot = DiagPaths.mirrorDiagDir(this)
-        rollingLogcat = RollingLogcatTail(privateRoot, mirrorRoot).also { it.start() }
+        rollingLogcat = RollingLogcatTail(privateRoot).also { it.start() }
 
         Log.i(tag, "diagnostic logging service started")
     }
