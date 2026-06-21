@@ -285,7 +285,7 @@ function refreshSoft(){
     case S.HOME:
       setSoft('search', homeFocus==='cont'?(np.id?'open':'resume'):(subs.length?'open':''), 'menu'); return;
     case S.SEARCH:
-      setSoft(searchFocus==='input'?'search':'', searchFocus==='results'?'open':'', 'back'); return;
+      setSoft(searchFocus==='input'?'search':'info', searchFocus==='results'?'open':'', 'back'); return;
     case S.PODCAST:
       setSoft(isSub(curFeed)?'unsub':'subscribe', episodes.length?'open':'', 'back'); return;
     case S.NP:
@@ -589,7 +589,8 @@ function searchKey(name, rep){
     else { ri--; paintRows('results', ri); }
     return;
   }
-  if (name==='Enter' || name==='SoftLeft'){ if(!rep && gate('ok')) openPodcast(results[ri]); return; }
+  if (name==='Enter'){ if(!rep && gate('ok')) openPodcast(results[ri]); return; }
+  if (name==='SoftLeft'){ if(!rep && gate('ok')) openPodInfo(results[ri]); return; }   // info about this show
   if (name==='Back' || name==='SoftRight'){ if(!rep){ searchFocus='input'; paintRows('results',-1); focusInput(); refreshSoft(); } return; }
 }
 
@@ -626,6 +627,11 @@ function fetchFeed(feed){
     var art = chArt ? txt(chArt) : '';
     if (!art){ var im = doc.getElementsByTagNameNS('*','image');
       for (var a=0;a<im.length;a++){ var h=im[a].getAttribute('href'); if(h){ art=h; break; } } }
+    // channel-level description (for the podcast info screen): <description>, else itunes:summary
+    var ch = doc.querySelector('channel');
+    var chDesc = txt(ch && ch.querySelector(':scope > description'));
+    if (!chDesc && ch){ for (var ci=0;ci<ch.children.length;ci++){
+      if (ch.children[ci].localName==='summary'){ chDesc = txt(ch.children[ci]); break; } } }
     var items = doc.querySelectorAll('item'); var eps = [];
     for (var i=0; i<items.length && i<300; i++){
       var it = items[i];
@@ -645,10 +651,10 @@ function fetchFeed(feed){
       var epImg = ''; var ii = it.getElementsByTagNameNS('*','image');
       for (var b=0;b<ii.length;b++){ var hh = ii[b].getAttribute('href'); if (hh){ epImg = hh; break; } }
       eps.push({ id:hashId(guid), url:url, title:title||'episode',
-                 pod:chTitle||curPod.title||'', art:epImg||art||curPod.art||'',
+                 pod:chTitle||(curPod&&curPod.title)||'', art:epImg||art||(curPod&&curPod.art)||'',
                  feed:feed, durMs:dur, date:fmtDate(pub), desc:stripHtml(rawDesc) });
     }
-    return { title:chTitle, art:art, episodes:eps };
+    return { title:chTitle, art:art, desc:stripHtml(chDesc), episodes:eps };
   });
 }
 function txt(node){ return node ? (node.textContent||'').trim() : ''; }
@@ -749,21 +755,38 @@ function epovlKey(name, rep){
   if (name==='Back' || name==='SoftRight'){ if(!rep){ closeOverlay(); refreshSoft(); } return; }
 }
 
-/* ============ EPISODE INFO (artwork + scrollable show notes) ============ */
-var curEpInfo = null, epinfoFrom = 'epovl';   // 'epovl' (episode menu) | 'np'
-function openEpInfo(ep, from){
-  curEpInfo = ep; epinfoFrom = from || 'epovl';
-  $('epinfotitle').textContent = ep.title || 'episode';
-  var art = ep.art || '';
-  var sub = [ep.date, ep.durMs?fmtTime(ep.durMs):''].filter(Boolean).join('  &middot;  ');
-  var desc = ep.desc || '';
+/* ============ INFO SCREEN (artwork + scrollable notes; episode OR podcast) ===*/
+var curEpInfo = null, epinfoFrom = 'epovl';   // 'epovl' (episode menu) | 'np' | 'search'
+/* subHtml is raw HTML (callers pass either pre-built markup or esc'd text). */
+function setEpInfoBody(title, art, subHtml, desc){
+  $('epinfotitle').textContent = title || 'info';
   $('epinfobody').innerHTML =
-      '<div id="epinfoart"'+(art?' style="background-image:url(\''+art.replace(/[\\\\\']/g,'')+'\')"':'')+'></div>'
-    + '<div id="epinfometa">'+esc(ep.title||'')+'</div>'
-    + (sub?'<div id="epinfosub">'+sub+'</div>':'')
+      '<div id="epinfoart"'+(art?' style="background-image:url(\''+(art||'').replace(/[\\\\\']/g,'')+'\')"':'')+'></div>'
+    + '<div id="epinfometa">'+esc(title||'')+'</div>'
+    + (subHtml?'<div id="epinfosub">'+subHtml+'</div>':'')
     + '<div id="epinfodesc"'+(desc?'':' class="empty"')+'>'+esc(desc||'no description available.')+'</div>';
   $('epinfobody').scrollTop = 0;
+}
+function openEpInfo(ep, from){
+  curEpInfo = ep; epinfoFrom = from || 'epovl';
+  var sub = [ep.date, ep.durMs?fmtTime(ep.durMs):''].filter(Boolean).join('  &middot;  ');
+  setEpInfoBody(ep.title || 'episode', ep.art || '', sub, ep.desc || '');
   show(S.EPINFO); refreshSoft();
+}
+/* Podcast (show) info from a search result. Renders title/art/author right away,
+   then fills the description once the feed loads. Back returns to search. */
+function openPodInfo(p){
+  curEpInfo = null; epinfoFrom = 'search';
+  setEpInfoBody(p.title || 'podcast', p.art || '', esc(p.author||''), 'loading…');
+  show(S.EPINFO); refreshSoft();
+  fetchFeed(p.feed).then(function(d){
+    if (mode!==S.EPINFO || epinfoFrom!=='search') return;        // user navigated away
+    setEpInfoBody(d.title||p.title||'podcast', d.art||p.art||'', esc(p.author||''),
+                  d.desc || 'no description available.');
+  }).catch(function(){
+    if (mode!==S.EPINFO || epinfoFrom!=='search') return;
+    setEpInfoBody(p.title||'podcast', p.art||'', esc(p.author||''), 'couldn\'t load info.');
+  });
 }
 
 /* ============ NOW PLAYING ============ */
@@ -946,6 +969,7 @@ function handleKey(name, rep){
       if (name==='Back' || name==='SoftRight'){
         if(!rep){
           if (epinfoFrom==='np'){ show(S.NP); renderNP(); refreshSoft(); }   // back to now playing
+          else if (epinfoFrom==='search'){ show(S.SEARCH); searchFocus='results'; renderResults(); paintRows('results', ri); refreshSoft(); }
           else { show(S.PODCAST); renderEpisodes(); if(curEpInfo) openEpisodeMenu(curEpInfo); }
         }
       }
