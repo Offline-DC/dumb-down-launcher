@@ -15,8 +15,8 @@ android {
         applicationId = "com.offlineinc.dumbdownlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 215
-        versionName = "v5.12.0-beta.1"
+        versionCode = 213
+        versionName = "v5.13.0-beta.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Battery diagnostics — compile-time gate for the DiagnosticsService,
@@ -106,6 +106,10 @@ dependencies {
 
     // OkHttp (WebSocket client for Type Sync)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // MediaSessionCompat + MediaStyle notification for the built-in podcast app
+    // (podcast.PlaybackService) — AntennaPod-style now-playing controls in the shade.
+    implementation("androidx.media:media:1.7.0")
 
     // libphonenumber — used by DeviceRegistrar.normalizePhone to produce
     // canonical E.164 phone numbers before sending to /api/v1/register.

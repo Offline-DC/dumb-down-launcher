@@ -168,6 +168,18 @@ class AllAppsActivity : AppCompatActivity() {
                 launchComponent = null,
             ))
 
+            // podcast — built-in D-pad podcast player. Part of the audio bundle,
+            // so it's hidden alongside AntennaPod/Spotify/Apple Music when
+            // hideAudioBundle is set (same gate as audioPackagesToHide above).
+            if (!pairingStore.hideAudioBundle) {
+                appItems.add(AppItem(
+                    packageName = DUMB_PODCAST,
+                    label = "podcast (beta)",
+                    icon = pm.defaultActivityIcon,
+                    launchComponent = null,
+                ))
+            }
+
             // Weather — always available as a built-in app
             appItems.add(AppItem(
                 packageName = WEATHER,
@@ -492,6 +504,13 @@ class AllAppsActivity : AppCompatActivity() {
                     DUMB_MAP -> {
                         startActivity(
                             Intent(this@AllAppsActivity, MapsActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        )
+                        overridePendingTransition(0, 0)
+                    }
+                    DUMB_PODCAST -> {
+                        startActivity(
+                            Intent(this@AllAppsActivity, com.offlineinc.dumbdownlauncher.podcast.PodcastActivity::class.java)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         )
                         overridePendingTransition(0, 0)

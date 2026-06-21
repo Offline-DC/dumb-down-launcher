@@ -54,6 +54,7 @@ const val SNAKE = "__SNAKE__"
 const val WEATHER = "__WEATHER__"
 const val FREE_UP_SPACE = "__FREE_UP_SPACE__"
 const val DUMB_MAP = "__DUMB_MAP__"
+const val DUMB_PODCAST = "__DUMB_PODCAST__"
 
 val WEB_APP_URLS = mapOf(
     GOOGLE_MESSAGES to "https://messages.google.com/web",
