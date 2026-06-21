@@ -107,6 +107,10 @@ dependencies {
     // OkHttp (WebSocket client for Type Sync)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // MediaSessionCompat + MediaStyle notification for the built-in podcast app
+    // (podcast.PlaybackService) — AntennaPod-style now-playing controls in the shade.
+    implementation("androidx.media:media:1.7.0")
+
     // libphonenumber — used by DeviceRegistrar.normalizePhone to produce
     // canonical E.164 phone numbers before sending to /api/v1/register.
     // Replaces a NANP-only home-rolled normalizer that stripped digits and
