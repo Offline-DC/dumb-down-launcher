@@ -54,7 +54,6 @@ import java.util.TimeZone
  */
 internal class RollingLogcatTail(
     private val diagRoot: File,
-    private val mirrorRoot: File?,
 ) {
 
     private val tag = "DiagRollingLogcat"
@@ -72,7 +71,6 @@ internal class RollingLogcatTail(
     fun start() {
         if (thread != null) return
         rollingDir(diagRoot).mkdirs()
-        mirrorRoot?.let { rollingDir(it).mkdirs() }
 
         // First-run housekeeping: if a previous process left a
         // `current.log` behind, rename it to a segment so it survives
@@ -99,11 +97,21 @@ internal class RollingLogcatTail(
 
     fun stop() {
         stopped = true
+        val t = thread
+        thread = null
+        // Tear the subprocess down AND interrupt the tail thread so it wakes
+        // out of a blocking readLine() or a backoff Thread.sleep() instead of
+        // sitting there for up to ROLLING_LOGCAT_RESPAWN_MAX_MS. Then join,
+        // bounded, so the thread is genuinely dead before the caller
+        // (RebootLoggingService.onDestroy) wipes the log dir — otherwise the
+        // loop could recreate current.log in the gap and resurrect the very
+        // logs we're trying to clear.
         try { process?.destroy() } catch (_: Throwable) {}
+        try { t?.interrupt() } catch (_: Throwable) {}
+        try { t?.join(THREAD_JOIN_TIMEOUT_MS) } catch (_: InterruptedException) {}
         try { currentWriter?.flush() } catch (_: Throwable) {}
         try { currentWriter?.close() } catch (_: Throwable) {}
         currentWriter = null
-        thread = null
     }
 
     // ── Tail loop ────────────────────────────────────────────────────────
@@ -210,17 +218,6 @@ internal class RollingLogcatTail(
         Thread({
             try {
                 gzipInPlace(rotated)
-                // Mirror the gzipped segment to the /sdcard pull dir.
-                mirrorRoot?.let { mDir ->
-                    val gz = File(rotated.parentFile, rotated.name + ".gz")
-                    if (gz.exists()) {
-                        try {
-                            val mirrorSegments = rollingDir(mDir)
-                            mirrorSegments.mkdirs()
-                            gz.copyTo(File(mirrorSegments, gz.name), overwrite = true)
-                        } catch (_: Throwable) { /* best-effort */ }
-                    }
-                }
                 // Time-based retention is the normal eviction path —
                 // keep only segments newer than the retention window.
                 // Size-based eviction is the safety net that runs after.
@@ -276,21 +273,15 @@ internal class RollingLogcatTail(
             f.isFile && f.name.startsWith(SEGMENT_PREFIX)
         } ?: return
         for (f in segments) {
-            if (f.lastModified() < cutoffMs && f.delete()) {
-                // Mirror eviction is best-effort.
-                mirrorRoot?.let { mRoot ->
-                    File(rollingDir(mRoot), f.name).delete()
-                }
-            }
+            if (f.lastModified() < cutoffMs) f.delete()
         }
     }
 
     /**
      * Size-based eviction. Safety net for pathologically chatty
      * devices where the 24-hour window itself exceeds the cap.
-     * Oldest-first delete until under the budget. We only count files
-     * in the launcher's filesDir — that's the constrained partition;
-     * /sdcard is much larger and the mirror is best-effort.
+     * Oldest-first delete until under the budget, all within the
+     * launcher's filesDir.
      */
     private fun enforceBudget() {
         val dir = rollingDir(diagRoot)
@@ -304,13 +295,7 @@ internal class RollingLogcatTail(
         for (f in segments) {
             if (total <= RebootLoggingConfig.ROLLING_LOGCAT_MAX_BYTES) break
             val sz = f.length()
-            if (f.delete()) {
-                total -= sz
-                // Mirror eviction is best-effort and ignored on failure.
-                mirrorRoot?.let { mRoot ->
-                    File(rollingDir(mRoot), f.name).delete()
-                }
-            }
+            if (f.delete()) total -= sz
         }
     }
 
@@ -318,6 +303,9 @@ internal class RollingLogcatTail(
         const val CURRENT_FILENAME = "current.log"
         const val SEGMENT_PREFIX = "segment"
         const val BUFFER_BYTES = 64 * 1024
+
+        /** Bound on how long stop() blocks waiting for the tail thread to die. */
+        const val THREAD_JOIN_TIMEOUT_MS = 2_000L
 
         fun rollingDir(root: File): File = File(root, "rolling-logcat")
 

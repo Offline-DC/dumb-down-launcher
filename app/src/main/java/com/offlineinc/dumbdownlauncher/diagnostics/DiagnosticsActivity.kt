@@ -149,7 +149,7 @@ class DiagnosticsActivity : AppCompatActivity() {
                                 onSuccess = { upload ->
                                     Toast.makeText(
                                         this@DiagnosticsActivity,
-                                        "logs submitted (${upload.sizeBytes / 1024 / 1024} MB)",
+                                        "logs submitted (${formatSize(upload.sizeBytes)})",
                                         Toast.LENGTH_LONG,
                                     ).show()
                                 },
@@ -244,7 +244,13 @@ private fun DiagnosticsScreen(
         Row.Info("session id", displaySessionId.take(8) + "…"),
         Row.Info("enabled since", if (store.enabledSinceMs == 0L) "—" else formatMs(store.enabledSinceMs)),
         Row.Info("schema version", DiagnosticsConfig.SCHEMA_VERSION.toString()),
+        // Battery-diagnostics bundle (mirror, no root needed).
         Row.Info("adb pull", "/sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/diag/"),
+        // Rolling adb logs live in the app-private dir and are written there
+        // the instant a line arrives. The /sdcard mirror lags (and used to
+        // stay empty until a 10 MB rotation). On these rooted devices, pull
+        // the private path to get current.log right now.
+        Row.Info("rolling logs (root)", "/data/data/${BuildConfig.APPLICATION_ID}/files/diag/rolling-logcat/"),
     )
 
     var selectedIndex by remember { mutableIntStateOf(0) }
@@ -395,3 +401,12 @@ private fun formatMs(ms: Long): String {
     val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
     return fmt.format(java.util.Date(ms))
 }
+
+/**
+ * Human-readable bundle size. Integer-MB division reported a real ~0.4 MB
+ * upload as "0 MB", which read as "nothing was submitted". Show KB below a
+ * megabyte and one decimal of MB above it.
+ */
+private fun formatSize(bytes: Long): String =
+    if (bytes < 1024L * 1024L) "${bytes / 1024} KB"
+    else String.format(java.util.Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
