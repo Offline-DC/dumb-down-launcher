@@ -41,6 +41,8 @@ import com.offlineinc.dumbdownlauncher.ui.LinkingChoiceScreen
 import com.offlineinc.dumbdownlauncher.ui.mousetutorial.MouseTutorialScreen
 import com.offlineinc.dumbdownlauncher.ui.PairingScreen
 import com.offlineinc.dumbdownlauncher.ui.SkipSetupConfirmationScreen
+import android.content.ComponentName
+import android.provider.Settings
 
 
 const val ALL_APPS = "__ALL_APPS__"
@@ -578,32 +580,40 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Launch a fixed app for each D-pad direction on the home screen.
-     *   Up    → Settings
-     *   Down  → Call history (Dialer)
-     *   Left  → Camera
-     *   Right → Contacts
+     * Launch whatever app is bound to this D-pad direction in the stock
+     * TCL "key shortcut" settings (Settings.Global keyshortcut_<dir>key,
+     * format: "Label-packageName-fully.qualified.ActivityClassName").
      */
     private fun launchDpadShortcut(direction: DpadDirection) {
-        val pkg = when (direction) {
-            DpadDirection.UP    -> "com.android.settings"
-            DpadDirection.DOWN  -> "com.android.dialer"
-            DpadDirection.LEFT  -> "com.tcl.camera"
-            DpadDirection.RIGHT -> "com.android.contacts"
+        val settingKey = when (direction) {
+            DpadDirection.UP    -> "keyshortcut_upkey"
+            DpadDirection.DOWN  -> "keyshortcut_downkey"
+            DpadDirection.LEFT  -> "keyshortcut_leftkey"
+            DpadDirection.RIGHT -> "keyshortcut_rightkey"
         }
 
+        val raw = Settings.Global.getString(contentResolver, settingKey)
+        if (raw.isNullOrBlank()) {
+            Log.w("MainActivity", "No shortcut configured for $settingKey")
+            return
+        }
+
+        val parts = raw.split("-", limit = 3)
+        if (parts.size < 3) {
+            Log.w("MainActivity", "Unrecognized shortcut format for $settingKey: $raw")
+            return
+        }
+        val (_, pkg, cls) = parts
+
         try {
-            val intent = packageManager.getLaunchIntentForPackage(pkg)
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(intent)
-                overridePendingTransition(0, 0)
-            } else {
-                Log.w("MainActivity", "No launch intent for $pkg")
-                Toast.makeText(this, "App not found", Toast.LENGTH_SHORT).show()
+            val intent = Intent().apply {
+                component = ComponentName(pkg, cls)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            startActivity(intent)
+            overridePendingTransition(0, 0)
         } catch (e: Exception) {
-            Log.w("MainActivity", "Failed to launch $pkg for $direction: ${e.message}")
+            Log.w("MainActivity", "Failed to launch $pkg/$cls for $direction: ${e.message}")
             Toast.makeText(this, "App not found", Toast.LENGTH_SHORT).show()
         }
     }
